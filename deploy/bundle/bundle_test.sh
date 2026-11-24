@@ -688,6 +688,7 @@ case "$*" in
   *":/run/paddock-check/containers.json:ro "*)
     for a in "$@"; do [[ "$a" != *:/run/paddock-check/containers.json:ro ]] || cp "${a%%:*}" "$FAKE_DOCKER_LOG.containers"; done
     ;;
+  *" rabbitmqctl -q list_permissions "*) [[ -z "${FAKE_BROKER_FAIL:-}" ]] || exit 1; echo '[]' ;;
   *" prod-check "*) exit "${FAKE_PRODCHECK_RC:-0}" ;;
   "ps -q --filter label=com.docker.compose.project="*) [[ -z "${FAKE_PS_FAIL:-}" ]] || exit 1; printf '%s\n' $FAKE_CONTAINERS ;;
   "inspect "*) printf '[{"Name":"/%s"}]\n' "${*:2}" ;;
@@ -696,6 +697,14 @@ case "$*" in
   "volume ls"*) printf '%s\n' $FAKE_VOLUMES ;;
   "volume rm"*) [[ " $FAKE_IN_USE " != *" ${*: -1} "* ]] || exit 1 ;;
   # Compose folds a long plain scalar at its spaces onto more-indented continuation lines (PDK-733 review 3).
+  # The YAML rendering of ./paddock check's connection budget: a file (FAKE_CONFIG_FILE; a missing one fails) or the
+  # real Compose (FAKE_REAL_DOCKER).
+  *" config")
+    if [[ -n "${FAKE_CONFIG_FILE:-}" ]]; then exec cat "$FAKE_CONFIG_FILE"; fi
+    if [[ -n "${FAKE_REAL_DOCKER:-}" ]]; then exec "$FAKE_REAL_DOCKER" "$@"; fi
+    printf '%s\n' '      o: uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=S3cr3t' \
+      '        pass$word battery staple'
+    ;;
   *" config"*) printf '%s\n' '      o: uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=S3cr3t' \
     '        pass$word battery staple' ;;
 esac
@@ -819,6 +828,29 @@ grep -q -- "^ps -q --filter label=com.docker.compose.project=paddock$" "$FAKE_DO
   [[ -n "$mounted" && ! -e "$mounted" ]] &&
   pass "check --online hands prod-check the inspected containers of the project and the exceptions file" ||
   fail "check --online without the containers: exit $rc, $out, docker: $(grep -e prod-check -e '^ps ' -e '^inspect' "$FAKE_DOCKER_LOG")"
+# PDK-1017, main §44: online, prod-check gets the broker's permissions (rabbitmqctl's listing, as a mounted file, never
+# the definitions with the passwords); the file is removed afterwards. Offline, and during an upgrade before up, the
+# broker is not read; a failed listing is reported as not checked.
+: >"$FAKE_DOCKER_LOG"
+FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+mounted="$(grep -o -- "-v [^ ]*:/run/paddock-check/broker.json:ro" "$FAKE_DOCKER_LOG" | head -1 | sed 's/^-v //; s/:.*//')"
+grep -q -- "exec -T -e RABBITMQ_CTL_ERL_ARGS=.* rabbitmq rabbitmqctl -q list_permissions -p paddock --formatter json" "$FAKE_DOCKER_LOG" &&
+  grep -q -- "prod-check .* --online .* --broker-permissions /run/paddock-check/broker.json " "$FAKE_DOCKER_LOG" &&
+  ! grep -q "definitions.json:" "$FAKE_DOCKER_LOG" && [[ -n "$mounted" && ! -e "$mounted" ]] &&
+  pass "check --online hands prod-check the broker's permissions and removes the listing" ||
+  fail "check --online without the broker's permissions: exit $rc, $out, docker: $(grep -e prod-check -e list_permissions "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+paddock_t check
+! grep -q list_permissions "$FAKE_DOCKER_LOG" && ! grep -q -- "--broker-permissions" "$FAKE_DOCKER_LOG" &&
+  pass "check offline does not read the broker" || fail "offline check read the broker: $(grep list_permissions "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_BROKER_FAIL=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"not checked: rabbitmqctl list_permissions failed"* ]] && ! grep -q -- "--broker-permissions" "$FAKE_DOCKER_LOG" &&
+  pass "check --online reports the broker as not checked when the listing fails" || fail "failed listing: $out"
+: >"$FAKE_DOCKER_LOG"
+PADDOCK_CHECK_SKIP_BROKER=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"not checked: the old release still runs; the upgrade checks them in its step broker-check"* ]] && ! grep -q list_permissions "$FAKE_DOCKER_LOG" &&
+  pass "check --online before an upgrade's up leaves the old broker alone" || fail "skip broker: $out"
 : >"$FAKE_DOCKER_LOG"
 FAKE_CONTAINERS="c1" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check
 ! grep -q -- "--containers" "$FAKE_DOCKER_LOG" && ! grep -q "^ps -q" "$FAKE_DOCKER_LOG" &&
@@ -865,6 +897,122 @@ FAKE_PRODCHECK_RC=1 paddock_t check
 [[ $rc == 1 && "$out" == *"WARN  $item"* ]] &&
   pass "the leftover warning leaves a failing check failing" || fail "check with leftovers and a FAIL: exit $rc, $out"
 rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.zz01xy"
+# PDK-1032 (plan M19 D1.4, amendments b and c): ./paddock check sums each long-running role's maximum connections
+# times its replicas, as `docker compose config` renders them from .env, against max_connections less 3, 12 and 4;
+# FAIL above it (exit 1), WARN with fewer than 5 to spare.
+item="postgres: connection budget"
+cp -p "$work/t/.env" "$work/env.budget-keep"
+# budget_check <.env lines…>: ./paddock check with the lines added to .env, rendered by the real Compose.
+budget_check() {
+  cp -p "$work/env.budget-keep" "$work/t/.env"
+  (($# == 0)) || printf '%s\n' "$@" >>"$work/t/.env"
+  FAKE_REAL_DOCKER="$(command -v docker)" paddock_t check
+}
+budget_check
+[[ $rc == 0 && "$out" == *"WARN  $item"*"79 of 81 connections (max_connections 100 "*"4 for an operator command"* &&
+  "$out" != *"paddock-worker-ingest"* ]] &&
+  pass "budget: the default configuration (ingest replicas unset) warns with 79 of 81 and exits 0" ||
+  fail "budget, replicas unset: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=0
+[[ $rc == 0 && "$out" == *"WARN  $item"*"79 of 81 connections"* && "$out" != *"paddock-worker-ingest"* ]] &&
+  pass "budget: no ingest worker counts with PADDOCK_WORKER_INGEST_REPLICAS=0" || fail "budget, 0 replicas: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=2 PADDOCK_PG_MAX_CONNECTIONS=150
+[[ $rc == 0 && "$out" == *"PASS  $item"*"101 of 131 connections (max_connections 150 "*"paddock-worker 1x30"*"paddock-worker-ingest 2x11"* ]] &&
+  pass "budget: one worker and two ingest workers pass at 150" || fail "budget, 2 replicas at 150: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=2
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"101 of 81 connections"*"raise PADDOCK_PG_MAX_CONNECTIONS"* ]] &&
+  pass "budget: two ingest workers at the default 100 fail the check" || fail "budget, 2 replicas at 100: exit $rc, $out"
+# The boundaries of amendment c with one ingest worker (90 connections); the limit is max_connections less 19, so these
+# equal sums of 76 (OK), 77 and 81 (WARN) and 82 (FAIL) against the default limit of 81.
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=114
+[[ $rc == 0 && "$out" == *"PASS  $item"*"90 of 95 connections"* ]] &&
+  pass "budget: 5 to spare (76 of 81) passes" || fail "budget, 5 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=113
+[[ $rc == 0 && "$out" == *"WARN  $item"*"90 of 94 connections"*"fewer than 5 to spare"* ]] &&
+  pass "budget: 4 to spare (77 of 81) warns and keeps the exit code" || fail "budget, 4 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=109
+[[ $rc == 0 && "$out" == *"WARN  $item"*"90 of 90 connections"* ]] &&
+  pass "budget: none to spare (81 of 81) warns" || fail "budget, 0 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=108
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"90 of 89 connections"* ]] &&
+  pass "budget: one over (82 of 81) fails" || fail "budget, one over: exit $rc, $out"
+# Three full workers, which no setting of the bundle configures: the rendered configuration with paddock-worker's
+# replicas set to 3.
+cp -p "$work/env.budget-keep" "$work/t/.env"
+budget_files=()
+for f in $(host_files "$work/t" controlplane); do budget_files+=(-f "$work/t/$f"); done
+docker compose --project-directory "$work/t" -p paddock-bundle-test --env-file "$work/t/versions.env" \
+  --env-file "$work/t/.env" "${budget_files[@]}" --profile '*' config |
+  awk '{ print } $0 == "  paddock-worker:" { print "    deploy:"; print "      replicas: 3" }' >"$work/budget-worker3.yaml"
+FAKE_CONFIG_FILE="$work/budget-worker3.yaml" paddock_t check
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"139 of 81 connections"*"paddock-worker 3x30"* ]] &&
+  pass "budget: paddock-worker=3 fails at 100" || fail "budget, 3 workers: exit $rc, $out"
+FAKE_CONFIG_FILE="$work/nonexistent.yaml" paddock_t check
+[[ $rc == 0 && "$out" == *"WARN  $item"*"not checked: rendering the Compose configuration failed"* ]] &&
+  pass "budget: a failed rendering is reported as not checked" || fail "budget, failed rendering: exit $rc, $out"
+FAKE_PRODCHECK_RC=3 FAKE_CONFIG_FILE="$work/budget-worker3.yaml" paddock_t check
+[[ $rc == 3 && "$out" == *"FAIL  $item"* ]] && pass "budget: a failing prod-check keeps its exit code" ||
+  fail "budget with a failing prod-check: exit $rc, $out"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/t/.env"
+FAKE_REAL_DOCKER="$(command -v docker)" paddock_t check
+[[ $rc == 0 && "$out" != *"$item"* ]] && pass "budget: the audit host, without the control-plane database, has no budget item" ||
+  fail "budget on the audit host: exit $rc, $out"
+cp -p "$work/env.budget-keep" "$work/t/.env"
+# PDK-1007: ./paddock up removes the leftovers as root only, by the exact name below the bundle directory, without
+# following symlinks, and never while bundle-seq/ is missing (migrate-from's double failure leaves the aside as the only
+# copy). A stand-in id makes the script see root; the removal itself runs as the test user in its own directory.
+cat >"$work/fakebin-backup/id" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$*" == -u && -n "${FAKE_UID:-}" ]]; then echo "$FAKE_UID"; exit 0; fi
+exec /usr/bin/id "$@"
+FAKE
+chmod +x "$work/fakebin-backup/id"
+mkdir -p "$work/outside/keep"
+echo 9 >"$work/outside/keep/high-water"
+seq_leftovers() {
+  mkdir -p "$work/t/bundle-seq" "$work/t/.bundle-seq.replaced.aB3dE9/sub" "$work/t/.bundle-seq.replaced.zz01xy" \
+    "$work/t/.bundle-seq.replaced.with space" "$work/t/.bundle-seq.replaced.x.y" "$work/t/.bundle-seq.replaced." \
+    "$work/t/.bundle-seq.other.aB3dE9" "$work/t/sub/.bundle-seq.replaced.aB3dE9"
+  ln -sfn "$work/outside" "$work/t/.bundle-seq.replaced.link0"
+  ln -sfn "$work/outside" "$work/t/.bundle-seq.replaced.aB3dE9/sub/link"
+  : >"$work/t/.bundle-seq.replaced.file1"
+}
+seq_clean() {
+  rm -rf "$work/t"/.bundle-seq.* "$work/t/sub" "$work/t/bundle-seq"
+}
+seq_clean
+seq_leftovers
+FAKE_UID=0 paddock_t up
+if [[ ! -e "$work/t/.bundle-seq.replaced.aB3dE9" && ! -e "$work/t/.bundle-seq.replaced.zz01xy" &&
+  -d "$work/t/bundle-seq" && -d "$work/t/.bundle-seq.replaced.with space" && -d "$work/t/.bundle-seq.replaced.x.y" &&
+  -d "$work/t/.bundle-seq.replaced." && -d "$work/t/.bundle-seq.other.aB3dE9" &&
+  -d "$work/t/sub/.bundle-seq.replaced.aB3dE9" && -L "$work/t/.bundle-seq.replaced.link0" &&
+  -f "$work/t/.bundle-seq.replaced.file1" && "$(cat "$work/outside/keep/high-water")" == 9 &&
+  "$out" == *"removed the bundle-seq/ kept aside"*"$work/t/.bundle-seq.replaced.aB3dE9"* ]]; then
+  pass "up as root removes only the exact leftover directories, never a symlink, a file or another name"
+else fail "up as root with leftovers: exit $rc, $(ls -a "$work/t"), $out"; fi
+seq_clean
+seq_leftovers
+paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && -d "$work/t/.bundle-seq.replaced.zz01xy" ]] &&
+  pass "up without root keeps the leftovers" || fail "up without root removed leftovers: $(ls -a "$work/t")"
+seq_clean
+seq_leftovers
+rmdir "$work/t/bundle-seq"
+FAKE_UID=0 paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && -d "$work/t/.bundle-seq.replaced.zz01xy" ]] &&
+  pass "up as root keeps the leftovers while bundle-seq/ is missing" || fail "up as root without bundle-seq/: $(ls -a "$work/t")"
+paddock_t check
+[[ "$out" == *"WARN  upgrade: no leftover bundle-seq directories"* && "$out" != *"rm -rf"* && "$out" == *"mv -T"* ]] &&
+  pass "check does not recommend rm -rf while bundle-seq/ is missing" || fail "check without bundle-seq/: $out"
+seq_clean
+seq_leftovers
+rmdir "$work/t/bundle-seq"
+ln -s "$work/outside" "$work/t/bundle-seq"
+FAKE_UID=0 paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && "$(cat "$work/outside/keep/high-water")" == 9 ]] &&
+  pass "up as root keeps the leftovers when bundle-seq is a symlink" || fail "up as root with a bundle-seq symlink: $(ls -a "$work/t")"
+seq_clean
 # PDK-733 review 2 (R2-m1): bash writes a here-string above 64 KiB to a temp file (sh-thd.*), so a large render with the
 # passwords must reach the loop and base64 through pipes. Without strace the backup-target branch is read instead.
 big="$fixture# $(head -c 60000 /dev/zero | tr '\0' x)
@@ -885,6 +1033,159 @@ else
     fail "backup-target apply feeds the render through a here-string" ||
     pass "backup-target apply feeds the render through pipes (strace not available)"
 fi
+
+# Plan M12h-2 amendment g: ./paddock up applies the Authentik blueprints one after another in dependency order, after
+# the containers start and before it waits for paddock-api; a file that keeps failing stops up and is named. The
+# stand-in's apply prints what ak apply_blueprint 2026.8.5 prints for an invalid blueprint: each log event followed by
+# the whole entry with its resolved !Env values (the OIDC client secret, the service token's key, a development
+# password), and an exception that quotes a value. No value may reach the output (decisions-alpha11 §71).
+cp -a "$bundle" "$work/bp"
+cp "$work/bp/.env.example" "$work/bp/.env"
+mkdir -p "$work/fakebin-bp"
+cat >"$work/fakebin-bp/docker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+case "$*" in
+  *" ps -a --format {{.Service}}|{{.State}}|{{.Health}} authentik-server authentik-worker")
+    printf '%s\n' "authentik-server|running|healthy" "authentik-worker|running|${FAKE_WORKER_HEALTH:-healthy}"
+    ;;
+  *" ps -a --format "*) echo 'paddock-api|paddock-paddock-api-1|running|healthy|0' ;;
+  *" exec -T authentik-worker /bin/sh /paddock/entrypoint.sh apply_blueprint /blueprints/"*)
+    file="${*: -1}"
+    file="${file#/blueprints/}"
+    tries="$(grep -c "apply_blueprint /blueprints/$file\$" "$FAKE_DOCKER_LOG")"
+    if [[ " ${FAKE_APPLY_FAIL:-} " == *" $file "* ]] && ((tries <= ${FAKE_APPLY_FAIL_TIMES:-99})); then
+      echo '{"event": "Booting authentik", "level": "info", "logger": "authentik.lib.config"}'
+      echo "Blueprint invalid"
+      printf '\t%s\n' \
+        "authentik.blueprints.v1.importer: Entry invalid: Serializer errors {'target': [ErrorDetail(string='This field may not be null.', code='null')]}: {'entry': {'model': 'authentik_providers_oauth2.oauth2provider', 'state': 'present', 'conditions': [], 'identifiers': {'name': 'paddock-portal'}, 'attrs': {'client_type': 'confidential', 'client_id': 'paddock-portal', 'client_secret': 'S3cr3tClientValue', 'redirect_uris': []}, 'permissions': [], 'id': 'provider', '_state': {'instance': None}}, 'error': \"Serializer errors\", 'schema_name': 'public', 'domain_url': None}" \
+        "authentik.blueprints.v1.importer: Entry invalid: x: {'entry': {'model': 'authentik_core.token', 'attrs': {'intent': 'api', 'key': 'S3cr3tTokenKey'}, 'permissions': [], 'id': None, '_state': {'instance': None}}}" \
+        "authentik.blueprints.v1.importer: S3cr3tPrefix {'entry': {'model': 'authentik_core.user', 'attrs': {'password': 'S3cr3tDevPassword'}, '_state': {'instance': None}}}" \
+        "authentik.blueprints.v1.importer: Blueprint validation failed: {'schema_name': 'public', 'domain_url': None}" \
+        "S3cr3tLogger.x: Entry invalid: y"
+      echo "S3cr3tModule.QuotedError: z"
+      echo "django.db.utils.IntegrityError: duplicate key value (client_secret)=(S3cr3tClientValue) already exists"
+      exit 1
+    fi
+    if [[ "${FAKE_APPLY_RAW:-}" == "$file" ]]; then
+      echo "unparsed S3cr3tRawLine"
+      exit 1
+    fi
+    if [[ "${FAKE_APPLY_WARN:-}" == "$file" ]]; then
+      echo '{"event": "Entry invalid on retry: {\"key\": \"S3cr3tTokenKey\"}", "level": "warning", "logger": "authentik.blueprints.v1.importer", "entry": "S3cr3tClientValue"}'
+    fi
+    ;;
+  *" exec -T authentik-worker ak shell -c "*BlueprintInstance*)
+    [[ -z "${FAKE_INSTANCE_SHELL_FAIL:-}" ]] || exit 1
+    echo '{"event": "Booting authentik", "level": "info", "logger": "authentik.lib.config", "context": "S3cr3tContext"}'
+    for f in paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml \
+      paddock/paddock-recovery.yaml paddock/paddock-mcp.yaml paddock-dev/paddock-dev.yaml; do
+      status=successful
+      for o in ${FAKE_INSTANCE_STATUS:-}; do [[ "${o%%=*}" != "$f" ]] || status="${o#*=}"; done
+      [[ "$status" == none ]] || echo "paddock-instance $status $f"
+    done
+    echo "paddock-instance error S3cr3tPath.yaml"
+    ;;
+  *" exec -T authentik-worker ak shell -c "*)
+    [[ -z "${FAKE_SHELL_FAIL:-}" ]] || exit 1
+    for o in provider/paddock-portal provider/paddock-portal-stepup provider/paddock-mcp application/paddock-portal \
+      application/paddock-portal-stepup application/paddock-mcp flow/paddock-admin-login flow/paddock-device-authentication \
+      flow/paddock-device-code flow/paddock-device-authorization flow/paddock-stepup flow/paddock-recovery; do
+      [[ " ${FAKE_MISSING:-} " == *" $o "* ]] || echo "paddock-object $o"
+    done
+    ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/fakebin-bp/docker"
+prev_docker_log="$FAKE_DOCKER_LOG"
+export FAKE_DOCKER_LOG="$work/docker-bp.log"
+# bp_run <command…>: the command in $work/bp with the stand-in and no retry delay; output in $out, exit code in $rc.
+bp_run() {
+  : >"$FAKE_DOCKER_LOG"
+  set +e
+  out="$(cd "$work/bp" && env -u SECRETS_DIR PATH="$work/fakebin-bp:$PATH" PADDOCK_BLUEPRINT_RETRY_DELAY=0 "$@" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+}
+applied() { sed -n 's#^.* apply_blueprint /blueprints/##p' "$FAKE_DOCKER_LOG" | paste -sd' ' -; }
+bp_line() { grep -nE -- "$1" "$FAKE_DOCKER_LOG" | head -n 1 | cut -d: -f1; }
+order="paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml paddock/paddock-recovery.yaml paddock/paddock-mcp.yaml"
+bp_run ./paddock up
+if [[ $rc == 0 && "$(applied)" == "$order" ]]; then
+  pass "up applies the blueprints once each: portal, device, step-up, recovery, MCP"
+else fail "up blueprint order: exit $rc, $(applied), $out"; fi
+up_line="$(bp_line ' up -d$')" first_apply="$(bp_line 'apply_blueprint')" wait_line="$(bp_line 'ps -a --format \{\{.Service\}\}\|\{\{.Name\}\}')"
+if [[ -n "$up_line" && -n "$first_apply" && -n "$wait_line" ]] && ((up_line < first_apply && first_apply < wait_line)); then
+  pass "up applies the blueprints after the containers start and before it waits for the stack"
+else fail "up order: up -d line ${up_line:-none}, first apply ${first_apply:-none}, wait ${wait_line:-none}"; fi
+[[ "$out" == *"PASS  Authentik objects of the blueprints: 12 providers, applications and flows exist"* ]] &&
+  pass "up checks the blueprints' objects after the applies" || fail "object check: $out"
+# PDK-1083: ak apply_blueprint leaves an instance that Authentik's discovery failed in error, so the script has
+# Authentik apply the instances after the files, and fails when one is still not successful.
+last_apply="$(grep -n 'entrypoint.sh apply_blueprint' "$FAKE_DOCKER_LOG" | tail -n 1 | cut -d: -f1)"
+instance_line="$(bp_line 'BlueprintInstance')" objects_line="$(bp_line 'OAuth2Provider')"
+if [[ "$out" == *"PASS  Authentik blueprint instances: 5 of 5 successful"* && -n "$instance_line" && -n "$objects_line" ]] &&
+  ((last_apply < instance_line && instance_line < objects_line && instance_line < wait_line)); then
+  pass "up has Authentik apply the blueprint instances after the files and before the object check"
+else fail "instances: last apply ${last_apply:-none}, instances ${instance_line:-none}, objects ${objects_line:-none}, $out"; fi
+FAKE_INSTANCE_STATUS="paddock/paddock-stepup.yaml=error paddock/paddock-mcp.yaml=timeout paddock/paddock-device.yaml=none" \
+  bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik blueprint instances: not successful"* &&
+  "$out" == *"- paddock/paddock-device.yaml: no status reported"* &&
+  "$out" == *"- paddock/paddock-stepup.yaml: status error"* &&
+  "$out" == *"- paddock/paddock-mcp.yaml: its apply did not finish within 180s"* &&
+  "$out" != *"paddock-portal.yaml:"* && "$out" != *S3cr3t* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG" &&
+  pass "an instance still not successful fails up, named by its path, without the context or any value" ||
+  fail "instance error: exit $rc, $out"
+FAKE_INSTANCE_STATUS="paddock/paddock-recovery.yaml=S3cr3tStatus" bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"- paddock/paddock-recovery.yaml: a status this script does not know"* && "$out" != *S3cr3t* ]] &&
+  pass "a status outside the allow-list is never printed" || fail "unknown status: exit $rc, $out"
+FAKE_INSTANCE_SHELL_FAIL=1 bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik blueprint instances: not applied, ak shell failed"* ]] &&
+  pass "a failed instance apply fails up" || fail "instance shell failed: exit $rc, $out"
+FAKE_APPLY_FAIL=paddock/paddock-stepup.yaml bp_run ./paddock up
+if [[ $rc != 0 && "$(applied)" == "paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml" ]] &&
+  [[ "$out" == *"the Authentik blueprint paddock/paddock-stepup.yaml failed 3 times"* && "$out" == *"Blueprint invalid"* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG"; then
+  pass "a file that fails 3 times stops up, names the file and applies nothing after it"
+else fail "fail-stop: exit $rc, $(applied), $out"; fi
+[[ "$out" != *S3cr3t* && "$out" == *"authentik.blueprints.v1.importer: Entry invalid: Serializer errors"* &&
+  "$out" == *"  django.db.utils.IntegrityError"* && "$out" == *"Blueprint validation failed"* &&
+  "$out" == *"authentik.blueprints.v1.importer: an event this script does not know"* &&
+  "$out" == *"  another logger: Entry invalid"* && "$out" == *"  an exception this script does not know"* ]] &&
+  pass "a failed apply prints the events without the client secret, the token key, a password or the exception text" ||
+  fail "failed apply output: $out"
+FAKE_APPLY_RAW=paddock/paddock-portal.yaml bp_run ./paddock up
+[[ $rc != 0 && "$out" != *S3cr3t* && "$out" == *"no reason recognized; see the log of authentik-worker"* ]] &&
+  pass "an unrecognized output is never printed, a fixed hint is" || fail "raw output: exit $rc, $out"
+FAKE_APPLY_FAIL=paddock/paddock-device.yaml FAKE_APPLY_FAIL_TIMES=2 bp_run ./paddock up
+if [[ $rc == 0 && "$(applied)" == "paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-device.yaml $(cut -d' ' -f2- <<<"$order")" ]]; then
+  pass "a file that fails twice is applied on its third try, then the rest follow"
+else fail "retry: exit $rc, $(applied), $out"; fi
+FAKE_APPLY_WARN=paddock/paddock-recovery.yaml bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"paddock/paddock-recovery.yaml failed 3 times"* && "$out" == *"Entry invalid on retry"* && "$out" != *S3cr3t* ]] &&
+  pass "an apply that exits 0 with an importer warning counts as failed" || fail "importer warning: exit $rc, $out"
+FAKE_MISSING="provider/paddock-mcp flow/paddock-recovery" bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik objects of the blueprints: missing"*"- provider/paddock-mcp"*"- flow/paddock-recovery"* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG" &&
+  pass "a missing object after the applies fails up and is named" || fail "missing objects: exit $rc, $out"
+FAKE_SHELL_FAIL=1 bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik objects of the blueprints: not checked"* ]] &&
+  pass "a failed object listing fails up" || fail "listing failed: exit $rc, $out"
+PADDOCK_ENV=development bp_run scripts/authentik-apply-blueprints.sh
+[[ $rc == 0 && "$(applied)" == "$order paddock-dev/paddock-dev.yaml" &&
+  "$out" == *"PASS  Authentik blueprint instances: 6 of 6 successful"* ]] &&
+  pass "a development stack applies the development blueprint last" || fail "development: exit $rc, $(applied), $out"
+WAIT_TIMEOUT=0 FAKE_WORKER_HEALTH=starting bp_run scripts/authentik-apply-blueprints.sh
+[[ $rc != 0 && -z "$(applied)" && "$out" == *"Authentik is not healthy: authentik-worker (running, starting)"* ]] &&
+  pass "nothing is applied before Authentik is healthy" || fail "unhealthy: exit $rc, $(applied), $out"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/bp/.env"
+bp_run ./paddock up
+[[ $rc == 0 && -z "$(applied)" ]] && ! grep -q 'authentik' "$FAKE_DOCKER_LOG" &&
+  pass "the audit host applies no blueprints" || fail "audit host: exit $rc, $(applied), $out"
+export FAKE_DOCKER_LOG="$prev_docker_log"
 
 # ./paddock pull pulls only the images that are not present by their reference (decisions-alpha9 item 54).
 mkdir -p "$work/fakebin-pull"

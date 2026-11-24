@@ -53,6 +53,16 @@ jobs:
       - run: make test
       - run: make fuzz
 
+  # Paddock's Authentik blueprints on a fresh Authentik database, applied in order twice (plan M12h-2 amendment g): the
+  # nested blueprints deadlocked Authentik's workers at startup (CI run 43731878343). A job of its own, so the image
+  # pull and Authentik's first start do not lengthen the test job.
+  authentik-blueprints:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make authentik-blueprints-test
+
   secrets:
     runs-on: ubuntu-24.04
     timeout-minutes: 30 # bounds what an archive bomb in a pull request costs (ADR 0025)
@@ -168,6 +178,9 @@ jobs:
       # at the same value.
       PADDOCK_ACCEPTANCE_PARALLEL: 8
       ACCEPTANCE_GO_PARALLEL: 8
+      # Shard 1 runs one dedicated ingest worker (PDK-1031) so that TestIngestWorkerConsumes has one to check (PDK-1070);
+      # the other shards keep the default of none.
+      PADDOCK_WORKER_INGEST_REPLICAS: ${{ matrix.shard == 1 && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,6 +203,10 @@ jobs:
           docker system df || true
       - run: make dev-seed
       - run: make acceptance SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
+      # The shard assignment puts the gate into any shard (it skips without an ingest worker), so shard 1 runs it here.
+      - name: Ingest worker gate
+        if: matrix.shard == 1
+        run: make acceptance T=TestIngestWorkerConsumes
       - name: Disk usage
         if: failure()
         run: |

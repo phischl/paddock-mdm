@@ -455,6 +455,7 @@ var informational = map[audit.Code]bool{
 	"device.groups_changed":                         true,
 	"device.install_now_requested":                  true,
 	"device.inventory_host_kept":                    true,
+	"device.inventory_host_removed":                 true,
 	"device.inventory_purged":                       true,
 	"device.inventory_viewed":                       true,
 	"device.name_changed":                           true,
@@ -498,9 +499,12 @@ var informational = map[audit.Code]bool{
 	"notification.replayed":                         true,
 	"notification.test_requested":                   true,
 	"notification.test_sent":                        true,
+	"patch_compliance.exported":                     true,
+	"patch_compliance.viewed":                       true,
 	"retention.purged":                              true,
 	"vulnerability.critical_summary":                true,
 	"vulnerability.devices_viewed":                  true,
+	"vulnerability.sla_breached":                    true,
 }
 
 // mustBeHigh are the words that mark a code as security relevant: such a code must never end up below level 10.
@@ -581,6 +585,7 @@ func TestRuleLevels(t *testing.T) {
 		{audit.CodeDeviceRevocationTrustPinnedTOFU, audit.OutcomeSuccess, 100911, 12, "paddock_privilege"},
 		{audit.CodeAuditChainVerificationFailed, audit.OutcomeSuccess, 100914, 12, "paddock_integrity"},
 		{audit.CodeDeviceEscrowRefusedDestroyed, audit.OutcomeFailure, 100915, 10, "paddock_integrity"},
+		{audit.CodeAuditEventAfterRetirement, audit.OutcomeSuccess, 100916, 10, "paddock_integrity"},
 		{audit.CodeDiskRecoveryKeyRevealed, audit.OutcomeSuccess, 100912, 10, "paddock_privilege"},
 		{audit.CodeLocalAdminRevealed, audit.OutcomeSuccess, 100912, 10, "paddock_privilege"},
 		{audit.CodePermissionProfileRootGrantConfirmed, audit.OutcomeSuccess, 100913, 10, "paddock_privilege"},

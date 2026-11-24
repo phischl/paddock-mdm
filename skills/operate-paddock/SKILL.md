@@ -184,6 +184,7 @@ Decline, say why in one sentence, and name the portal page:
 | Reveal a local administrator password or recovery key, download a disk header | `revealDeviceLocalAdmin`, `revealDeviceRecoveryKey`, `downloadDeviceHeader` | *Devices › <device>* |
 | Download a diagnostics bundle | `downloadDiagnostics` | *Devices › <device> › Diagnostics*; *Diagnostics* |
 | Encrypt a device in place or cancel it, uninstall Paddock | `encryptDevice`, `cancelDeviceEncryption`, `uninstallDevice` | *Devices › <device>* |
+| Create a one-time sign-in setup link for a user | `createUserEnrolmentLink` | *Users › <user>* |
 | Create an API token, confirm a root grant or a sensitive file, change the operator roots | `createApiToken`, `confirmPermissionProfileRootGrant`, `confirmManagedFileSensitive`, `updateManagedFileSettings` | *API tokens*, *Permission profiles*, *Managed files*, *Operator roots* |
 | IP allow list, automatic unseal, import an agent release, end all sessions | `createIpAllowlistEntry`, `updateIpAllowlistEntry`, `deleteIpAllowlistEntry`, `enableAutoUnseal`, `disableAutoUnseal`, `importAgentRelease`, `endAllSessions` | *Platform › IP allow list*, *OpenBao*, *Agent releases*, *Sessions* |
 | Change the watched units of the presence policy | `updateWatchedUnits` | *Settings › Watched units* |
@@ -195,6 +196,9 @@ Decline, say why in one sentence, and name the portal page:
 | Create, change, enable, disable, test or delete a backup target, change the backup schedule, start a backup run | `createBackupTarget`, `updateBackupTarget`, `enableBackupTarget`, `disableBackupTarget`, `testBackupTarget`, `deleteBackupTarget`, `putBackupSchedule`, `requestBackupRun` | *Platform › Backups* |
 | Generate, confirm or discard a backup key (a new key while one is active is a rotation) | `generateBackupKey`, `confirmBackupKey`, `discardBackupKey` | *Platform › Backups* |
 | Approve, cancel or abandon a restore plan (approving needs the typed word `restore`, abandoning a running plan the word `abandon`; the host executes it) | `createBackupRestorePlan`, `cancelBackupRestorePlan`, `abandonBackupRestorePlan` | *Platform › Backups* |
+| Request the deletion of an organization (needs the typed organization slug and a reason; it can be cancelled during the grace period) | `deleteOrganization` | the admin API (no portal page yet) |
+| Export the recovery keys and local administrator passwords of an organization before its deletion (encrypted to a public key or passphrase; only during the grace period) | `exportRecoveryKeys`, `exportOrganizationRecoveryKeys` | *Export recovery keys* (organization banner; platform: the organization's row in *Platform › Organizations*) |
+| Request the signed evidence package of a deleted organization for its auditors | `createDeletedOrganizationAuditExport` | *Platform › Organizations › <deleted organization> › Retained audit* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change
 that needs a step-up only in some cases (an effectively Full profile, a file on a sensitive path) answers

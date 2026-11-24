@@ -132,6 +132,43 @@ accordingly; document the value you chose.
 
 Record each request, the stores it concerns and the answer in your ISMS.
 
+## Organization offboarding
+
+When a platform administrator deletes an organization (ADR 0052, plan M17, runbook
+[organization-offboarding.md](../operations/organization-offboarding.md)), everything of the organization is deleted
+after a grace period except what the table names as kept. The basis is GDPR Art. 28(3)(g): at the end of the service
+the processor deletes the controller's personal data, unless Union or Member State law requires storage. What is kept is
+kept under Art. 17(3)(b) (a legal obligation to keep records, here the audit evidence with the retention you set for
+ISO/IEC 27001 A.5.33 and A.5.28) and Art. 17(3)(e) (establishment, exercise or defence of legal claims). ISO/IEC
+27001:2022 A.8.10 (information deletion) is met by the deletion events below; A.5.33 (protection of records) by
+the kept evidence.
+
+| Data class | Where | Fate at offboarding | Kept until | Basis | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| Organization rows: devices, groups, users' login traces, inventory, software, configuration and change history, commands, alerts, findings, notifications and their destinations, enrollment tokens and requests, domains, settings, finished actions and the outbox (every table with `organization_id`, 74 at the time of ADR 0052) | PostgreSQL `paddock` | **Deleted** by the step `database`, in batches, only after the organization is `deleting` | The tombstone (below) | Art. 28(3)(g) | `organization.deletion_step_completed` (step `database`, `count`), `organization.deleted` (`rows_deleted`) |
+| Portal and MCP sessions of the organization's administrators, API tokens | Valkey `sess:*`, `api_token` | **Ended and revoked** by the step `sessions` | Not kept | Art. 28(3)(g) | `organization.deletion_step_completed` (step `sessions`) |
+| Directory objects: groups `paddock.<slug>` and `paddock.<slug>.*`, users created by Paddock (path `paddock/<slug>`), the scope mapping, OAuth provider, application and access policy of the device login | Authentik | **Deleted** by the step `authentik`; synced users are not deleted, they lose their memberships with the groups | Not kept | Art. 28(3)(g) | step `authentik`, `organization.deleted` (`authentik_objects_deleted`) |
+| Inventory hosts of the organization's devices | Fleet | **Deleted** by the step `fleet`, unless a device of another organization still uses the host | Not kept | Art. 28(3)(g) | step `fleet`, `organization.deleted` (`fleet_hosts_deleted`) |
+| Configuration bundles, icons, the organization's APT repository | Bundles bucket `org/<id>/`, `apt/<id>/` | **Deleted** by the step `objects` | Not kept | Art. 28(3)(g) | step `objects`, `organization.deleted` (`objects_deleted`) |
+| Escrowed LUKS headers and diagnostics bundles | Escrow bucket `org/<id>/` | **Deleted** by the step `objects` | Not kept | Art. 28(3)(g) | as above |
+| Escrowed recovery keys, local administrator passwords, repository and notification secrets (ciphertexts) | PostgreSQL, object storage | **Deleted** with the rows and objects; OpenBao holds no per-organization path, so deleting the ciphertexts is the deletion (the Transit keys are platform-wide and stay) | Not kept | Art. 28(3)(g) | the steps above |
+| Device and organization keys: `dk:`, `cmd:`, `seq:`, `sd:`, `bp:`, `hb:`, `au:`, `tt:<org>`, `et:`, `enr:`, `esc:` | Valkey | **Deleted** by the step `valkey` | Keys of an offboarded device (see below) | Art. 28(3)(g) | step `valkey` |
+| Short-lived Valkey keys outside the worker's rights: `nonce:` (10 minutes), `diag:` (24 hours), `cres:` (30 days) | Valkey | **Expire by themselves**; they hold IDs and a status, no personal data | At most 30 days after the deletion | Art. 28(3)(g), Art. 5(1)(e) | none (expiry) |
+| A rejected enrollment's `enr:<id>` (no device was created) | Valkey | Can **remain up to 7 days** after the deletion (the enrollment lifetime, `EnrollmentTTL`); it holds the organization ID, the key ID, the public key and the reason, no secret | At most 7 days | Art. 28(3)(g), Art. 5(1)(e) | none (expiry) |
+| Tombstone: `id`, `slug`, `name`, the deletion columns and the uninstall counts; slug and domains become free for reuse | `organization` | **Kept** | Unlimited (the anchor of the retained evidence) | Art. 17(3)(b) and (e) | `organization.deleted` |
+| Audit evidence: audit index rows, `audit_object`, `audit_manifest`, `audit_org_seq`, `audit_verification_run` and the WORM objects of the organization | `paddock_audit`, WORM bucket `org/<id>/` | **Kept**, readable only by platform administrators (an evidence export for auditors, verified offline) | WORM retention (`PADDOCK_AUDIT_RETENTION_DAYS`, ≥ 400); index retention is at least as long (ADR 0032). One final chain verification is recorded, then the organization is no longer verified or written to | Art. 17(3)(b) and (e); A.5.33, A.5.28 | `audit.chain_verified` with `final: true`, reads recorded as `platform.deleted_organization_audit_read` |
+| Platform events about the deletion (`organization.deletion_*`, `organization.deleted`, `organization.inactive_denied`, `platform.offboarded_device_uninstalled`) | Platform pseudo-organization | **Kept** | As the audit evidence | Art. 17(3)(b) and (e) | the events themselves |
+| `offboarded_device`: device ID, key IDs with public keys, the signed removal and disarm commands, the tombstone's ID. No personal data | Platform table | **Kept** so that a device that was offline still removes Paddock at its next contact | Until the device reports its removal, at most **365 days** (`OffboardedDeviceRetention`); then `retention.purged` (store `offboarded_device`). A row can also remain for a device whose removal report arrived while the deletion started; `devices_offboarded` is an upper bound | Art. 6(1)(f); no personal data | `platform.offboarded_device_uninstalled`, `retention.purged` |
+| Backup sets taken before the deletion | Backup repository and mirrors | **Kept, never edited** | Their own retention (`docs/operations/backup.md`, default 30 days) | Art. 17(3)(b); RR-138 | the backup manifest |
+| Recovery export (encrypted to the requester's key or passphrase) | Nowhere | **Not stored**: built in memory and streamed to the requester | The requester's copy | Art. 28(3)(g) | `organization.recovery_exported` in the organization's log |
+
+Who can read what stays: a deleted organization's audit log only for platform administrators, in the platform portal
+and with the evidence export; organization administrators get 404 (ADR 0052 decision 7).
+
+Deleting is not instantaneous for the operator's own copies: after the deletion the data lives on in backup sets until
+they expire, and a restore to a point before the deletion brings it back (RR-138, runbook section "Restore to a point
+before a deletion").
+
 ## What is not purged yet
 
 These rows of the matrix still read "None in this milestone"; their data stays for the period named in the matrix

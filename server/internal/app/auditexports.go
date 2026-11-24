@@ -65,23 +65,10 @@ func NewAuditExports(runner *ActionRunner, reader *db.AuditReader) *AuditExports
 func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (auditstore.AuditExport, error) {
 	var out auditstore.AuditExport
 	id := uuid.Must(uuid.NewV7())
-	from, to := utcDay(req.FromDay), utcDay(req.ToDay)
-	purpose := strings.TrimSpace(req.Purpose)
+	from, to, purpose := req.normalized()
 	prepare := func(_ context.Context, _ *pgstore.Queries, rec Recorder) error {
-		if req.FromDay.IsZero() || req.ToDay.IsZero() {
-			return problem.InvalidRequest.WithDetail("from_day and to_day are required")
-		}
-		if to.Before(from) {
-			return problem.InvalidRequest.WithDetail("from_day must not be after to_day")
-		}
-		if to.Sub(from) > MaxExportDays*24*time.Hour {
-			return problem.RangeTooLarge.WithDetail(fmt.Sprintf("an export spans at most %d days", MaxExportDays))
-		}
-		if n := utf8.RuneCountInString(purpose); n < 1 || n > maxExportPurpose {
-			return problem.InvalidRequest.WithDetail(fmt.Sprintf("purpose must have 1 to %d characters", maxExportPurpose))
-		}
-		if hasControls(purpose) {
-			return problem.InvalidRequest.WithDetail("purpose must not contain control or bidi control characters")
+		if err := req.validate(); err != nil {
+			return err
 		}
 		rec.SetParam("export_id", id.String())
 		rec.SetParam("from_day", from.Format(time.DateOnly))
@@ -91,41 +78,77 @@ func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (aud
 	}
 	external := func(ctx context.Context) error {
 		p, _ := principal.From(ctx)
-		requestedBy, err := json.Marshal(exportRequester(p))
-		if err != nil {
-			return fmt.Errorf("encode requester: %w", err)
-		}
 		return a.reader.InOrgWrite(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-			if err := q.LockAuditExportRequests(ctx); err != nil {
-				return fmt.Errorf("lock export requests: %w", err)
-			}
-			for _, day := range []time.Time{to, from} {
-				if _, err := q.GetAuditManifest(ctx, auditstore.GetAuditManifestParams{OrganizationID: p.OrganizationID, Day: day}); db.IsNoRows(err) {
-					return problem.DayNotSealed.WithDetail(day.Format(time.DateOnly) + " is not sealed yet")
-				} else if err != nil {
-					return fmt.Errorf("manifest of %s: %w", day.Format(time.DateOnly), err)
-				}
-			}
-			open, err := q.CountOpenAuditExports(ctx)
-			if err != nil {
-				return fmt.Errorf("count open exports: %w", err)
-			}
-			if open >= MaxOpenExports {
-				return problem.TooManyExports.WithDetail(fmt.Sprintf("at most %d exports may be pending or running", MaxOpenExports))
-			}
-			out, err = q.InsertAuditExport(ctx, auditstore.InsertAuditExportParams{
-				ID: id, OrganizationID: p.OrganizationID, FromDay: from, ToDay: to, Purpose: purpose,
-				RequestedBy: requestedBy, CorrelationID: a.correlationID(ctx),
-			})
-			if err != nil {
-				return fmt.Errorf("insert export: %w", err)
-			}
-			return nil
+			var err error
+			out, err = insertExport(ctx, q, p, p.OrganizationID, id, req, a.correlationID(ctx))
+			return err
 		})
 	}
 	finalize := func(context.Context, *pgstore.Queries, Recorder, error) error { return nil }
 	err := a.runner.RunExternal(ctx, ScopeOrg, SpecAuditExportRequest, prepare, external, finalize)
 	return out, err
+}
+
+// normalized are the UTC days and the trimmed purpose of the request.
+func (req AuditExportRequest) normalized() (from, to time.Time, purpose string) {
+	return utcDay(req.FromDay), utcDay(req.ToDay), strings.TrimSpace(req.Purpose)
+}
+
+// validate checks the range and the purpose of an export request (plan M10 decision 29).
+func (req AuditExportRequest) validate() error {
+	from, to, purpose := req.normalized()
+	if req.FromDay.IsZero() || req.ToDay.IsZero() {
+		return problem.InvalidRequest.WithDetail("from_day and to_day are required")
+	}
+	if to.Before(from) {
+		return problem.InvalidRequest.WithDetail("from_day must not be after to_day")
+	}
+	if to.Sub(from) > MaxExportDays*24*time.Hour {
+		return problem.RangeTooLarge.WithDetail(fmt.Sprintf("an export spans at most %d days", MaxExportDays))
+	}
+	if n := utf8.RuneCountInString(purpose); n < 1 || n > maxExportPurpose {
+		return problem.InvalidRequest.WithDetail(fmt.Sprintf("purpose must have 1 to %d characters", maxExportPurpose))
+	}
+	if hasControls(purpose) {
+		return problem.InvalidRequest.WithDetail("purpose must not contain control or bidi control characters")
+	}
+	return nil
+}
+
+// insertExport stores the pending export id of org's sealed days in the reader transaction q, whose organization
+// context is org: both ends of the range must be sealed, and at most MaxOpenExports may be pending or running.
+func insertExport(ctx context.Context, q *auditstore.Queries, p principal.Principal, org, id uuid.UUID,
+	req AuditExportRequest, correlationID string) (auditstore.AuditExport, error) {
+	from, to, purpose := req.normalized()
+	requestedBy, err := json.Marshal(exportRequester(p))
+	if err != nil {
+		return auditstore.AuditExport{}, fmt.Errorf("encode requester: %w", err)
+	}
+	if err := q.LockAuditExportRequests(ctx); err != nil {
+		return auditstore.AuditExport{}, fmt.Errorf("lock export requests: %w", err)
+	}
+	for _, day := range []time.Time{to, from} {
+		if _, err := q.GetAuditManifest(ctx, auditstore.GetAuditManifestParams{OrganizationID: org, Day: day}); db.IsNoRows(err) {
+			return auditstore.AuditExport{}, problem.DayNotSealed.WithDetail(day.Format(time.DateOnly) + " is not sealed yet")
+		} else if err != nil {
+			return auditstore.AuditExport{}, fmt.Errorf("manifest of %s: %w", day.Format(time.DateOnly), err)
+		}
+	}
+	open, err := q.CountOpenAuditExports(ctx)
+	if err != nil {
+		return auditstore.AuditExport{}, fmt.Errorf("count open exports: %w", err)
+	}
+	if open >= MaxOpenExports {
+		return auditstore.AuditExport{}, problem.TooManyExports.WithDetail(fmt.Sprintf("at most %d exports may be pending or running", MaxOpenExports))
+	}
+	out, err := q.InsertAuditExport(ctx, auditstore.InsertAuditExportParams{
+		ID: id, OrganizationID: org, FromDay: from, ToDay: to, Purpose: purpose,
+		RequestedBy: requestedBy, CorrelationID: correlationID,
+	})
+	if err != nil {
+		return out, fmt.Errorf("insert export: %w", err)
+	}
+	return out, nil
 }
 
 // ExportPackage is what Download knows about a package before its first byte: the export row and the file name the

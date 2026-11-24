@@ -99,3 +99,10 @@ tokens) for `paddockctl mcp login`.
   organization's `admins`, `operators` or `auditors` group). The administrator policy fails closed: an error in
   its evaluation enrols the account.
 - An end user who approves a device sign-in through the brand sign-in is not asked to enrol a passkey.
+
+## Amendment 2026-11-14 — enrolment link and organization deletion (ADR 0052, ADR 0053)
+
+- The administrator sign-in stages deny an account without an authenticator; enrolment runs through the one-time
+  link of the `paddock-recovery` flow, except for accounts marked `paddock_mfa_enrol_at_login` (ADR 0053).
+- The adapter deletes an organization's Authentik objects (groups, Paddock-created users, device application,
+  provider, scope mapping, access policy and binding) when the organization is deleted (ADR 0052 decision 3).

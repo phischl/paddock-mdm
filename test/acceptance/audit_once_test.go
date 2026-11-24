@@ -24,11 +24,21 @@ type auditWorld struct {
 	acme             uuid.UUID
 	idx              *env.AuditIndex
 
+	// owner is the test that runs the cases (TestAuditExactlyOnce), the end of which deletes the shared organization.
+	owner       *testing.T
 	gateOrgMu   sync.Mutex
 	gateOrgSlug string
 
 	// admins are the acme administrators the cases step up as (TestAuditExactlyOnce only).
 	admins *adminPool
+
+	// sem holds the slots of the parallel cases (TestAuditExactlyOnce only, see withoutSlot).
+	sem chan struct{}
+
+	// deleted is the deleted organization the audit evidence cases share (deletedAuditOrganization).
+	deletedMu     sync.Mutex
+	deleted       *deletedAuditOrg
+	deletedFailed bool
 }
 
 // auditCase is one request against a privileged operation and the single audit event it must produce.
@@ -555,7 +565,7 @@ func newOrg() map[string]string {
 
 func newAuditWorld(t *testing.T) *auditWorld {
 	t.Helper()
-	w := &auditWorld{alice: login(t, env.Alice), bob: login(t, env.Bob), root: login(t, env.PlatformAdmin), idx: auditIndex(t)}
+	w := &auditWorld{owner: t, alice: login(t, env.Alice), bob: login(t, env.Bob), root: login(t, env.PlatformAdmin), idx: auditIndex(t)}
 	w.acme = orgOf(t, w.alice)
 	acmeOperatorRoots(t)
 	return w
@@ -569,6 +579,7 @@ func TestAuditExactlyOnce(t *testing.T) {
 	w := newAuditWorld(t)
 	sem := parallelCases(t)
 	w.admins = newAdminPool(t, "a3-admin", cap(sem), env.RoleGroup("acme", "admins"))
+	w.sem = sem
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {
@@ -581,6 +592,15 @@ func TestAuditExactlyOnce(t *testing.T) {
 	if len(ops) < 5 {
 		t.Fatalf("only %d privileged operations in the contract", len(ops))
 	}
+	// The deleted organization's evidence cases are registered last. go test starts parallel cases only roughly in
+	// that order, but they then start late in the gate: the deletion requested here has usually reached its tombstone
+	// by then, so few or none of them hold one of go test's parallel slots while waiting for it (PDK-1075).
+	w.startDeletedAuditOrg(t)
+	sort.SliceStable(ops, func(i, j int) bool {
+		_, a := deletedOrgAuditCases[ops[i]]
+		_, b := deletedOrgAuditCases[ops[j]]
+		return !a && b
+	})
 	for _, op := range ops {
 		cases, ok := auditCases[op]
 		if !ok {
@@ -618,7 +638,16 @@ func TestAuditExactlyOnce(t *testing.T) {
 			cases, ok = accessReviewAuditCases[op]
 		}
 		if !ok {
+			cases, ok = patchComplianceAuditCases[op]
+		}
+		if !ok {
 			cases, ok = diagnosticsAuditCases[op]
+		}
+		if !ok {
+			cases, ok = organizationDeletionAuditCases[op]
+		}
+		if !ok {
+			cases, ok = deletedOrgAuditCases[op]
 		}
 		// The operator roots are one value per organization that other gates rely on: its cases run one after
 		// another and write under operatorRootsMu (see ensureOperatorRoots).
@@ -626,7 +655,7 @@ func TestAuditExactlyOnce(t *testing.T) {
 			serial = true
 		}
 		if !ok {
-			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, software_requests_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go or audit_once_diagnostics_test.go", op)
+			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, software_requests_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go, patch_compliance_test.go, audit_once_diagnostics_test.go, audit_once_orgdeletion_test.go or audit_once_deletedaudit_test.go", op)
 			continue
 		}
 		for _, c := range cases {

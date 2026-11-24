@@ -545,6 +545,34 @@ func (q *Queries) ListAgentReleases(ctx context.Context, arg ListAgentReleasesPa
 	return items, nil
 }
 
+const listPublishedAgentHashes = `-- name: ListPublishedAgentHashes :many
+SELECT DISTINCT a.sha256 FROM agent_artifact a JOIN agent_release r ON r.version = a.version
+WHERE r.status = 'published' ORDER BY a.sha256
+`
+
+// The hashes of every published agent artifact, all architectures (plan M5a amendment 2026-11-16, A2): the agent
+// binary policy accepts exactly these. A future withdrawal of a release must keep its hashes here (ADR 0056
+// decision 4).
+func (q *Queries) ListPublishedAgentHashes(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPublishedAgentHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunningAgentRollouts = `-- name: ListRunningAgentRollouts :many
 SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE status = 'running' ORDER BY version
 `

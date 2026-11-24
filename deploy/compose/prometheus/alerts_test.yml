@@ -261,7 +261,7 @@ tests:
       - eval_time: 65m
         alertname: PaddockOpenBaoHealthMissing
         exp_alerts:
-          - exp_labels: { severity: critical }
+          - exp_labels: { severity: critical, role: paddock-worker }
             exp_annotations:
               summary: "OpenBao's seal status is unknown"
               description: "The worker runs but exports no OpenBao health."
@@ -443,6 +443,28 @@ tests:
             exp_annotations:
               summary: "The audit hash chain failed its nightly verification"
               description: "2 organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+
+  - name: a failed final verification of a deleted organization fires for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="failed", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 1x180"
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="ok", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 1 2x180"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts:
+          - exp_labels: { severity: critical, trigger: final, result: failed, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The final audit verification of a deleted organization failed"
+              description: "The audit chain of an organization being deleted did not verify; its retained evidence is incomplete or altered. The organization detail and organization.deleted show audit_final_outcome failed."
+      - eval_time: 2h
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
 
   - name: a chain verification older than 36 hours warns after one more hour
     interval: 1m
@@ -810,3 +832,256 @@ tests:
             exp_annotations:
               summary: "The local backup repository has less than 10 % free space"
               description: "pgBackRest and the backup role stop writing when the volume backup-repo is full; free space or lower the retention (docs/operations/restore.md)."
+
+  - name: an organization deletion at the longest backoff warns at once
+    interval: 1m
+    input_series:
+      - series: 'paddock_offboarding_retry_capped{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockOrganizationDeletionStuck
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: PaddockOrganizationDeletionStuck
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "An organization deletion keeps failing"
+              description: "1 organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
+
+  - name: an overrun organization deletion round warns for 30 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_offboarding_round_overruns_total{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20 1x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock, role: paddock-worker, instance: "paddock-worker:9090" }
+            exp_annotations:
+              summary: "An organization deletion round overran"
+              description: "An organization deletion round took longer than 2 minutes in the last 30 minutes; a deletion step stopped yielding to the other organizations. See paddock_offboarding_step_yields_total and the worker's log."
+      - eval_time: 55m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts: []
+
+  - name: a worker that does not consume worker.offboarding for 15 minutes warns
+    interval: 1m
+    input_series:
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20 1x10 0x10"
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "1x40"
+      # Another role's target at 0 (a gauge registered where it does not belong) never fires (main §46).
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x40"
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock, role: paddock-worker, instance: "paddock-worker:9090" }
+            exp_annotations:
+              summary: "A worker does not consume worker.offboarding"
+              description: "paddock-worker:9090 has not consumed worker.offboarding for 15 minutes; organization deletions wait in step audit_final. Check the worker's log and the broker's permissions (./paddock check --online, ./paddock bootstrap broker)."
+      - eval_time: 25m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+
+  - name: one audit.event_after_retirement warns for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 0 1x180"
+      # The counter of another target (a registration where it does not belong) is ignored.
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0 5 10x180"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "Events arrived for an organization whose audit log is closed"
+              description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
+      - eval_time: 2h
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []
+
+  # Main §46: a role that does not own a metric must not fire its alert, whatever default it exports.
+  - name: OpenBao is unreachable only when the worker says so, not through another role's default 0
+    interval: 1m
+    input_series:
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x20"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x20"
+      - series: 'paddock_openbao_reachable{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts: []
+
+  - name: OpenBao is unreachable when the worker reports 0 for 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "OpenBao is unreachable"
+              description: "The worker cannot reach OpenBao's health endpoint."
+
+  - name: another role's openbao series does not hide that the worker exports none
+    interval: 1m
+    input_series:
+      - series: 'up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts:
+          - exp_labels: { severity: critical, role: paddock-worker }
+            exp_annotations:
+              summary: "OpenBao's seal status is unknown"
+              description: "The worker runs but exports no OpenBao health."
+
+  - name: automatic unseal alerts ignore another role reporting an enabled unsealer that is not up
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x70"
+      - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockAutoUnsealerDown
+        exp_alerts: []
+
+  - name: automatic unseal alerts ignore another role reporting shares on the host
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts: []
+
+  - name: the audit staleness alerts ignore another role's default 0
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x3100"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x3100"
+    alert_rule_test:
+      - eval_time: 50h
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 50h
+        alertname: PaddockAuditIndexPurgeStale
+        exp_alerts: []
+
+  - name: a suppressed inventory claim watch is critical after 15 minutes, a zero gauge stays silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_inventory_claim_watch_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "5x30"
+      - series: 'paddock_inventory_claim_watch_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: PaddockInventoryClaimWatchSuppressed
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: PaddockInventoryClaimWatchSuppressed
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PaddockInventoryClaimWatchSuppressed
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Inventory claim reports are held: most watched devices have an open claim"
+              description: "More than half of the devices with inventory have an open claim episode, so no claim is reported. A Fleet database restore causes this for up to 60 minutes; otherwise follow docs/operations/fleet.md, \"When the inventory claim watch is suppressed\"."
+
+  - name: a suppressed fleetd silence watch is critical after 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 3x30"
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The fleetd silence watch holds back 3 devices"
+              description: "For 15 minutes the worker has held back reports of devices whose fleetd is silent while they check in, because no live device or fewer than half of them reach Fleet. Either devices cannot reach fleet.<domain> (certificate, DNS, proxy, Fleet's device endpoints) or more than half of the live devices were tampered with; until it clears, a silent fleetd is not reported (docs/operations/fleet.md, \"When the fleetd silence watch is suppressed\")."
+
+  - name: a fleetd silence watch suppression that ends before 15 minutes and a zero gauge stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 3x8 0x30"
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []

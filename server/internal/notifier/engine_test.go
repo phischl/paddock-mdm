@@ -584,17 +584,31 @@ func (c *syncClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// slowTransport takes 30 s of the clock for every delivery to one destination.
+// slowTransport takes 30 s of the clock for every delivery to one destination. The clock is shared by all
+// destinations of a round, unlike the wall clock each destination's budget runs on in production, so the slow
+// receiver only starts taking time once another destination has delivered: otherwise its advances could fall
+// between the other destination's budget start and its first check and use up that budget (PDK-1133).
 type slowTransport struct {
-	slow  uuid.UUID
-	clock *syncClock
-	next  *fakeTransport
+	slow     uuid.UUID
+	clock    *syncClock
+	next     *fakeTransport
+	other    chan struct{}
+	otherRan *sync.Once
 }
 
 func (s slowTransport) Deliver(ctx context.Context, d Destination, m outbound.Message) error {
-	if d.ID == s.slow {
-		s.clock.Advance(30 * time.Second)
+	if d.ID != s.slow {
+		err := s.next.Deliver(ctx, d, m)
+		s.otherRan.Do(func() { close(s.other) })
+		return err
 	}
+	// The timeout keeps an engine that never serves the other destination from hanging the test; the count
+	// assertions then fail.
+	select {
+	case <-s.other:
+	case <-time.After(5 * time.Second):
+	}
+	s.clock.Advance(30 * time.Second)
 	return s.next.Deliver(ctx, d, m)
 }
 
@@ -610,7 +624,8 @@ func TestDestinationBudget(t *testing.T) {
 	h.store.orgs = append(h.store.orgs, other)
 	slow := h.webhook(h.org, State{})
 	fast := h.webhook(other, State{})
-	h.e.transports[outbound.TypeWebhook] = slowTransport{slow: slow.Destination.ID, clock: clock, next: h.tr}
+	h.e.transports[outbound.TypeWebhook] = slowTransport{slow: slow.Destination.ID, clock: clock, next: h.tr,
+		other: make(chan struct{}), otherRan: &sync.Once{}}
 	h.index.append(h.org, tamper, 50)
 	h.index.append(other, tamper, 1)
 	h.round()

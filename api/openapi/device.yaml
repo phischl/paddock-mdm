@@ -84,6 +84,12 @@ paths:
       description: |
         The body is at most 96 KiB (the other device endpoints allow 64 KiB): since plan M13a the health may carry a
         software report of up to 200 items, and a report never makes the check-in fail.
+
+        A device whose organization was deleted before it reported its removal (an offboarded identity) gets only its
+        last commands here: the disarm of the dead man's switch (delete_self_lock) first, then the uninstall; no bundle,
+        agent update or time ticket. It may report the results of those two commands and an events batch; every other
+        endpoint answers 401 identity_revoked. Once its agent.uninstalled event has been accepted, its key is deleted
+        and every request, this one included, answers 401 invalid_signature (unknown key).
       parameters:
         - $ref: "#/components/parameters/Device"
         - $ref: "#/components/parameters/KeyId"
@@ -320,6 +326,8 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/EventsRequest" }
       responses:
+        "200":
+          description: Dropped. A device whose organization was deleted may only report its removal (exactly one event of type agent.uninstalled); any other batch is answered 200 and discarded, so the agent does not resend it.
         "202":
           description: Accepted for processing; duplicates (same event_seq) are ignored, and an event of an unknown type is skipped (see Event.type).
         "400": { $ref: "#/components/responses/Problem" }
@@ -511,6 +519,21 @@ components:
             record when they differ from the stored values and recompiles the device; values that are not plain
             identifiers (letters, digits, `.`, `_`, `-`, at most 64 characters) are ignored without failing the check-in.
             Optional; agents of earlier releases leave it out and the enrollment value stays.
+        fleet_device_token:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: |
+            fleetd's current device token (the content of /opt/orbit/identifier), sent when it changed since the last
+            successful check-in. The server resolves it through the inventory system to the device's inventory host
+            and stores only that host's data for the device (ADR 0057). A value that does not match the pattern is
+            ignored without failing the check-in. Optional; agents before 0.1.0-alpha.11 leave it out.
+        fleet_enrollment_reset_at:
+          type: string
+          format: date-time
+          description: |
+            When the agent reset fleetd's enrollment to enroll it under its instance identifier (ADR 0057), sent until a
+            check-in with the new device token succeeded, at most 24 hours. Optional; agents before 0.1.0-alpha.11 leave
+            it out.
     BundleRef:
       type: object
       required: [version, sha256, url]

@@ -155,12 +155,14 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
 | `getOverview` | read | no | The numbers of the overview page, computed in one transaction; never cached. |
+| `getPatchCompliance` | read | no | The patch compliance report of the organization (plan M13c decision 18 and amendment 2026-11-14) against its patch SLA: the state at generated_at, with no period. |
 | `getSecurityReview` | read | no | The review of existing data (ADR 0034 decision 7): effectively Full permission profiles and managed files on sensitive paths that no organization administrator has confirmed with a step-up yet, and managed files on denied paths, which are not shipped to devices. |
 
 ## platform
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
+| `cancelOrganizationDeletion` | write | no | Cancels the pending deletion of the organization: every offboarding uninstall a device has not received yet is withdrawn; a device that already received it removes Paddock as instructed. |
 | `createAgentRelease` | write | no | Creates a draft release. |
 | `createOrganization` | write | no | Creates the organization and its Authentik groups. |
 | `getAgentRelease` | read | no | The release with its artifacts and rollout, including device counts. |
@@ -182,7 +184,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listBackupTargets` | read | no | The backup targets: local directories of the host, SMB and NFS shares the host mounts, S3-compatible buckets. |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
 | `listIpAllowlist` | read | no | The IP allow list of the administrative surfaces (plan M7a decision 16): while it has entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions and API tokens alike. |
-| `listOrganizations` | read | no | GET /api/platform/v1/organizations |
+| `listOrganizations` | read | no | Without a status filter the list leaves out deleted organizations (their tombstones, ADR 0052); status=deleted lists them. |
 | `listPlatformNotificationDestinations` | read | no | The platform's notification destinations: signed webhooks and e-mail address lists that receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). |
 | `publishAgentRelease` | write | no | POST /api/platform/v1/agent-releases/{version}/publish |
 | `resumeAgentRollout` | write | no | POST /api/platform/v1/agent-releases/{version}/rollout/resume |
@@ -220,12 +222,14 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDMSSettings` | read | no | The dead man's switch; off with the defaults until changed. |
 | `getLoginSettings` | read | no | GET /api/v1/settings/login |
 | `getManagedFileSettings` | read | no | The operator roots of the managed files (ADR 0034 amendment 2026-10-16); empty until changed. |
+| `getPatchSlaSettings` | read | no | The patch SLA (plan M13c decision 17): days a vulnerability with a fixed version may stay open per severity, 0 = no SLA; the defaults 7/30/90/0 until changed. |
 | `getPrivacySettings` | read | no | The privacy settings (ADR 0032 §2); the defaults until changed. |
 | `getRolloutSettings` | read | no | The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed. |
 | `getUpdateSettings` | read | no | The update settings (plan M5b decisions 1 and 9); the defaults until changed. |
 | `getWatchedUnits` | read | no | The third-party systemd services of the presence policy: the agents report when one of them stops. |
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
+| `updatePatchSlaSettings` | write | no | Replaces the patch SLA: critical_days, high_days, medium_days and low_days, each 0 to 365 (0 = the severity has no SLA). |
 | `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
 | `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first, and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored values when absent. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
@@ -310,13 +314,16 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
 | `createBackupRestorePlan` | platform | Approves a restore plan, which the host executes within 24 hours with ./paddock restore --plan <id> (host_command). |
 | `createBackupTarget` | platform | Adds a target. |
+| `createDeletedOrganizationAuditExport` | platform | Requests the signed evidence package of a deleted organization for its auditors, with the body, checks and answers of POST /api/v1/audit/exports; the package verifies offline with paddockctl audit verify-export. |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
 | `createSoftwareSource` | software | Adds a package source with its signing key: an APT repository (kind apt, the default) or a Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures, else 400 invalid_request; the signing key is the remote's GPG key). |
+| `createUserEnrolmentLink` | users | A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. |
 | `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
+| `deleteOrganization` | platform | Starts the deletion of the organization (ADR 0052): it stays active and usable until deletion.delete_after = now + grace_days, then the worker deletes its data and leaves a tombstone in status deleted. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
 | `deleteSoftwarePackage` | software | Removes a stored package from the repository, which is rebuilt without it. |
 | `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
@@ -331,6 +338,8 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `enableMcpWrite` | mcp | Enables MCP write access for the caller's own account (ADR 0044 amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. |
 | `encryptDevice` | devices | Issues the signed command encrypt_disk (lifetime 7 days, ADR 0039, plan M8e decision 7): the device escrows a recovery key, prepares itself and encrypts its root volume in place after its next restart; disk_conversion follows the phases. |
 | `endAllSessions` | platform | Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. |
+| `exportOrganizationRecoveryKeys` | platform | The export of POST /api/v1/recovery-export for the organization of the path (404 not_found for an unknown organization); the platform administrator acts inside that organization only while its deletion is pending (ADR 0052 amendment b decision 8). |
+| `exportRecoveryKeys` | settings | Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password of every non-retired device of the organization, encrypted to the public key or the passphrase of the request (ADR 0052 amendment b); after the deletion this file is the only remaining copy. |
 | `generateBackupKey` | platform | Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). |
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
@@ -370,8 +379,10 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
 | `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
+| `downloadDeletedOrganizationAuditExport` | platform | Streams the package of a ready export of a deleted organization, with the headers and answers of GET /api/v1/audit/exports/{id}/download (409 export_not_ready). |
 | `enforceDevice` | devices | Ends the report-only mode of an adopted device (plan M11 decision 42): its next bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last administrator), installs the login component and applies every managed resource. |
 | `exportAccessReview` | overview | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
+| `exportPatchCompliance` | overview | The patch compliance report as a download, with every device (no cap): format json (the report object) or csv (one file for every section, told apart by the section column: summary, severity, group, one breach row per breached finding, catalog; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `exportPlatformAccessReview` | platform | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
@@ -383,6 +394,8 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `getPlatformAccessReview` | platform | The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
 | `getSoftwareCatalogIcon` | software | The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. |
+| `listDeletedOrganizationAuditEvents` | platform | The retained audit log of a deleted organization (ADR 0052 decision 7), with the sort, search and filters of /api/v1/audit-events. |
+| `listDeletedOrganizationAuditExports` | platform | The evidence exports of a deleted organization, as /api/v1/audit/exports. |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
 | `setSoftwareCatalogIcon` | software | Sets or replaces the entry's icon. |
 | `updateMe` | me | PATCH /api/v1/me |

@@ -7,7 +7,18 @@ scripts and never changed) and run the gates of the agent milestones against the
 make up dev-seed                           # the development stack
 make system-test VM=all                    # every gate on both VMs
 make system-test VM=paddock-u2604 T='TestDiskGates'
+make system-test VM=all SUITE=identity     # one suite of suites.txt
+make system-test VM=all SUITE=all          # every suite one after another, summary at the end
 ```
+
+The run streams: `go test -json` goes through filter `test/system/cmd/testlive`, which prints every
+`=== RUN`, log and `--- PASS/FAIL` line as it happens (lines of subtests carry the test name) and fails when no test
+ran. The raw JSON of each run is kept in `bin/system-test/<suite>-<UTC timestamp>.json`. `test/system/suites.txt`
+(`name|timeout|regex`) splits the tests into `identity`, `localadmin`, `software`, `disk`, `revoke`, `lifecycle` and
+`misc`; `TestSuitesComplete` fails when a top-level test is in no suite or in two, so a new test is added to
+`suites.txt`. `SUITE=all` gives every suite its own `-timeout`, continues after a failed suite and exits non-zero if
+any failed. `T` and `SUITE` exclude each other; without both, the whole package runs under one 8 h timeout. A
+deliberate wait of 60 s or more uses `WaitLogged(t, reason, d)`, which logs what it waits for and how long first.
 
 `VM` is `paddock-u2404`, `paddock-u2604`, both comma-separated, or `all`. `make system-test` builds the packages as
 version 0.1.0 with the `paddock_dev` tag into `bin/deb/` and fleetd into `bin/fleetd/` (`make fleetd-deb`, needs
@@ -58,7 +69,9 @@ enrollment tokens, permission profiles, Authentik users), so the VMs never share
 the whole organization shares is coordinated through the VMs' `vmGroup` (`parallel.go`):
 
 - `Together` runs a step once for all VMs when each of them reached it: the stack outage of S3 (`make down`,
-  `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set), the releases of S4, S-UP1, S-UP2 and S-UP3 (a release
+  `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set; `make up` takes
+  `PADDOCK_VALKEY_MEM_LIMIT` from the environment, so a dev stack that carries load data must export the limit it runs
+  with, e.g. `2g`, or Valkey runs out of memory while it reloads its data), the releases of S4, S-UP1, S-UP2 and S-UP3 (a release
   with `--halt-running` halts every other rollout, so the VMs share one), the update policy of S-UP1 and S-UP3, the
   login history of LH1, the watched units of N12 and the stopped worker of LA1. A VM whose gate ended early (a failure) is no longer waited for.
   `Share` and `Shared` hand each VM's input to the step, such as the rollout buckets that S-UP1's first wave must
@@ -86,6 +99,7 @@ gate calls `Enforce` and `SetDriftInterval` itself. The autoinstall gate asserts
 | `TestPreflight` | `paddockd preflight --json` on an unenrolled VM: `sudoers_d` and `privileged_groups` warn after a foreign sudoers file and a sudo member are seeded, nothing changes | none |
 | `TestAdoptionGates` | report-only apply leaves the seeded file and group untouched and lists `quarantine`/`remove` as pending; enforcement quarantines, removes the member, writes the managed files, audits both tamper events | none (per VM) |
 | `TestConfigRolloutGates` | waves `[1,100]` with VM A's group as canary: a staged file reaches A only until `complete`; a staged missing unit fails on A, the worker halts the rollout (one event), the revert ends it | the organization's rollout settings and its single open rollout (`Together`); needs `VM=all`; no other gate in parallel; the file is staged again under a new path (at most 3 draws, a revert in between) until the VM outside the canary group has a bucket of 1 or more for the rollout, so the split is always testable; the staged unit reaches the other VM only when its bucket is 0 |
+| `TestOffboarding` (OS1) | both VMs enrolled into an organization of their own with the dead man's switch on; one is switched off before the deletion is requested (grace 0) and started after `deleted`; both remove Paddock (packages, `/etc/sudoers.d/paddock-*`, `self-lock.dsse`), keep the local administrator's login, home directories and LUKS keyslots, never self-lock (a guest watcher timestamps the token's disappearance and the removal, so the disarm-first order is asserted), and unlock at the next boot | the organization (`Together`, one administrator per VM), deleted at the end; suite `lifecycle`; about 75 min; the refused-uninstall variant is not covered (needs a third device) |
 
 The rollout gate restores the rollout settings and completes any open rollout in its cleanup; a killed run leaves them
 in place (switch rollouts off under *Settings* and complete or revert the rollout).

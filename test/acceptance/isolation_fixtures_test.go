@@ -468,6 +468,8 @@ type isolationFixture struct {
 	kind isolationKind
 	// request returns the concrete path and body for alice; item fixtures create the globex resource first.
 	request func(t *testing.T, w *isolationWorld) (path string, body any)
+	// refusal is the problem code an isoOwnRefused operation must answer with, when the refusal is a known one.
+	refusal string
 	// ownAttempts marks the audit-event list: the failed or denied attempts of the gate's own actors are left out of the
 	// leak check (withoutOwnFailedAttempts), because the item checks record them with the globex ID the gate sent.
 	ownAttempts bool
@@ -520,6 +522,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/access-review/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/access-review/export?format=json", nil
 	}},
+	"GET /api/v1/patch-compliance": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/patch-compliance", nil
+	}},
+	"GET /api/v1/patch-compliance/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/patch-compliance/export?format=json", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -548,6 +556,14 @@ var isolationFixtures = map[string]isolationFixture{
 	// Signing keys (plan M10 decision 36) are the audit chain's public keys, shared by every organization.
 	"GET /api/v1/audit/keys": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit/keys", nil
+	}},
+	// The export takes its organization from the principal only (PDK-1073): globex's IDs in the body, which the binder
+	// ignores, and in the query change nothing, and acme, without a pending deletion, gets its own invalid_state.
+	// TestRecoveryExportIsolation proves the same with a second organization whose deletion is pending.
+	"POST /api/v1/recovery-export": {kind: isoOwnRefused, refusal: "invalid_state", request: func(t *testing.T, w *isolationWorld) (string, any) {
+		globex := orgOf(t, w.carol).String()
+		return "/api/v1/recovery-export?" + foreignOrgQuery(globex, w.globexDevice).Encode(),
+			foreignOrgBody(globex, "globex", w.globexDevice)
 	}},
 	"GET /api/v1/audit/exports/{id}": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		seedGlobexExport(t, w)
@@ -831,6 +847,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"DELETE /api/v1/users/{id}":                itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
 	"POST /api/v1/users/{id}/lock":             itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/lock" }, nil),
 	"POST /api/v1/users/{id}/unlock":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/unlock" }, nil),
+	"POST /api/v1/users/{id}/enrolment-link":   itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/enrolment-link" }, nil),
 	"GET /api/v1/users/{id}/devices":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/devices" }, nil),
 	"GET /api/v1/users/{id}/effective-profile": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/effective-profile" }, nil),
 
@@ -992,6 +1009,12 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"PUT /api/v1/settings/privacy": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice)
+	}},
+	"GET /api/v1/settings/patch-sla": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/patch-sla", nil
+	}},
+	"PUT /api/v1/settings/patch-sla": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/patch-sla", currentPatchSLA(t, w.alice)
 	}},
 	"GET /api/v1/package-holds": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/package-holds?page_size=100", nil

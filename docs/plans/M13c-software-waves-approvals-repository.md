@@ -1223,3 +1223,32 @@ CREATE TABLE software_request_withdrawal (                          -- newest wi
 organization-scoped table with its isolation tests and a change of two status transitions under concurrency, which
 needs the external review of a high-risk ticket — while the defect needs two check-ins' batches to overtake each
 other, loses no data and falls back to the behaviour every release before PDK-811b had.
+
+## Amendment 2026-11-14 (architect, PDK-814 review 1): the patch compliance report is a snapshot
+
+Binding; where it contradicts decision 18 or §3.8, it wins.
+
+**Why.** Decision 18 names `from` and `to` but defines no period semantics. `vulnerability_finding` keeps no history:
+a fixed finding is deleted by the inventory round (`queries/inventory.sql`), and the table has no `resolved_at`.
+"Findings open during a period" or "fixed late within a period" therefore cannot be computed, and a `from` that filters
+nothing misleads the auditor. Adding a finding history is a data-model change outside PDK-814.
+
+1. **Snapshot semantics.** `GET /api/v1/patch-compliance` and its export describe the state at `generated_at` (the
+   request time, UTC). A finding counts when it is in `vulnerability_finding` at that time, has a `severity` and a
+   `fixed_version`, and belongs to an in-scope device (point 3). `days_open = floor((generated_at − first_seen_at) /
+   24 h)`; breached when `days_open > sla_days` of its severity (`sla_days = 0`: never breached). The query parameters
+   `from` and `to` and the response field `period` are removed from the contract; the parameters are not declared in
+   `admin.yaml`, and the response carries `generated_at` only. The portal page has no period presets and no custom
+   period; it states "State at <generated_at>".
+2. **Evidence over time** comes from the audit log and saved exports, not from the report: the daily
+   `vulnerability.sla_breached` event (counts per severity and devices) and each `patch_compliance.exported` export.
+   The page and `docs/operations/vulnerability-data.md` say so. A finding that disappears and is reported again starts
+   a new `first_seen_at` (documented there). A finding history with a period report is a non-goal of M13c.
+3. **Devices in scope** are active devices with a `device_inventory_ref`; an organization without inventory gets
+   `devices: 0` and empty sections (L10).
+4. **Read audit.** `patch_compliance.viewed` is recorded under the existing switch `inventory_view_recorded`
+   (decision 18's `read_audit` does not exist), coalesced once per actor and UTC day like `access_review.viewed`.
+5. **Catalog behind** compares Debian packages only (`installed_software.source = 'deb_packages'`) with the dpkg
+   version order (`patchsla.CompareVersions`); every package name of the entry counts. Flatpak refs are not counted.
+6. **Caps.** The view lists at most 1 000 devices with `devices_total` and `row_cap`; the export holds every device.
+   The memory bound of both for large organizations is follow-up PDK-1040.

@@ -66,41 +66,52 @@ type deviceWarnings struct {
 // compile keeps its rows too: a concurrent compile published a newer bundle and owns its warnings, which an outdated
 // compile must neither overwrite nor delete.
 func (c *Compiler) recordWarnings(ctx context.Context, org uuid.UUID, warnings map[uuid.UUID]deviceWarnings) error {
-	if len(warnings) == 0 {
+	// Row locks in id order, the order of ListCompileTargets that recordPlatform and recordDenialLocks follow, so two
+	// compiles cannot deadlock.
+	devices := slices.SortedFunc(maps.Keys(warnings), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	// Short transactions of writeBatch devices (plan M17 amendment r point 7); each device's write stands alone.
+	for batch := range slices.Chunk(devices, c.writeBatch) {
+		if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			for _, device := range batch {
+				if err := recordDeviceWarnings(ctx, q, org, device, warnings[device]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recordDeviceWarnings replaces the stored warnings of device with dw unless its bundle_seq moved on.
+func recordDeviceWarnings(ctx context.Context, q *pgstore.Queries, org, device uuid.UUID, dw deviceWarnings) error {
+	seq, err := q.LockDeviceBundleSeq(ctx, device)
+	if db.IsNoRows(err) || (err == nil && seq != dw.seq) {
 		return nil
 	}
-	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		// Row locks in id order, the order recordPlatform's ORDER BY d.id takes them, so two compiles cannot deadlock.
-		devices := slices.SortedFunc(maps.Keys(warnings), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-		for _, device := range devices {
-			dw := warnings[device]
-			seq, err := q.LockDeviceBundleSeq(ctx, device)
-			if db.IsNoRows(err) || (err == nil && seq != dw.seq) {
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("lock device bundle seq: %w", err)
-			}
-			if err := q.DeleteCompileWarnings(ctx, device); err != nil {
-				return fmt.Errorf("delete compile warnings: %w", err)
-			}
-			ws := dw.warnings
-			if len(ws) > maxDeviceWarnings {
-				slog.WarnContext(ctx, "compile warnings of a device beyond the stored limit are logged only", "device_id", device,
-					"warnings", len(ws), "stored", maxDeviceWarnings)
-				ws = ws[:maxDeviceWarnings]
-			}
-			for _, w := range ws {
-				params, err := json.Marshal(w.params)
-				if err != nil {
-					return fmt.Errorf("encode compile warning params: %w", err)
-				}
-				if err := q.InsertCompileWarning(ctx, pgstore.InsertCompileWarningParams{OrganizationID: org, DeviceID: device,
-					AssignmentID: w.assignment, CatalogEntryID: w.entry, Code: w.code, Params: params}); err != nil {
-					return fmt.Errorf("insert compile warning: %w", err)
-				}
-			}
+	if err != nil {
+		return fmt.Errorf("lock device bundle seq: %w", err)
+	}
+	if err := q.DeleteCompileWarnings(ctx, device); err != nil {
+		return fmt.Errorf("delete compile warnings: %w", err)
+	}
+	ws := dw.warnings
+	if len(ws) > maxDeviceWarnings {
+		slog.WarnContext(ctx, "compile warnings of a device beyond the stored limit are logged only", "device_id", device,
+			"warnings", len(ws), "stored", maxDeviceWarnings)
+		ws = ws[:maxDeviceWarnings]
+	}
+	for _, w := range ws {
+		params, err := json.Marshal(w.params)
+		if err != nil {
+			return fmt.Errorf("encode compile warning params: %w", err)
 		}
-		return nil
-	})
+		if err := q.InsertCompileWarning(ctx, pgstore.InsertCompileWarningParams{OrganizationID: org, DeviceID: device,
+			AssignmentID: w.assignment, CatalogEntryID: w.entry, Code: w.code, Params: params}); err != nil {
+			return fmt.Errorf("insert compile warning: %w", err)
+		}
+	}
+	return nil
 }

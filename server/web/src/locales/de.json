@@ -15,6 +15,21 @@
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
+  "patchSla": {
+    "title": "Patch-SLA",
+    "intro": "Wie viele Tage eine Schwachstelle mit verfügbarer Korrektur auf einem Gerät offen bleiben darf, je Schweregrad. Der Patch-Compliance-Bericht und die Aufmerksamkeitsliste werten einen Befund als überschritten, sobald er länger offen ist; ein tägliches Sammelereignis nennt die Überschreitungen.",
+    "legend": "Tage je Schweregrad",
+    "fields": {
+      "critical_days": "Kritisch",
+      "high_days": "Hoch",
+      "medium_days": "Mittel",
+      "low_days": "Niedrig"
+    },
+    "hint": "0 bedeutet: für diesen Schweregrad gilt keine SLA.",
+    "range": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein.",
+    "readOnly": "Nur Organisationsadministratoren können die Patch-SLA ändern.",
+    "saved": "Die Patch-SLA wurde gespeichert."
+  },
   "rolloutSettings": {
     "title": "Rollout-Einstellungen",
     "intro": "Gestufte Rollouts wenden eine Konfigurationsänderung zuerst auf einen Teil der Geräte an, Welle für Welle, und halten automatisch an, wenn zu viele Geräte fehlschlagen. Sie sind standardmäßig aus. Ein laufender Rollout behält die Werte, mit denen er gestartet wurde.",
@@ -102,6 +117,8 @@
     "switchRoleConfirm": "Wechseln",
     "switchRoleFailed": "Die Rolle konnte nicht gewechselt werden. Bitte versuchen Sie es erneut.",
     "roleFallbackOrganizationInactive": "Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.",
+    "mfaEnrolmentNotice": "{pending, plural, =0 {Alle Administratoren melden sich jetzt mit einem Passkey an.} one {# Administrator hat noch keinen Passkey eingerichtet und wird bei der nächsten Anmeldung dazu aufgefordert.} other {# Administratoren haben noch keinen Passkey eingerichtet und werden bei der nächsten Anmeldung dazu aufgefordert.}} Neue Administratorkonten richten ihren Passkey nur über einen einmaligen Link zur Einrichtung der Anmeldung ein: Eine Organisationsadministratorin oder ein Organisationsadministrator erstellt ihn auf der Seite des Benutzers, für Plattformadministratoren erstellt ihn der Betrieb. Dieser Hinweis wird bis {until} angezeigt.",
+    "mfaEnrolmentNoticeDismiss": "Ausblenden",
     "stepUpValidUntil": "Identität bestätigt bis {time}",
     "stepUpNone": "Keine aktuelle Identitätsbestätigung",
     "stepUpChip": "Bestätigt bis {time}"
@@ -131,12 +148,14 @@
     "dms": "Totmannschalter",
     "software": "Software",
     "vulnerabilities": "Schwachstellen",
+    "patchCompliance": "Patch-Compliance",
     "attention": "Handlungsbedarf",
     "findings": "Feststellungen",
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
     "privacySettings": "Datenschutz",
+    "patchSlaSettings": "Patch-SLA",
     "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
@@ -280,6 +299,7 @@
     "invalid_request": "Die Anfrage war ungültig.",
     "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
+    "enrolment_link_platform_administrator": "Dieses Konto ist auch Plattformadministrator. Plattformadministratoren erhalten ihren Link zur Einrichtung der Anmeldung vom Betreiber des Hosts.",
     "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
     "unsupported_compression": "Das Steuerarchiv des Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit dpkg-deb -Zgzip oder -Zzstd.",
@@ -314,6 +334,10 @@
     "release_not_newer": "Diese Version ist nicht neuer als das neueste veröffentlichte Release.",
     "release_incomplete": "Dem Release in der Quelle fehlt eine erforderliche Datei oder Signatur.",
     "release_signature_mismatch": "Eine Datei des Releases passt nicht zum öffentlichen Release-Schlüssel; nichts wurde gespeichert.",
+    "package_name_mismatch": "Ein Paket des Releases nennt in seiner Control-Datei ein anderes Paket als das, als das es hochgeladen wird; nichts wurde gespeichert.",
+    "package_version_mismatch": "Ein Paket des Releases nennt in seiner Control-Datei eine andere Version als das Release (bei fleet-osquery seine fleetd-Version); nichts wurde gespeichert.",
+    "package_arch_mismatch": "Ein Paket des Releases nennt in seiner Control-Datei eine andere Architektur als die, für die es hochgeladen wird; nichts wurde gespeichert.",
+    "unsupported_control_compression": "Das Steuerarchiv eines Release-Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit gzip oder zstd.",
     "mcp_disabled": "Der MCP ist für diesen Bereich ausgeschaltet.",
     "mcp_tool_not_allowed": "Diese Operation ist über den MCP nicht erlaubt.",
     "mcp_write_not_enabled": "Änderungen über den MCP sind nicht freigegeben.",
@@ -326,14 +350,17 @@
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
     "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend.",
+    "organization_inactive": "Diese Organisation wird gelöscht. Ihre Daten können nicht mehr gelesen oder geändert werden.",
     "backup_key_mismatch": "Die Zeichen passen nicht zum Schlüssel.",
     "backup_target_state_unchanged": "Das Ziel hat diesen Zustand bereits.",
-    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen."
+    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen.",
+    "export_limit": "Der Wiederherstellungsexport wurde in dieser Frist bereits fünfmal erstellt."
   },
   "audit": {
     "vulnerability": {
       "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
-      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})",
+      "sla_breached": "Patch-SLA auf {devices, plural, one {# Gerät} other {# Geräten}} überschritten: {critical, number} kritisch, {high, number} hoch, {medium, number} mittel, {low, number} niedrig"
     },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
@@ -375,14 +402,23 @@
       "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert",
       "searched": "{actor} hat das Audit-Protokoll durchsucht{q_used, select, true { (mit Suchbegriff)} other {}}",
       "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)",
-      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)"
+      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)",
+      "event_after_retirement": "Ein Ereignis {original_code} kam nach dem Schließen des Audit-Protokolls der Organisation an"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
       "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
       "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden",
-      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}",
+      "deletion_requested": "{actor} hat die Löschung der Organisation {slug} beantragt ({grace_days, plural, one {# Tag} other {# Tage}} Frist)",
+      "deletion_cancelled": "{actor} hat die Löschung der Organisation {slug} abgebrochen",
+      "deletion_step_completed": "Löschung von {slug}: Schritt {step} abgeschlossen",
+      "deletion_step_failed": "Löschung von {slug}: Schritt {step} fehlgeschlagen",
+      "deleted": "Die Organisation {slug} wurde gelöscht",
+      "recovery_exported": "{actor} hat die Wiederherstellungsschlüssel und lokalen Administratorpasswörter von {devices, plural, one {# Gerät} other {# Geräten}} exportiert, verschlüsselt mit {recipient, select, public_key {einem öffentlichen Schlüssel} other {einer Passphrase}}",
+      "audit_retirement_requested": "Löschung von {slug}: die abschließende Prüfung des Audit-Protokolls wurde angefordert",
+      "inactive_denied": "{actor} wurde abgewiesen: Die Organisation {organization_id} {status, select, deleted {ist gelöscht} other {wird gelöscht}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -431,6 +467,7 @@
       "inventory_purged": "Inventarlöschung des außer Betrieb genommenen Geräts {hostname}: {software, plural, one {# Paket} other {# Pakete}}, {findings, plural, one {# Befund} other {# Befunde}}",
       "inventory_viewed": "{actor} hat {view, select, vulnerabilities {die Schwachstellen} other {die Software}} von {hostname} angesehen",
       "inventory_host_kept": "Das außer Betrieb genommene Gerät {hostname} behält seinen Fleet-Host seit {rounds, number} unveränderten Durchläufen ({fleet_host_kept})",
+      "inventory_host_removed": "Der Fleet-Host {fleet_host}, über den {hostname} nicht mehr spricht, wurde aus Fleet entfernt",
       "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
       "bundle_render_failed": "Ein neues Bundle für {target} wurde blockiert: Die sudo-Rechte von {username} haben die Prüfung nicht bestanden",
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
@@ -450,6 +487,10 @@
       "header_escrow_refused": "Ein LUKS-Header von {target} wurde nicht hinterlegt: Das Gerät hinterlegt bereits 32 Volumes",
       "tamper_service_stopped": "Das Gerät {target} hat den Dienst {unit} gestoppt vorgefunden",
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
+      "tamper_agent_binary_changed": "fleetd meldet auf {target} ein Agent-Binary, das zu keinem veröffentlichten Release passt",
+      "tamper_fleet_host_claimed": "Eine weitere Anmeldung im Inventarsystem beansprucht {target}",
+      "tamper_fleetd_silent": "fleetd auf {target} arbeitet nicht mehr mit dem Inventarsystem, während sich das Gerät weiter meldet",
+      "tamper_inventory_rejected": "Paddock konnte das Inventar von {target} nicht übernehmen",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
       "escrow_refused_destroyed": "Ein Festplattenschlüssel von {target} wurde nicht hinterlegt: Die Vernichtung des Geräts ist ausgestellt",
@@ -520,6 +561,7 @@
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",
       "bundle_seq_bumped": "{actor} hat die Bundle-Sequenz von {devices} Geräten um {by} erhöht (Wiederherstellung)",
       "bundle_seq_raised": "{actor} hat die Bundle-Sequenz von {devices} Geräten auf mindestens {at_least} angehoben (Wiederherstellung)",
+      "bundle_versions_pruned": "{actor} hat {deleted} überholte Bundle-Versionen gelöscht und die neuesten {keep} je Gerät behalten",
       "cache_rebuilt": "{actor} hat den Geräte-Cache von {organizations} Organisationen neu aufgebaut (Wiederherstellung)",
       "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
@@ -548,7 +590,12 @@
       "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
       "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
       "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
-      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben",
+      "offboarded_device_uninstalled": "Ein Gerät einer gelöschten Organisation hat Paddock entfernt",
+      "deleted_organization_audit_read": "{actor} hat das Audit-Protokoll der gelöschten Organisation {slug} gelesen",
+      "mfa_enrol_marks_seeded": "{marked, plural, one {# Administrator ohne Passkey wurde} other {# Administratoren ohne Passkey wurden}} markiert, ihn bei der nächsten Anmeldung einzurichten ({totp_only, number} nur mit Authenticator-App, {organizations, number} Organisationen)",
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {Die Einrichtungsmarkierung von # Administrator mit Passkey wurde} other {Die Einrichtungsmarkierungen von # Administratoren mit Passkey wurden}} entfernt",
+      "enrolment_link_created": "{actor} hat auf dem Host einen Link zur Einrichtung der Anmeldung für das Konto {username} erstellt"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -581,6 +628,7 @@
       "deleted": "{actor} hat den Benutzer {username} gelöscht",
       "locked": "{actor} hat den Benutzer {username} gesperrt",
       "unlocked": "{actor} hat den Benutzer {username} entsperrt",
+      "enrolment_link_created": "{actor} hat einen Link zur Einrichtung der Anmeldung für den Benutzer {username} erstellt",
       "synced_added": "Der synchronisierte Benutzer {username} wurde hinzugefügt",
       "synced_removed": "Der synchronisierte Benutzer {username} wurde entfernt"
     },
@@ -598,7 +646,8 @@
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
       "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
       "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
-      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
+      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}",
+      "patch_sla_changed": "{actor} hat die Patch-SLA geändert: kritisch {critical_days, number} Tage, hoch {high_days, number} Tage, mittel {medium_days, number} Tage, niedrig {low_days, number} Tage (0 = keine SLA)"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -693,6 +742,10 @@
     "access_review": {
       "viewed": "{actor} hat den Zugriffsreview geöffnet",
       "exported": "{actor} hat den Zugriffsreview vom {from} bis {to} als {format} exportiert"
+    },
+    "patch_compliance": {
+      "viewed": "{actor} hat den Patch-Compliance-Bericht geöffnet",
+      "exported": "{actor} hat den Patch-Compliance-Bericht vom {from} bis {to} als {format} exportiert"
     }
   },
   "organizations": {
@@ -711,11 +764,61 @@
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",
       "provisioning_failed": "Einrichtung fehlgeschlagen",
-      "suspended": "Ausgesetzt"
+      "suspended": "Ausgesetzt",
+      "deleting": "Wird gelöscht",
+      "deleted": "Gelöscht"
     },
     "empty": {
       "title": "Noch keine Organisationen",
       "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
+    },
+    "delete": {
+      "action": "Löschen",
+      "title": "{name} löschen?",
+      "message": "Alle Daten von {name} werden nach der Karenzzeit endgültig gelöscht. Bis dahin bleibt die Organisation nutzbar; jedes Gerät erhält den Auftrag, Paddock zu entfernen.",
+      "confirm": "Organisation löschen",
+      "reason": "Grund",
+      "reasonHint": "2 bis 500 Zeichen; wird im Audit-Trail festgehalten.",
+      "grace": "Karenzzeit (Tage)",
+      "graceHint": "So lange bleibt die Organisation nutzbar, danach werden ihre Daten gelöscht.",
+      "graceInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
+    },
+    "deletion": {
+      "pending": "Löschung am {date}",
+      "cancel": "Löschung abbrechen",
+      "cancelTitle": "Löschung von {name} abbrechen?",
+      "cancelMessage": "Die Organisation bleibt, wie sie ist. Geräte, die den Auftrag zum Entfernen von Paddock schon erhalten haben, führen ihn trotzdem aus.",
+      "cancelConfirm": "Löschung abbrechen",
+      "step": "Schritt: {step}",
+      "lastError": "Letzter Fehler: {error}",
+      "steps": {
+        "sessions": "Sitzungen",
+        "devices": "Geräte",
+        "outbox": "Outbox",
+        "authentik": "Identitätsanbieter",
+        "fleet": "Flotte",
+        "objects": "gespeicherte Objekte",
+        "valkey": "Cache",
+        "audit_final": "abschließender Audit-Export",
+        "database": "Datenbank",
+        "tombstone": "Grabstein"
+      }
+    },
+    "banner": {
+      "message": "Die Organisation ist zur Löschung am {date} vorgemerkt. Alle ihre Daten werden dann endgültig gelöscht.",
+      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren.",
+      "pending": "{count, plural, one {# Gerät wartet} other {# Geräte warten}} noch auf die Freigabe und {count, plural, one {kann} other {können}} keine Deinstallation erhalten: Die inaktiven Paddock-Pakete bleiben darauf. Geben Sie sie frei und löschen Sie sie, oder entfernen Sie die Pakete von Hand mit apt purge paddock-agent paddock-supervisor."
+    },
+    "audit": {
+      "open": "Aufbewahrtes Audit",
+      "title": "Aufbewahrtes Audit von {name}",
+      "back": "Zurück zu den Organisationen",
+      "intro": "Das Audit-Log der gelöschten Organisation {slug} bleibt hier lesbar. Jeder Lesezugriff wird im Plattform-Audit-Log festgehalten.",
+      "logTitle": "Audit-Log",
+      "finalVerified": "Die Audit-Kette der Organisation wurde vor ihrer Löschung am {date} verifiziert.",
+      "finalFailed": "Die abschließende Verifikation der Audit-Kette am {date} ist fehlgeschlagen: Die aufbewahrten Audit-Nachweise ließen sich nicht verifizieren. Verlassen Sie sich nicht darauf als Nachweis, bevor die Ursache geklärt ist.",
+      "finalNone": "Die Audit-Kette wurde bei der Löschung noch nicht verifiziert.",
+      "finalFailedChip": "Audit-Verifikation fehlgeschlagen"
     }
   },
   "agentReleases": {
@@ -810,6 +913,7 @@
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
     "passkey_required": "Ihre Anmeldung wurde nicht mit einem Passkey bestätigt, und jede Rolle im Paddock-Portal erfordert einen (einen Sicherheitsschlüssel oder den eingebauten Authenticator Ihres Geräts). Melden Sie sich beim Identitätsanbieter ab, melden Sie sich dann erneut an und bestätigen Sie mit Ihrem Passkey. Haben Sie noch keinen Passkey, richtet die Anmeldung einen ein.",
+    "mfa_enrolment_required": "Ihr Konto hat noch keinen Passkey. Ein neues Administratorkonto richtet ihn nur über einen einmaligen Link zur Einrichtung der Anmeldung ein: Bitten Sie eine Administratorin oder einen Administrator Ihrer Organisation (als Plattformadministrator den Betrieb) um einen Link, öffnen Sie ihn und melden Sie sich dann erneut an.",
     "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
     "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
     "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
@@ -1375,7 +1479,8 @@
         "skipped_in_use": "nicht gelöscht (die Festplatte wird damit entsperrt)",
         "not_requested": "nicht angefordert",
         "failed": "Löschen fehlgeschlagen"
-      }
+      },
+      "offboarding": "Entfernung wegen der Löschung der Organisation: Das Gerät entfernt Paddock, weil seine Organisation gelöscht wird. Nur das Abbrechen der Löschung der Organisation nimmt sie zurück."
     },
     "components": {
       "title": "Komponenten",
@@ -2126,6 +2231,15 @@
     "groups": "Gruppen",
     "recoveryLink": "Passwort-Link",
     "linkShownOnce": "Geben Sie {username} diesen Einmal-Link: Er setzt das Passwort und ist 24 Stunden gültig. Er wird nur jetzt angezeigt.",
+    "enrolmentLink": {
+      "create": "Link zur Einrichtung der Anmeldung erstellen",
+      "title": "Link zur Einrichtung der Anmeldung",
+      "confirm": "Einen einmaligen Link zur Einrichtung der Anmeldung für {username} erstellen? Damit richtet das Konto einen Passkey ein, falls es keinen hat, und ein Passwort nur, wenn Paddock das Konto angelegt hat und es keines hat. Ein neuer Link beendet jeden älteren. Der Link ist 24 Stunden gültig und wird nur einmal angezeigt.",
+      "link": "Link zur Einrichtung der Anmeldung",
+      "copyFailed": "Der Link konnte nicht kopiert werden. Markieren Sie ihn im Feld und kopieren Sie ihn von Hand.",
+      "shownOnce": "Geben Sie diesen Einmal-Link über einen vertrauenswürdigen Kanal an {username}. Er ist bis {at} gültig und wird nur jetzt angezeigt.",
+      "help": "Mit einem Link zur Einrichtung der Anmeldung richtet das Konto einmalig innerhalb von 24 Stunden einen Passkey ein; ein von Paddock angelegtes Konto ohne Passwort setzt außerdem eines. Ein neuer Link beendet jeden älteren: Erstellen Sie nach der Vergabe einer Portalrolle einen neuen Link und geben Sie nur diesen weiter, sofern der Benutzer seinen Link nicht schon verwendet hat."
+    },
     "syncedHint": "Dieser Benutzer wird aus einem Quellverzeichnis synchronisiert: Name, E-Mail und Passwort werden dort verwaltet. Sperre, Gruppen und Berechtigungen werden hier verwaltet.",
     "lock": "Sperren",
     "lockTitle": "Benutzer sperren",
@@ -2584,7 +2698,8 @@
       "clock_drift": "Zeitabweichung",
       "event_gap": "Ereignislücke",
       "report_only": "Berichtsmodus, wartet auf Durchsetzung",
-      "software_requests_open": "Softwareanfragen warten"
+      "software_requests_open": "Softwareanfragen warten",
+      "patch_sla_breached": "Patch-SLA überschritten"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2605,7 +2720,8 @@
       "clock_drift": "Gerät öffnen",
       "event_gap": "Gerät öffnen",
       "report_only": "Gerät öffnen",
-      "software_requests_open": "Gerät öffnen"
+      "software_requests_open": "Gerät öffnen",
+      "patch_sla_breached": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -3053,6 +3169,61 @@
       "reason": "Grund",
       "target": "Ziel",
       "slug": "Slug"
+    }
+  },
+  "patchCompliance": {
+    "title": "Patch-Compliance",
+    "intro": "Der aktuelle Stand der Geräte der Organisation: wie lange Schwachstellen mit verfügbarer Korrektur schon offen sind, gemessen an der Patch-SLA. Jeder offene Befund zählt; seine offenen Tage laufen ab der ersten Meldung durch das Inventarsystem. Für Nachweise über die Zeit dienen die Exporte und die täglichen Sammelereignisse.",
+    "group": "Gerätegruppe",
+    "allGroups": "Alle Geräte",
+    "capNotice": "Angezeigt werden die Überschreitungen von {shown, number} von {total, number} Geräten. Der Export enthält alle Geräte.",
+    "forbidden": {
+      "title": "Kein Zugriff auf den Patch-Compliance-Bericht",
+      "description": "Nur Administratoren, Operatoren und Auditoren der Organisation sehen den Bericht."
+    },
+    "empty": {
+      "title": "Noch kein Inventar",
+      "description": "Kein aktives Gerät in diesem Bereich hat sein Inventar gemeldet, daher gibt es nichts an der SLA zu messen."
+    },
+    "cards": {
+      "devices": "Geräte",
+      "devicesNote": "Aktiv, mit Inventar",
+      "compliant": "Innerhalb der SLA",
+      "compliantNote": "Kein Befund zu lange offen",
+      "breached": "SLA überschritten",
+      "breachedNote": "{findings, plural, one {# Befund} other {# Befunde}} zu lange offen",
+      "sla": "SLA in Tagen",
+      "slaNote": "Kritisch / hoch / mittel / niedrig"
+    },
+    "sections": {
+      "severity": "Nach Schweregrad",
+      "groups": "Nach Gerätegruppe",
+      "breaches": "Befunde länger offen als die SLA",
+      "catalog": "Fest versionierte Pflichtsoftware"
+    },
+    "columns": {
+      "severity": "Schweregrad",
+      "findingsOpen": "Offen",
+      "findingsBreached": "Überschritten",
+      "medianDaysOpen": "Median offene Tage",
+      "p90DaysOpen": "90. Perzentil",
+      "deviceGroup": "Gerätegruppe",
+      "devices": "Geräte",
+      "breachedDevices": "Geräte mit Überschreitung",
+      "hostname": "Gerät",
+      "cve": "CVE",
+      "package": "Paket",
+      "daysOpen": "Tage offen",
+      "slaDays": "SLA-Tage",
+      "fixedVersion": "Behoben in",
+      "entry": "Anwendung",
+      "requiredVersion": "Vorgegebene Version",
+      "devicesBehind": "Geräte im Rückstand"
+    },
+    "stateAt": "Stand vom",
+    "emptySection": {
+      "title": "Nichts anzuzeigen",
+      "description": "Keine Zeilen passen zur Gerätegruppe oder zur Suche."
     }
   },
   "mcp": {
@@ -3715,5 +3886,34 @@
     "startInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
     "durationInvalid": "Geben Sie 30 bis 1440 Minuten ein.",
     "timezoneInvalid": "Geben Sie einen Zeitzonennamen mit höchstens 64 Zeichen ein."
+  },
+  "recoveryExport": {
+    "button": "Wiederherstellungsschlüssel exportieren",
+    "title": "Wiederherstellungsschlüssel und Passwörter exportieren",
+    "intro": "Lädt alle Festplatten-Wiederherstellungsschlüssel und das neueste lokale Administratorpasswort aller Geräte von {slug} als eine verschlüsselte Datei herunter. Öffnen Sie sie später mit gpg --decrypt.",
+    "lastCopy": "Nach der Löschung ist diese Datei die einzige verbleibende Kopie. Paddock behält keine Kopie. Bewahren Sie sie sicher auf; ohne Schlüssel oder Passphrase kann niemand sie öffnen.",
+    "recipient": "Verschlüsseln mit",
+    "recipientPublicKey": "Meinem öffentlichen OpenPGP-Schlüssel (empfohlen)",
+    "recipientPassphrase": "Einer Passphrase (generiert, mindestens 20 Zeichen)",
+    "publicKey": "Öffentlicher OpenPGP-Schlüssel (ASCII-armoured)",
+    "passphrase": "Passphrase",
+    "passphraseRepeat": "Passphrase wiederholen",
+    "strength": {
+      "short": "Zu kurz: mindestens 20 Zeichen.",
+      "fair": "Ausreichend. Länger und mit gemischten Zeichen ist stärker.",
+      "strong": "Stark."
+    },
+    "submit": "Verschlüsselte Datei herunterladen",
+    "done": "Die verschlüsselte Datei wurde heruntergeladen.",
+    "limit": "Höchstens fünf Exporte pro Frist.",
+    "errors": {
+      "publicKey": "Fügen Sie einen ASCII-armoured öffentlichen OpenPGP-Schlüssel ein (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
+      "length": "Die Passphrase braucht 20 bis 1024 Zeichen.",
+      "mismatch": "Die Passphrasen stimmen nicht überein."
+    },
+    "pending": "Diese Organisation wird am {date} gelöscht. Exportieren Sie vorher ihre Wiederherstellungsschlüssel und lokalen Administratorpasswörter.",
+    "passphraseNote": "Verwenden Sie eine generierte Passphrase mit mindestens 20 Zeichen, zum Beispiel aus einem Passwortmanager. Ein öffentlicher Schlüssel ist sicherer.",
+    "until": "Wiederherstellungsexport verfügbar bis {time}.",
+    "closed": "Der Wiederherstellungsexport wurde 20 Minuten vor der Löschung geschlossen."
   }
 }

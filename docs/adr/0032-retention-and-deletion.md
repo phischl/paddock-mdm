@@ -421,3 +421,10 @@ the residual risk RR-125. Column meanings as in decision 1.
 **Deletion lag.** The sentence of decision 1 stands with the new periods: a row that a retention purge deletes survives
 in the backup set until the full backups, snapshots and dumps that hold it have expired (up to 30 days with the
 defaults, longer with a longer schedule), and a restore brings it back until the next purge run (residual risk RR-94).
+
+## Amendment 2026-11-17 (ADR 0057, PDK-1123) — Fleet host of a retired device
+
+The host in Fleet of a retired device is removed by the next inventory round (`device.inventory_host_removed`, reason
+`retired`), not at the end of `retired_inventory_days`. Paddock's copy of the inventory keeps the retention period
+above. The inventory purge then finds the host deleted. Retirement is final: a retired device cannot become active
+again, and a machine that enrolls again becomes a new device with a new host.

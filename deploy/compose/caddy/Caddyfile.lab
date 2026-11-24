@@ -36,14 +36,23 @@ http://device.{$PADDOCK_DOMAIN} {
 # paddock-agent-artifacts.
 http://bundles.{$PADDOCK_DOMAIN} {
 	import hardening_headers
+	# Only the exact layout of PackageObjectKey is proxied: the raw path is matched, because the rewrite forwards the raw
+	# path while the other matchers see the cleaned one, so a deny list leaks through dot segments, escapes and extra
+	# slashes. Segments start with an alphanumeric character, which rules out ".", "..", "%" and empty segments. Anything
+	# else that cleans to the package area is refused here, so the guarantee does not depend on how the object store
+	# answers a listing (RustFS 1.0.4 refuses, 1.0.6 answers not found; PDK-1116).
 	@packages {
 		method GET HEAD
-		path /packages/*
+		vars_regexp {path} ^/packages/[A-Za-z0-9][A-Za-z0-9.+_-]*/[A-Za-z0-9][A-Za-z0-9.+_-]*\.deb$
 	}
 	handle @packages {
 		import body_limit 1MiB 1048576
 		rewrite * /paddock-agent-artifacts{path}
 		reverse_proxy rustfs:9000
+	}
+	@packages_refused path /packages /packages/*
+	handle @packages_refused {
+		respond 403
 	}
 	@read {
 		method GET HEAD

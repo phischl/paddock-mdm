@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -25,11 +24,11 @@ const VerifyWindowDays = 7
 var ErrVerifyLocked = errors.New("auditwriter: another replica holds the verification lock")
 
 var (
-	metricVerifyFailedOrganizations = promauto.NewGauge(prometheus.GaugeOpts{
+	metricVerifyFailedOrganizations = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_audit_verify_failed_organizations",
 		Help: "Organizations whose audit chain failed or could not be verified in the last nightly cycle.",
 	})
-	metricVerifyLastRun = promauto.NewGauge(prometheus.GaugeOpts{
+	metricVerifyLastRun = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_audit_verify_last_run_timestamp_seconds",
 		Help: "End of the last nightly verification cycle (at start: of the last recorded nightly run, else the start time).",
 	})
@@ -287,19 +286,31 @@ func (p poolIndex) organizations(ctx context.Context) ([]auditOrganization, erro
 	return orgs, err
 }
 
-// listOrganizations returns every organization of the index with its first audit day.
+// listOrganizations returns every organization of the index with its first audit day, except the retired ones: their
+// chain had its final verification and is no longer verified (plan M17 decision 16).
 func listOrganizations(ctx context.Context, q *auditstore.Queries) ([]auditOrganization, error) {
 	ids, err := q.ListAuditOrganizations(ctx)
 	if err != nil {
 		return nil, err
 	}
-	orgs := make([]auditOrganization, len(ids))
-	for i, id := range ids {
+	retiredIDs, err := q.ListAuditOrgRetiredIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	retired := make(map[uuid.UUID]bool, len(retiredIDs))
+	for _, id := range retiredIDs {
+		retired[id] = true
+	}
+	orgs := make([]auditOrganization, 0, len(ids))
+	for _, id := range ids {
+		if retired[id] {
+			continue
+		}
 		first, err := q.FirstAuditDay(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		orgs[i] = auditOrganization{ID: id, FirstDay: first}
+		orgs = append(orgs, auditOrganization{ID: id, FirstDay: first})
 	}
 	return orgs, nil
 }

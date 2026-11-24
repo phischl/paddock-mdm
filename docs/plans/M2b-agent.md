@@ -103,6 +103,8 @@ rolled out in waves with an automatic stop. Proven on both test VMs.
     was applied to `supervisor.go` alone; with the outcome `rollback_failed` and its retry the supervisor is at 693 such
     lines. The ceiling is **800**. Code that pushes past it is moved out of the supervisor (into the agent or `pkg/`),
     not split into more files. PDK-062 adds a check to `make lint` that enforces the ceiling.
+    Amendment 2026-11-16 (architect, PDK-1118): the ceiling is **835**; see the section of that date at the end of
+    this plan.
 16. **Update protocol (agent ↔ supervisor):** the check-in response may contain
     `agent_update: {version, url, sha256, size, minisig}` (device API change, §6.1). The agent downloads to
     `/var/lib/paddock/staging/<version>/paddockd` + `paddockd.minisig`, checks size and SHA-256, then writes
@@ -377,3 +379,360 @@ validate the package path.
 - **Residual risk.** A store-side write that completes more than the lease lifetime after its upload gave up, and
   after the publish, is not detected. Devices refuse such an object by its SHA-256 (fail safe) until the release is
   replaced.
+
+## Amendment 2026-11-16 (architect, PDK-1118) — supervisor decisions under disk stalls; line budget 835
+
+Slow device disks can stall a single fsync for half a minute (measured: 33 s for a 7-byte fsync under parallel
+writers; PDK-1115 Review 1). The probation's health verdict does not depend on a disk write, but two side paths of
+decision 16 do, and both fixes belong in the supervisor: it alone flips the slots and refuses downgrades (decision 15),
+and a fail-closed decision under an I/O stall cannot be delegated to the agent it judges. Both parts ship in the same
+change (PDK-1118), with an external review.
+
+**Part 1 — the probation window is bounded across supervisor restarts (decision 16).** `WatchdogSec=60` stays, the
+watchdog stays petted once per tick from the single loop goroutine, and the probation stays 10 min (2 min with
+`paddock_dev`). Until now `resumeProbation` set `SwitchedAt = Now()`, so every watchdog kill during a stalled rollback
+pass started a full new window and the rollback of a sick release could be postponed again and again. The rule now is:
+
+- The probation log records the kernel boot ID at the switch: field `boot_id` (string, `omitempty`) of
+  `probation`, set in `onSelfTest` and in `rebuildProbation` from `Config.BootID`. `New` fills an empty
+  `Config.BootID` from `/proc/sys/kernel/random/boot_id` (trimmed; a read error leaves it empty); tests inject it.
+- `resumeProbation` no longer overwrites `SwitchedAt`; the persisted switch time stays the start of the window. The
+  resumed deadline is `Now() + remaining`, with `remaining = min(max(SwitchedAt + Probation - Now(), Probation/5),
+  Probation)`, so it carries the monotonic clock of the resume, never extends the original window (a clock set back
+  cannot stretch it past one fresh window), and leaves a healthy agent that the restart killed (`KillMode=mixed`) at
+  least `Probation/5` (2 min; 24 s with `paddock_dev`) to check in again.
+- If the log's `boot_id` is empty (a log of an earlier supervisor, a rebuild that could not read the boot ID) or
+  differs from `Config.BootID` (the device rebooted; a watchdog restart never changes it), `remaining = Probation`,
+  as before: after a reboot the network may need minutes, and a short window would roll back healthy releases.
+- Nothing else changes: the check-in mark is cleared on resume, the switch counts as `unsynced`, the rollback runs from
+  the loop after the child has started. A resume whose deadline has passed rolls back at the first tick after the
+  floor; within one boot, watchdog restarts can postpone a rollback by at most `Probation/5` each, not by a window.
+- Rejected: petting the watchdog after every completed fsync (it would wrap `SyncDir`/`SyncFile`, blur the meaning of
+  the watchdog, which proves a responsive loop, and break the tests' tick counting, which counts `WATCHDOG=1`); a
+  watchdog goroutine (it would pet a hung loop); raising `WatchdogSec` or the window (excluded by the ticket); keeping
+  `SwitchedAt` without the boot ID (a reboot after the deadline would leave only the floor to a booting laptop).
+
+**Part 2 — a stalled `paddockd version` defers the decision (decision 16, direction B).** A `paddockd version` call
+that hits its 10 s timeout is distinguished from an agent that cannot report a version. In `onRequest` such a timeout
+writes no outcome and keeps `staging/request.json`; the request is processed again on a later tick, and after a
+restart through `resumeRequest`, so a stall never lets a release that is not newer pass the downgrade refusal. In
+`rebuildProbation` such a timeout keeps the unreadable probation log and skips the probation until the next start,
+instead of rebuilding or dropping it from a slot that only looked version-less. Rejected: refusing the release with
+`downgrade_refused` on a timeout (a false failure counted against the rollout, and the agent marks the release as
+failed); moving helpers out of the supervisor to make room (it would split the A/B logic across components that update
+on different channels).
+
+**Part 2, persistent stall — visibility and the way out.** If `paddockd version` of the active slot hangs on every
+call (an agent binary that deadlocks, or reads of `/opt/paddock/agent` that never complete), the request is deferred
+for good. While `staging/request.json` exists the agent stages nothing (`update.Pending`) and installs no supervisor
+package, so neither the rollout nor *Update agent now* reaches the device. No new outcome code is introduced (that
+would change the result contract and needs its own decision); the rules are:
+
+- **Retry rate.** Each attempt blocks the loop for up to the 10 s timeout, so a deferred request is not retried on
+  every tick: the wait between attempts starts at `pendingRetryStart` (10 s) and doubles up to `pendingRetryMax`
+  (5 min), the constants of a pending rollback; it resets when a request is processed or removed. A restart retries
+  at once through `resumeRequest`.
+- **Device.** Every deferred attempt logs one warning, `update request deferred: the active agent did not report its
+  version in time`, with the requested version and the next wait (at most 12 lines an hour). It is in the
+  supervisor's journal and in the diagnostics bundle (`journal/paddock-supervisor.log`), which an administrator
+  requests from the portal.
+- **Fleet.** The device keeps checking in with its old agent version: the fleet overview counts it as outdated
+  against the current release (`agent_outdated`), the device page shows the old version, and an *Update agent now*
+  request ends after 24 hours without a report. The fleet shows that the update does not arrive, not why; the why
+  is in the diagnostics bundle. Accepted residual for alpha.11; a reason visible in the portal needs a new event or
+  check-in field and a separate decision.
+- **Way out (operator, on the device, root).** A supervisor restart alone, *Update agent now* and `apt install
+  --reinstall paddock-agent` do not help: the restart asks the same binary again, the agent does not stage while the
+  request waits, and the package's postinst never touches an existing `current` or the slots. What works is to make
+  the active slot answer again and restart the supervisor, which then processes the waiting request with signature
+  check, downgrade refusal, self-test and probation: (1) if the other slot holds a working agent
+  (`timeout 15 /opt/paddock/agent/<slot>/paddockd version` prints a version), point `current` at it with the same
+  `ln -sfn` and `mv -T` commands as in *A rollback that failed*; otherwise (2) copy the packaged binary into the active
+  slot (`install -m 0755 /usr/lib/paddock/paddockd /opt/paddock/agent/<active>/paddockd.new`, then `mv -f` over
+  `paddockd`); then `systemctl restart paddock-supervisor`. PDK-1118 documents this in
+  `docs/operations/agent-releases.md` as a new subsection `### An update that waits for the active agent` under
+  *On the device*, after *A rollback that failed*, together with the journal query
+  `journalctl -u paddock-supervisor | grep 'update request deferred'`, and adds a `changelog.d/` fragment.
+- **Budget.** The back-off and the warning take up to 5 lines from the buffer of 6 below; the ceiling stays 835.
+
+**Budget.** The supervisor counts 797 lines at 64382b2f. Part 1 is estimated at 11 counted lines (`Config.BootID` 1,
+reading it in `New` 4, the `probation` field 1, the two struct literals +1 each, the resumed deadline +3); part 2 at
+21 (implementer's estimate). 797 + 11 + 21 = 829, plus a buffer of 6: the ceiling is **835**
+(`test/supervisor-budget.sh`, its regression test and the `Makefile` comment change with it). The principle of design
+contract 1 is unchanged: the supervisor stays one goroutine's loop with no new dependency, simple enough to need no
+updates; only the number changes. A change that needs more than 835 lines stops and goes back to the architect.
+
+**PDK-1118b rollback ordering (architect, 2026-11-16).** Today a supervisor killed by the watchdog after `rollback`'s
+flip back has landed, but before the log records `rolling_back` or the outcome, leaves an undecided log with `current`
+on `FromSlot`. On disk that looks the same as a switch whose flip never landed, so `resumeProbation` drops the log and
+reports nothing. The rollout then does not count the failure (contract 6), and the agent may stage the release again.
+The rollback therefore records its intent before it flips back:
+
+- `rollback` sets `RollingBack = true` and writes the probation log (`writeJSON`, synced) **before** `flipBack`.
+  The write after a flip whose sync failed is removed; that branch only sets `s.rolledBack`. If the intent write fails,
+  the flip back runs anyway: a rollback never waits for the disk (contract 4). The residual is today's behaviour: a
+  kill in that window reports nothing.
+- An undecided log with `current` on `FromSlot` and without `rolling_back` now means only "the switch never landed".
+  It is still dropped without a result.
+- `RollingBack` with `current` on `FromSlot`: as today, the supervisor resumes the rollback, makes the flip back
+  durable (`confirmFlip`) and reports `rolled_back`.
+- `RollingBack` with `current` on `ToSlot` (the intent is recorded, but the flip back did not land or was lost with
+  the power): the probation does **not** run again. `resumeProbation` takes the existing pending-rollback branch: its
+  condition gains `|| p.RollingBack && s.activeSlot() == p.ToSlot`, so `RollbackPending = true` and
+  `s.rolledBack = &p`, with no result written at the restart. At the first tick, `confirmRollback` flips back once
+  (`retryFlipBack`).
+  - If the flip succeeds, `confirmFlip` makes it durable, then `rolled_back` is reported and the previous agent
+    restarts.
+  - If it fails, the existing ADR 0024 path runs: `keepRollbackPending` reports `rollback_failed` once, and the retries
+    back off until a flip back lands, which then reports `rolled_back`.
+  - `rolled_back` is never reported while `current` points at `ToSlot`. Until the first tick, the failed release runs,
+    as in every pending rollback (contract 8).
+  - `p.RollingBack = false` before the resumed probation forward is removed. That line can no longer be reached with
+    `RollingBack` set.
+- `RollingBack` with `current` on neither slot is dropped as before. The decision names `FromSlot`, but an
+  unknown `current` is not overwritten.
+- **Kill matrix.** The tests in `window_test.go` cover each point; `TestWatchdogKillAfterTheFlipBackConverges` changes
+  to expect `rolled_back` where it expected no result.
+  1. *Before the intent write.* The log is undecided and `current` is on `ToSlot`. The probation resumes (Part 1 window,
+     floor `Probation/5`) and decides anew. No result is written at the restart; the new decision reports.
+  2. *During the intent write.* `writeJSON` is atomic: the log is the old one (row 1) or the complete new one (row 3),
+     never torn.
+  3. *After the intent write, before the flip.* `RollingBack` with `current` on `ToSlot`, handled as the pending
+     rollback above. The result is `rolled_back` once the flip back lands, or first `rollback_failed` and later
+     `rolled_back` if the flip back fails.
+  4. *After the flip, before the outcome is recorded* (a stall in the flip's `SyncDir`, or in `conclude`'s `SyncFile`
+     before the rename). `RollingBack` with `current` on `FromSlot` resumes the rollback, then `confirmFlip`, then
+     `rolled_back`. If `conclude`'s rename landed already, the log holds `outcome: rolled_back`, and the restart
+     writes that same result again.
+  5. *After the outcome* (the log records `rolled_back`; the result is written or not). The restart writes the
+     recorded result again with the same `at`, or nothing if the log is already gone. The agent reports it once.
+  - Regression that must stay green: a kill in the switch's own log write or flip (an undecided log, no
+    `rolling_back`, `current` on `FromSlot`) reports nothing and drops the log.
+- **Protocol, audit, budget.** The result contract, the device protocol and the audit registry do not change.
+  `rolled_back` and `rollback_failed` exist already. Estimate: moving the intent write is net 0, the extended
+  condition +1, and the removed `p.RollingBack = false` −1. That gives about 834 of 835. The ceiling stays 835; a
+  change that needs more stops and goes back to the architect. PDK-1118b ships after PDK-1118, in the same
+  distribution package (contract 1).
+
+**PDK-1118 fix batch after the external review (architect, 2026-11-16); line budget 865.** This paragraph is binding
+and replaces the sentences above that it contradicts. The rule of Part 2 that a kept log waits "until the next start"
+is replaced by M2. PDK-1118b above stays as written.
+
+- **M1 — a resume after a reboot starts the window anew, and records that.** In `resumeProbation`, a log whose
+  `boot_id` is empty or differs from a non-empty `Config.BootID` gets `SwitchedAt = Now()` and `BootID =
+  Config.BootID`, and is written back with `writeJSON` before the window is computed. If the write fails, an error is
+  logged and the new values hold in memory. `remaining` is then always the formula `min(max(SwitchedAt + Probation -
+  Now(), Probation/5), Probation)`; the separate assignment `remaining = Probation` is removed. A watchdog restart
+  later in the same boot therefore gets at most the rest of the window, never a new one.
+  - *Residual:* with an unreadable boot ID (`Config.BootID == ""`), every resume keeps the full window, as before.
+    Item m5 makes this visible.
+- **M2 — a kept log is retried during the run, and no request is processed meanwhile.**
+  - `Supervisor` gains `keptLog bool`. `resumeProbation` sets it to `false` on entry. Its `versionTimedOut` branch
+    sets it to `true` and schedules a retry through the deferral back-off of Part 2. That back-off becomes the helper
+    `deferRetry()`, which doubles `deferWait` from `pendingRetryStart` up to `pendingRetryMax` and sets `deferredAt`;
+    `onRequest` calls the same helper.
+  - `onRequest` ignores requests while `keptLog` is set, with the existing "update in progress" warning. `resumeRequest`
+    returns without doing anything while it is set. So a request left from the switch can never produce a
+    `downgrade_refused` or `signature_invalid` for the running release (PDK-066).
+  - When `deferredAt` is due, the tick handler checks `keptLog`. If it is set, the handler calls `resumeProbation()`
+    and then `resumeRequest(ctx)`; otherwise it calls `onRequest(ctx)` as today. Each retry blocks the loop for at
+    most two version calls (20 s), well below `WatchdogSec=60`.
+  - A rebuilt probation forward runs with the agent of `current` that is already running. A rebuilt pending rollback
+    continues through `confirmRollback`. A log that is dropped also has its request removed (`dropProbation`).
+    `cleanup` resets `deferWait`, as before.
+  - *Residual:* a sick release keeps running for the duration of the stall plus one window from the rebuild. That
+    window is bounded and the rollback follows (contract 4).
+- **m3 — the self-test after a stall.** `onSelfTest` no longer calls `version` for `from`. The struct `selfTest` gets
+  a field `from string`, which `onRequest` fills with the `from` it has already checked. So `" timed out"` can no
+  longer reach the log, the result or an audit param.
+  - *Residual, accepted:* a version check inside `runSelfTest` that times out stays `self_test_failed`. The run of
+    `paddockd self-test` itself, with its `SelfTest` timeout, has the same exposure to the stalled disk. There a stall
+    cannot be told apart from a new binary that hangs, and a hanging binary must fail closed (contract 3).
+- **m4 — clock and the passed state.** Both are accepted residuals; neither is fixed.
+  - `CLOCK_BOOTTIME` is rejected: reading it needs either a new import for the supervisor or an uptime field and a
+    `/proc/uptime` reader with a seam, about 10 lines. A clock step within one boot moves the window: forward, it
+    leaves at least `Probation/5` at the next restart; backward, it is capped at one window.
+  - `passed` is not persisted. A kill while a passed probation confirms its switch re-judges it with at least
+    `Probation/5`. The agent checks in at its start, so only an agent that cannot reach the server within that time is
+    rolled back, which is the same class as a failed probation.
+- **m5 — an unreadable boot ID is visible.** If `New` cannot read `/proc/sys/kernel/random/boot_id`, it logs one
+  warning (`slog.Warn`, with the error) and keeps `BootID` empty.
+- **m6 — no real short timeouts in tests (flake rule).**
+  - `Config` gains the seam `Version func(dir string) string`. When nil, the default is the real call. The current
+    body of the `version` method moves unchanged into the package function `runVersion(dir string, timeout
+    time.Duration) string`. The method returns `s.cfg.Version(dir)` when the seam is set, and otherwise
+    `runVersion(dir, cmp.Or(s.cfg.VersionTimeout, 10*time.Second))`.
+  - `stallVersion` in `stall_test.go` injects a `Version` that returns `versionTimedOut` for the stalled slot until
+    `release()`, and otherwise `runVersion(dir, 10*time.Second)`. The tests no longer set `VersionTimeout`.
+  - Exactly one unit test still exercises the real timeout: `runVersion` on a script that only runs `exec sleep 300`,
+    with a 500 ms timeout, returns `versionTimedOut`. No healthy call runs under a short timeout.
+- **m7 — runbook.** In `docs/operations/agent-releases.md`, *An update that waits for the active agent* gets a new
+  first step, before `current` is flipped or the binary is replaced. The operator removes the waiting request and its
+  release:
+  `rm -f /var/lib/paddock/staging/request.json && rm -rf /var/lib/paddock/staging/<version>`, where `<version>` is
+  the `version` in `request.json`, read beforehand. The text says why: a waiting request compared against the other
+  slot could pass the downgrade refusal. The agent stages the server's target release again on its own.
+  - The sentence "The supervisor then processes the waiting request …" becomes: "The agent then stages the current
+    release again, and the supervisor processes it as usual …".
+  - Steps 1–3 become 2–4.
+- **Internal Review 1 minors.**
+  - A test pins the back-off reset in `cleanup`: defer a request, let it end (`downgrade_refused`), stage a second
+    request while the agent stalls again, and expect `next_attempt_in=10s`.
+  - The ticket and the closure note that AC 1 is superseded by Part 1 of this amendment, including M1.
+- **Kill and stall matrix.** Each row is a test.
+  - M1: (a) the log names `boot-0` and the supervisor runs as `boot-1`. The first resume gets a full window, the log
+    then holds `boot-1` and the resume time, and a second resume at `P-1s` gets only the floor. (This is the external
+    review's sketch `TestExtRestartAfterRebootKeepsTheWindow`.) (b) The write-back fails: the first run still keeps the
+    full window. (c) With `BootID == ""` the window stays full and the warning is logged once (m5).
+  - M2: (a) a torn log and a stalled B at start keep the log. After `release()` and the next due retry, the rebuild runs,
+    and a release that never checks in is rolled back within one window plus the back-off (`rolled_back`). (b) As (a),
+    with a leftover `request.json` for the running release: no `downgrade_refused` or `signature_invalid` result
+    while the log is kept and after it. (c) As (a), with the stall never released: the retries back off 10 s, 20 s, …
+    up to 5 min, and the log and the request stay. (d) As (a), with the pending marker: after the rebuild the pending
+    rollback continues (`rolled_back` once the flip back lands).
+  - m3: a stall of `paddockd version` on the active slot between `onRequest` and `onSelfTest` leaves `from_version`
+    as checked in `onRequest`, never `" timed out"`.
+  - PDK-1118b: rows 1–5 of the kill matrix above, plus the regression for the switch's own log write or flip.
+- **Budget, counted lines (`test/supervisor-budget.sh`), measured 834 at 02e94b07.**
+
+  | Part | Lines |
+  |---|---|
+  | M1 | +3 |
+  | M2 | +11 (field 1, flags 2, call 1, `deferRetry` net +3, tick branch +4) |
+  | m3 | 0 |
+  | m5 | +3 |
+  | m6 | +6 |
+  | PDK-1118b | +1 (conservative) |
+  | Sum | 858 |
+  | Buffer | 7 |
+
+  The ceiling is **865**. `test/supervisor-budget.sh`, `test/supervisor-budget_test.sh` and the `Makefile` comment
+  change in the same commit as this paragraph. The principle of contract 1 is unchanged: one loop goroutine, no new
+  dependency. A batch that needs more than 865 stops and goes back to the architect.
+
+**PDK-1118b correction: the intent is written without fsync (architect, 2026-11-16).** This replaces "writes the
+probation log (`writeJSON`, synced)" in the PDK-1118b paragraph above. If the intent write were synced, two fsyncs
+would come before the rename of the flip back. On a disk where every fsync stalls for about 33 s, those two alone go
+past `WatchdogSec=60`. Each kill would then land before the rename, and the sick release would never be rolled back,
+which breaks the convergence of Part 1. The binding order of a rollback pass is now:
+
+1. Intent: `writeJSON(ProbationLog, p, noSync)` with `RollingBack = true`. `noSync` is a package function that does
+   nothing and returns nil, so the pass writes the temporary file and renames it, and makes no fsync.
+2. The flip back's rename (`flip`), then its `SyncDir` of the slots.
+3. As today: `conclude` with the synced log and result, or the `RollingBack` wait for `confirmFlip`. No separate
+   sync of the intent follows.
+
+The rename of the flip back is again the first operation that a disk stall cannot delay. A watchdog kill keeps the page
+cache, so an intent that was not synced survives a kill, and rows 3–5 of the kill matrix are unchanged. Row 2 shrinks
+to a write and a rename without fsync.
+
+**Power loss**, by what survives:
+
+| Intent | Flip back | State on restart | Result |
+|---|---|---|---|
+| lost | lost | Undecided log, `current` on ToSlot | The probation runs again (row 1). |
+| kept | lost | `RollingBack`, `current` on ToSlot | The flip back runs again; `rolled_back` once it lands. |
+| lost | kept | Undecided log, `current` on FromSlot | The log is dropped with no result. This is the earlier residual, now possible only after a power loss. |
+| kept | kept | `RollingBack`, `current` on FromSlot | `confirmFlip`, then `rolled_back`. |
+| torn (empty) | either | Unreadable log, rebuilt from the slots | ToSlot active: a probation forward. FromSlot active: dropped, because it is not newer. No false result. |
+
+In every row, `rolled_back` is written only after `confirmFlip(FromSlot)`, so never while `current` points at ToSlot.
+Test: a `SyncFile` and a `SyncDir` that stall on every call (a watchdog kill at the first sync) converge to the
+previous slot within one pass, and a later restart reports `rolled_back`. Budget: `noSync` adds +1 line and fits the
+buffer, so the ceiling stays 865.
+
+**PDK-1118 fix round 2: the flip back comes before every synced write of a resumed rollback (architect, 2026-11-16;
+this absorbs PDK-1118c).** A resumed rollback with `RollingBack` and `current` on `ToSlot` (kill-matrix row 3, or the
+power-loss case "intent kept, flip lost"), and equally a resumed ADR 0024 `rollback_failed` log, used to call
+`recordPending` (two fsyncs) on the first tick of `confirmRollback`, before `retryFlipBack`. Under a persistent stall
+the watchdog killed the supervisor inside that write, and `current` stayed on the failed release. The binding order
+is now:
+
+- `confirmRollback` no longer calls `recordPending` itself. It begins with `retried := p.RollbackPending` and
+  `if retried && !s.retryFlipBack(p) { return }`; everything after that is unchanged (`confirmFlip`, `conclude
+  rolled_back`, `restartChild`).
+- `retryFlipBack` calls `s.recordPending(p)` in its branch for a retry that is not yet due (`Now() < retryAt`), before
+  `return false`. When the retry is due, it first makes the flip attempt (`flipBack(FromSlot, 1)`, rename before
+  sync). A failed attempt records through `keepRollbackPending`, which calls `conclude rollback_failed` once and
+  then `recordPending`, as today. A successful attempt sets `RollbackPending = false`, and `confirmRollback` goes on
+  to `confirmFlip`.
+- A resumed rollback has `retryAt` at zero, so after every restart its first tick makes the rename first. A kill in a
+  later sync leaves `current` on `FromSlot`, and the next restart goes through `RollingBack` with `FromSlot`, then
+  `confirmFlip`, then `rolled_back`.
+- Budget: net 0 lines (−1 in `confirmRollback`, +1 in `retryFlipBack`).
+- **`rollback_failed` exactly once** while the flip back keeps failing:
+  - The first failed attempt of a log without an outcome calls `conclude rollback_failed` (log first, then the
+    result, one `at`).
+  - Every later failed attempt finds `Outcome == rollback_failed` and only re-arms the back-off.
+  - After a kill, a log that already records the outcome writes the same result again with the same `at`
+    (`resumeProbation`). The agent turns one `at` into one event.
+  - A result already written while the log could not record it is taken over from the result (`resumeProbation`
+    `:156`), not decided again.
+  - Tests:
+    - The external reviewer's sketch `TestExt2Row3UnderStalledSyncs`: with every sync stalling, `current` is on
+      `FromSlot` after the first restart, and the device later reports `rolled_back`.
+    - A resumed `rollback_failed` log whose flip back keeps failing across three restarts produces exactly one
+      `rollback_failed` result per `at`, and no `rolled_back`.
+    - The pending marker is written in a tick whose retry is not due.
+- **Accepted residuals (RR-150 completed).**
+  - (a) M1(b): if writing back the boot ID and `SwitchedAt` fails with an error (not a stall: a stalled write
+    completes), every restart in that boot gets a full window again. This needs a disk that fails writes, plus
+    repeated watchdog kills; the error is logged each time.
+  - (b) An intent written without fsync that is lost or torn by a power loss while the flip back survived: the log is
+    dropped with no result. The agent stages the release again, and the rollout does not count this failure until its
+    next probation reports.
+  - (c) Clock steps, which corrects m4 above. A forward step within one boot shortens the rest of the window to at
+    least `Probation/5` at the next restart. A backward step of X postpones the rollback by up to X in total across
+    the restarts of that boot; it is not capped at one window. The deferral and retry timers count on the monotonic
+    clock and are not affected.
+- **Correction to M2.** One retry of a kept log blocks the loop for up to four version calls, not two: two in
+  `rebuildProbation`, one in `resumeRequest`, one in `onRequest`. That is at most 40 s, still below `WatchdogSec=60`.
+
+**Correction to fix round 2: resume writes nothing before the first rename (architect, 2026-11-16).** The claim above
+that a resumed ADR 0024 `rollback_failed` log "makes the rename first" on its first tick was false. Two synced writes
+in `resumeProbation` still ran before READY, and so before the first tick:
+
+- the re-report of a recorded `rollback_failed` (`s.report(&p, true)` in the pending branch, whose `finishAt` writes
+  the result);
+- writing back a decision taken over from the result (`p.unrecorded = writeJSON(…) != nil`).
+
+The probe that showed it: a pending rollback, every sync stalling, and `current` still on `ToSlot` after a restart.
+The binding fix:
+
+1. `probation` gets an in-memory field `unreported bool`, meaning "the recorded `rollback_failed` result must be
+   written again". In the pending branch of `resumeProbation`, `s.report(&p, true)` becomes `p.unreported = true`.
+2. `keepRollbackPending`: if `p.Outcome == outcomeRollbackFailed` and `p.unreported`, it sets `p.unreported = false`
+   and calls `s.report(p, true)`. Otherwise it behaves as today, with `conclude rollback_failed` for a log without an
+   outcome. So the result is written again only after a retry's flip back has failed, never before the rename.
+3. When the decision is taken over from the result, the write-back becomes `p.unrecorded = true` without a write.
+   `recordPending` (a retry that is not yet due, or `keepRollbackPending`) or `report` writes it later.
+4. If the retry's flip back succeeds, `confirmRollback` concludes `rolled_back` with a new `at`, and that replaces a
+   `rollback_failed` result that was not delivered. This is the live path's behaviour since ADR 0024. The rollout
+   counts the failure either way, and the intermediate `rollback_failed` event can be lost only if its result had
+   already been lost (power loss or a failed result write).
+- **Exactly once per `at`:** the re-report writes the recorded `DecidedAt` and clears `unreported`, so later failed
+  retries write nothing. A result that the agent already delivered and deleted is written again with the same `at`,
+  as it was before at resume. The agent turns one `at` into one event, and the server counts an outcome once per
+  device and release.
+- **The resumed `rolled_back` with `current` on `ToSlot`** (the flip back was lost with the power): no write before
+  the first rename, as today. The report condition needs `rollback_failed`, and that branch writes nothing.
+  Unchanged: a successful flip concludes `rolled_back` with a new `at`, and a failed one concludes `rollback_failed`.
+- **Budget:** +4 lines (the field 1, the branch in `keepRollbackPending` 3). That makes about 864 of 865. If the
+  count is over 865, stop and report.
+- **Tests:**
+  - The implementer's probe as a test: a pending rollback, every sync stalling, three restarts. After the first
+    restart `current` is on `FromSlot`, and `rolled_back` is then reported.
+  - A resumed `rollback_failed` log with a flip back that keeps failing writes its result again exactly once, with the
+    recorded `at`, after the first failed retry.
+
+## Amendment 2026-11-16 (architect, PDK-1122) — the integrity baseline follows the update flow
+
+The agent keeps an integrity baseline of both slots and `current` (ADR 0056; rules in
+`docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16", part C). Only the agent changes for it,
+and the supervisor and its line budget stay unchanged. The baseline moves at two points:
+
+- `handleUpdate` records the staged `{version, sha256}` before `update.Stage`;
+- `reportUpdate` moves the baseline before it spools the result event.
+
+While the update is not quiescent (a request, `probation.json`, or an unprocessed `update-result.json`), slots and
+`current` are not checked. A regular update or rollback therefore never raises `device.tamper_protected_file_changed`.

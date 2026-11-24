@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -34,6 +36,8 @@ type handlers struct {
 	imports *app.ReleaseImports
 	// exports are the evidence exports of the audit log (plan M10 decision 29).
 	exports *app.AuditExports
+	// deletedAudit is the retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	deletedAudit *app.DeletedOrgAudit
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
@@ -59,6 +63,7 @@ type handlers struct {
 	localAdmin      *app.LocalAdmin
 	autoinstall     *app.Autoinstall
 	disk            *app.Disk
+	recoveryExports *app.RecoveryExports
 	revocations     *app.Revocations
 	dms             *app.DMS
 	inventory       *app.Inventory
@@ -92,6 +97,9 @@ type handlers struct {
 	securityReview *app.SecurityReview
 	// accessReview is the access review report (plan M12 decisions 25 and 26).
 	accessReview *app.AccessReview
+	// patchSLA and patchCompliance are the patch SLA and the report against it (plan M13c decisions 17 and 18).
+	patchSLA        *app.PatchSLA
+	patchCompliance *app.PatchCompliance
 	// diagnostics are the diagnostics bundles of devices (ADR 0048).
 	diagnostics *app.Diagnostics
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
@@ -105,6 +113,8 @@ type handlers struct {
 	stepUpWindow time.Duration
 	// serverVersion is server_version of GET and PATCH /api/v1/me.
 	serverVersion string
+	// mfaNotices answer mfa_enrolment_notice of GET and PATCH /api/v1/me (ADR 0053 decision 6).
+	mfaNotices *app.MFAEnrolmentNotices
 
 	// backupKeys is the platform backup key (plan M15 decision 7).
 	backupKeys *app.BackupKeys
@@ -169,6 +179,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	out.RoleFallback = roleFallback(ctx)
+	out.MfaEnrolmentNotice = h.mfaEnrolmentNotice(ctx, p, me)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -205,7 +216,32 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	out.RoleFallback = roleFallback(ctx)
+	out.MfaEnrolmentNotice = h.mfaEnrolmentNotice(ctx, p, me)
 	return adminapi.UpdateMe200JSONResponse(out), nil
+}
+
+// mfaEnrolmentNotice is Me.mfa_enrolment_notice: only portal sessions see the announcement. It is informational, so
+// an identity provider that cannot be read hides it instead of failing the request.
+func (h *handlers) mfaEnrolmentNotice(ctx context.Context, p principal.Principal, me app.Me) *adminapi.MeMfaEnrolmentNotice {
+	if h.mfaNotices == nil || meChannel(p) != "portal" {
+		return nil
+	}
+	slug := ""
+	if p.Kind != principal.KindPlatformAdmin {
+		if me.Organization == nil {
+			return nil
+		}
+		slug = me.Organization.Slug
+	}
+	n, err := h.mfaNotices.Notice(ctx, slug)
+	if err != nil {
+		slog.WarnContext(ctx, "the second-factor announcement is hidden: its count could not be read", "error", err)
+		return nil
+	}
+	if n == nil {
+		return nil
+	}
+	return &adminapi.MeMfaEnrolmentNotice{Until: n.Until, Pending: n.Pending}
 }
 
 // meChannel is Me.channel: how the request authenticated (ADR 0044).
@@ -245,6 +281,10 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		}
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
+		if organization.DeletionPending(me.Organization.Status, me.Organization.DeleteAfter) {
+			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC(),
+				RecoveryExportUntil: app.RecoveryExportUntil(*me.Organization.DeleteAfter).UTC(), DevicesPending: me.PendingDevices}
+		}
 	}
 	if me.MCPWriteEnabledAt != nil {
 		at := me.MCPWriteEnabledAt.UTC()
@@ -507,6 +547,62 @@ func (h *handlers) GetOrganization(ctx context.Context, req adminapi.GetOrganiza
 func toOrganization(o pgstore.Organization) adminapi.Organization {
 	return adminapi.Organization{
 		Id: openapi_types.UUID(o.ID), Slug: o.Slug, Name: o.Name, Status: adminapi.OrganizationStatus(o.Status),
-		Domains: o.Domains, CreatedAt: o.CreatedAt.UTC(),
+		Domains: o.Domains, CreatedAt: o.CreatedAt.UTC(), Deletion: toOrganizationDeletion(o),
 	}
+}
+
+// toOrganizationDeletion is Organization.deletion: nil while no deletion was requested (ADR 0052). The uninstall counts
+// are 0 while the request still issues the uninstalls.
+func toOrganizationDeletion(o pgstore.Organization) *adminapi.OrganizationDeletion {
+	if o.DeletionRequestedAt == nil || o.DeleteAfter == nil {
+		return nil
+	}
+	d := &adminapi.OrganizationDeletion{
+		RequestedAt: o.DeletionRequestedAt.UTC(), DeleteAfter: o.DeleteAfter.UTC(), LastErrorCode: o.OffboardingErrorCode,
+		RecoveryExportUntil: app.RecoveryExportUntil(*o.DeleteAfter).UTC(),
+	}
+	if o.DeletionRequestedBy != nil {
+		d.RequestedBy = *o.DeletionRequestedBy
+	}
+	if o.DeletionReason != nil {
+		d.Reason = *o.DeletionReason
+	}
+	if o.OffboardingStep != nil {
+		step := adminapi.OrganizationDeletionStep(*o.OffboardingStep)
+		d.Step = &step
+	}
+	if o.DeletedAt != nil {
+		at := o.DeletedAt.UTC()
+		d.DeletedAt = &at
+	}
+	if o.DeletionUninstallsIssued != nil {
+		d.UninstallsIssued = int(*o.DeletionUninstallsIssued)
+	}
+	if o.DeletionUninstallsSkipped != nil {
+		d.UninstallsSkipped = int(*o.DeletionUninstallsSkipped)
+	}
+	if o.AuditFinalVerifiedAt != nil && o.AuditFinalOutcome != nil {
+		at := o.AuditFinalVerifiedAt.UTC()
+		outcome := adminapi.OrganizationDeletionAuditFinalOutcome(*o.AuditFinalOutcome)
+		d.AuditFinalVerifiedAt, d.AuditFinalOutcome = &at, &outcome
+	}
+	return d
+}
+
+func (h *handlers) DeleteOrganization(ctx context.Context, req adminapi.DeleteOrganizationRequestObject) (adminapi.DeleteOrganizationResponseObject, error) {
+	o, err := h.orgs.RequestDeletion(ctx, req.Id, app.DeletionInput{
+		ConfirmSlug: req.Body.ConfirmSlug, Reason: req.Body.Reason, GraceDays: req.Body.GraceDays,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.DeleteOrganization202JSONResponse(toOrganization(o)), nil
+}
+
+func (h *handlers) CancelOrganizationDeletion(ctx context.Context, req adminapi.CancelOrganizationDeletionRequestObject) (adminapi.CancelOrganizationDeletionResponseObject, error) {
+	o, err := h.orgs.CancelDeletion(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelOrganizationDeletion200JSONResponse(toOrganization(o)), nil
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/debtest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
@@ -30,7 +31,7 @@ func (e *env) installRelease(t *testing.T) string {
 		t.Fatalf("create release: %d %s", r.status, r.body)
 	}
 	for _, name := range []string{"paddock-agent", "paddock-supervisor"} {
-		deb := []byte(name + " " + v)
+		deb := debtest.Deb(debtest.Control(name, strings.Replace(v, "-", "~", 1), "amd64"))
 		sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), ""))
 		if r := e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root}); r.status != http.StatusOK {

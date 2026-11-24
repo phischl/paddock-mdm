@@ -52,7 +52,7 @@ type installOptions struct{ reportOnly bool }
 func ReportOnly() InstallOption { return func(o *installOptions) { o.reportOnly = true } }
 
 // prepareGuest adds the stack's hosts entries and CA (the lab's throwaway CA for the backup gates, whose names are the
-// same) to the guest and installs the packages from debDir.
+// same) to the guest, installs the packages from debDir and publishes their paddockd (PublishInstalledAgent).
 func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
 	t.Helper()
 	ca := filepath.Join(s.root, "deploy", "compose", ".secrets", "caddy-root.crt")
@@ -77,6 +77,7 @@ func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
 		remote = append(remote, r)
 	}
 	vm.Must("sudo dpkg -i " + strings.Join(remote, " ") + " && systemctl is-enabled paddock-supervisor && readlink /opt/paddock/agent/current")
+	s.PublishInstalledAgent(t, vm)
 }
 
 // Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device
@@ -155,7 +156,8 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string, opts ...InstallOptio
 }
 
 // SetDriftInterval sets the agent's drift interval to 30 s (development build) and restarts the supervisor. A
-// report-only device does not drift, so a gate of report-only calls it after the enforcement.
+// report-only device does not drift, so a gate of report-only calls it after the enforcement. The edit is a write
+// outside Paddock: it raises one /etc/paddock/agent.yml tamper event once the first integrity pass ran (ADR 0056).
 func (d *Device) SetDriftInterval() {
 	d.t.Helper()
 	d.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")

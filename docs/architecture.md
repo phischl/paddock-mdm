@@ -98,7 +98,7 @@ owner objects.
 | K9 | *(Confirmed by PoC M1, C7.)* TPM2+PIN with `systemd-cryptenroll` requires a systemd-capable initramfs. Ubuntu 24.04 uses `initramfs-tools`, which does not support TPM2 unlock through `systemd-cryptenroll`; newer Ubuntu releases ship `dracut`. | Primary target is **Ubuntu 26.04 LTS** (dracut). Ubuntu 24.04 is supported only with dracut installed by the Paddock autoinstall. Verified in the PoC (§25). |
 | K11 | The concept's repository layout lists `ansible/roles/`. | **Confirmed:** the product repository contains no operator configuration; at most examples under `examples/` (§23). |
 | K10 | Shared devices are open, but device-to-person assignment drives login allow lists, audit attribution and revocation. | Every device has a **login assignment** (users and/or groups). Default at enrollment: the enrolling user only. Shared devices get a group assignment. §9.4. |
-| K12 | The concept lists a log shipper among the watched units and protected areas (layer 3, protected area 3). | **Dropped (M8b):** Paddock ships no device log shipper; continuous shipping of device logs is out of scope (roadmap *Won't*). Protected area 3 is the agent, the supervisor, fleetd and the update timer. |
+| K12 | The concept lists a log shipper among the watched units and protected areas (layer 3, protected area 3). | **Dropped (M8b):** Paddock ships no device log shipper; continuous shipping of device logs is out of scope (roadmap *Won't*). Protected area 3 is the agent, the supervisor, `paddock-revoke`, fleetd and the update timer. |
 
 ### 2.2 Consolidated requirements with acceptance criteria
 
@@ -134,6 +134,11 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N4 | **Security:** all external traffic TLS 1.3 (1.2 allowed for device gateway behind legacy proxies); no plaintext signing or escrow key on any application node. |
 | N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types (amendment 2026-11-11: from 0.1.0-alpha.10 an event of an unknown type is skipped with its data dropped at the gateway and the batch accepted, ADR 0024; nothing of an unknown type is stored). |
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
+
+> **Amendment 2026-11-14 (plan M19 D1):** N2 reads "5 000 events/s with one worker and two ingest workers
+> (`PADDOCK_WORKER_INGEST_REPLICAS=2`, `PADDOCK_WORKER_MODE=ingest`) at `PADDOCK_PG_MAX_CONNECTIONS=150`". Three full worker
+> replicas do not fit PostgreSQL's connection budget (`docs/operations/capacity.md`); every restore starts the
+> database with at least the `max_connections` of the restored backup.
 
 ---
 
@@ -462,6 +467,14 @@ Binding rules:
 > target device ID and `finished_at` of those rows: the audited evidence of a Destroy, the only path that deletes
 > escrowed LUKS headers, without which no escrowed header copy leaves the backup set. Its write policy on `action`
 > stays bound to the platform pseudo-organization; no other role gains anything.
+
+> **Amendment 2026-11-14 (ADR 0052, plan M17):** organization offboarding. Status `deleting` and `deleted` (tombstone);
+> the worker deletes an organization's rows only through the `SECURITY DEFINER` function
+> `paddock_offboard_delete_batch` while the organization is `deleting`, in the order of the registry
+> `offboarding_table`, which every migration adding an organization table MUST extend (rule 1 gains this duty).
+> **Deviation from rule 4, narrow:** `db.AuditReader.InDeletedOrg` opens the audit index of an organization named in
+> the URL, only for a platform administrator and only when that organization is `deleted`, so that its retained
+> evidence stays readable until its retention ends.
 
 The automated **negative isolation test** (§22) walks all OpenAPI operations with a principal of
 organization A and IDs of organization B and requires 404 for every one.
@@ -1041,6 +1054,12 @@ be targets of profile and login assignments. *(Decided 2026-10-04, plan M3a.)*
 > of Authentik's `default-authentication-flow`, so no password-only session can be created through Authentik's own
 > interfaces (ADR 0007 amendment 2026-10-17).
 
+> **Amendment 2026-11-14 (ADR 0053, plan M12h-2):** a portal administrator account without an authenticator is no
+> longer asked to enrol one at sign-in; it enrols through a one-time sign-in setup link (`paddock-recovery` flow)
+> created by an organization administrator or, for platform administrators, by the host operator. Administrators that
+> existed without a factor at the upgrade enrol once at their next sign-in (`paddock_mfa_enrol_at_login`). Device
+> users are unchanged.
+
 ### 9.3 Himmelblau configuration
 
 **Decided after PoC M1: Himmelblau 4.x in OIDC mode** (ADR [0019](adr/0019-login-component-himmelblau.md)).
@@ -1590,20 +1609,33 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | Fields of the managed local administrator | every apply and drift round | `tamper.local_admin_changed` (`device.tamper_local_admin_changed`) |
 | Deny-list lines of `/etc/pam.d/common-auth` and `common-account`; the files the updates and inventory reconcilers own | every apply and drift round | `tamper.protected_file_changed` (`device.tamper_protected_file_changed`) |
 | `orbit.service` active; the third-party units of the organization's presence policy (watched units, **report only**: the agent never starts, stops or enables them; state `inactive`, `failed` or `missing`, reported once per stop) | every apply and drift round | `tamper.service_stopped` (`device.tamper_service_stopped`, parameters `unit` and, for a watched unit, `state`) |
-| `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in |
+| `paddockd` running (osquery policy `paddock_agent_running` in Fleet) | Fleet policy results | `device.tamper_agent_not_running` after 15 min without check-in, or when the policy failed in evaluations at least 15 min apart while the device keeps checking in |
+| Paddock's own components (ADR 0056, report-only, one event per change): SHA-256 of both agent slots and the `current` target against the baseline that follows the update results; the regular files of the `paddock-agent`, `paddock-supervisor`, `paddock-revoke` and `paddock-self-service` packages and the `fleet-osquery` binaries and unit against dpkg `md5sums` (plus the recorded supervisor rollback), the link `/usr/bin/paddockd`; `agent.yml`, `trust.json`, `revoke-trust.json`, `disk-setup.json` against the hashes the agent last wrote; overrides and drop-ins of `paddock-supervisor.service`, `paddock-disk-setup.service`, `orbit.service`, `paddock-updates.service` and `.timer` outside the allow list. A check that cannot judge an object for longer than a fixed bound reports its suspension with the same code and `reason` `check_suspended`; the bound holds per blocked object in observed time while the agent runs, a gap between passes counts at most twice the check's interval (at most 1 h), a pass runs at every agent start, and the bound survives agent restarts and an unwritable or locked baseline (it lives in the agent state, which root can reset). | drift pass (`drift_interval_s`, ≥ 300 s in production) | `tamper.protected_file_changed` (`device.tamper_protected_file_changed`, parameter `file`) |
+| The executable of every running agent process (named `paddockd`, running a file named `paddockd` or below `/opt/paddock/agent/`, or started by `paddock-supervisor`) is a published agent artifact (osquery policy `paddock_agent_binary_known`, regenerated by the worker from every published release; a genuine older release passes, RR-149) | Fleet policy results, once the host evaluated the current definition | `device.tamper_agent_binary_changed` |
+| Only the host that speaks for the device claims it (worker, from Fleet's host list) | every inventory round | `device.tamper_fleet_host_claimed` (`kind` `second_host` after 15 min, `reenrolled` at once) |
+| fleetd talks to Fleet while the device checks in (worker, from Fleet's `seen_time` and `policy_updated_at` of the host that speaks for the device; only while at least half of the live devices reach Fleet) | every inventory round | `device.tamper_fleetd_silent` after 15 min of silence (no contact, or no stored policy results for 30 min), confirmed by two more check-ins and 15 more min (60 min later during an ADR 0057 hold) |
+| The inventory round reports a host it had to skip (worker): Fleet refuses the device's own host or Postgres refuses its data after sanitising; one event per episode, a successful store ends it, no error text is recorded | every inventory round | `device.tamper_inventory_rejected` (parameters `reason` `fetch_refused` or `store_refused`, and `fleet_host`) |
 | Local admin login (journal, `pam_unix` for `paddock-admin`) | journal follow | `local_admin.login` (`local_admin.login`) |
 | Clock offset of each check-in: server time minus the signed request timestamp, measured by the gateway; the worker opens a drift episode above 60 s and closes it at 30 s or less | each materialized check-in (at most once per 60 s) | `device.clock_drift` (> 60 s), `device.clock_drift_cleared` (≤ 30 s); attention kind `clock_drift` |
 | Paddock-managed APT sources, keyrings and forbid pins | drift pass 5 min | `tamper.protected_file_changed` |
 
 Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
-package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.
+package version *(not scheduled)*. `/etc/himmelblau/himmelblau.conf`, `/etc/paddock/login-deny` and the
+`90-paddock.conf` drop-ins of the Himmelblau socket units are re-rendered by the drift loop and judged by the ADR 0056
+check against the content Paddock last wrote, also right before each correction (plan M5a amendment 2026-11-17 f).
 
 Every event carries `event_seq` (per device, monotonic, persisted). The worker reports a hole in a device's sequence
 numbers as `device.event_gap`, a counter that restarted as `device.event_seq_reset`, and a hole that was filled
 later as `device.event_gap_filled`; a spool overflow the agent admits
 (`device.agent_events_dropped`) is not a gap. Event types form a closed enum; the gateway rejects unknown
-types (N5). **Mutual watch:** an osquery policy in Fleet checks that `paddockd` runs and its binary hash
-matches the release manifest; the agent checks that `fleetd` runs. Disabling one is reported by the other.
+types (N5). **Mutual watch:** an osquery policy in Fleet checks that a process named `paddockd` runs from
+`/opt/paddock/agent/` (`paddock_agent_running`), and the policy `paddock_agent_binary_known` checks the SHA-256 of
+the executable every running agent process runs against the published agent artifacts (ADR 0056); the agent checks that `fleetd` runs.
+Disabling one is reported by the other. A check-in does not prove
+that the genuine agent sends it; a foreign program that checks in while the agent is stopped is reported through
+`paddock_agent_running` (plan M5a decision 8, ADR 0056 amendment b), except the cases RR-149 lists. The server reports a fleetd that falls silent while the device keeps checking in
+(`device.tamper_fleetd_silent`).
+The agent also checks the `fleet-osquery` binaries against dpkg's checksums (ADR 0056).
 
 > **Amendment 2026-11-02 (M11, ADR 0033):** `bundle.applied` gains `mode` (`enforce` or `report_only`) and `resources`, one
 > entry per resource of the bundle with `id`, `status` (`applied`, `failed`, `pending`), `message` and, in
@@ -1616,7 +1648,8 @@ matches the release manifest; the agent checks that `fleetd` runs. Disabling one
 
 1. `/etc/sudoers`, `/etc/sudoers.d/`, all files of `file` resources
 2. LUKS keyslots and header
-3. `/opt/paddock/`, `/etc/paddock/`, systemd units of agent, supervisor, fleetd, update timer
+3. The agent, the supervisor, `paddock-revoke`, fleetd and the update timer: `/opt/paddock/`, `/etc/paddock/`, their
+   systemd units and drop-ins (checks: §11.5; the checks of Paddock's own components are planned, ADR 0056)
 4. `/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`, `/etc/security/`, Himmelblau packages
 5. `/etc/apt/sources.list.d/paddock-*.sources`, `/etc/apt/keyrings/paddock-*.gpg`,
    `/etc/apt/preferences.d/51paddock-software` (ADR 0042); the uninstall removes them in both modes.
@@ -1843,7 +1876,9 @@ the shared catalog follow (plan M13c §3.4 to §3.6).
 > as the new device event `software.request_withdrawn` (ADR 0024 sender rule); without it the withdrawal stays on
 > the device. The server records the event as `device.software_request_withdrawn` and sets the device's open
 > request for that entry and user to `withdrawn`. Making that close independent of the order in which event
-> batches are processed is planned for 0.1.0-alpha.11 (plan M13c, amendment 2026-11-11 c; RR-135).
+> batches are processed is done in 0.1.0-alpha.11 by plan M19 D8 (PDK-811d): a withdrawal row per device, entry
+> and user with the device's event number, and the request's own event number decide which one came first; a reset
+> of the device's event counter clears both (D8.5). RR-135 closes with it.
 
 ### 12.6 Dead man's switch (F14)
 
@@ -2112,8 +2147,9 @@ type Inventory interface {
 }
 ```
 
-- **Mapping:** Fleet hosts are matched to Paddock devices by `hardware UUID` reported by both the agent
-  (enrollment fingerprint) and osquery (`system_info.uuid`). Unmatched hosts are ignored and counted
+- **Mapping:** Fleet hosts are matched to Paddock devices through the binding each device reports over its device
+  connection (ADR 0057): fleetd's device token, resolved by the worker through Fleet's device endpoint. Until a device
+  has reported one, the host Fleet enrolled first for the device's hardware UUID (`system_info.uuid`) is used. Unmatched hosts are ignored and counted
   in a metric; Paddock never shows a Fleet host that is not a Paddock device.
 - **Isolation:** Fleet has no organization concept in the free edition. Paddock never exposes Fleet's UI
   or API to organization admins. The adapter writes Fleet data into Paddock tables under the device's
@@ -2370,6 +2406,10 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 - Migrations with **goose** (`server/migrations/NNNNN_name.sql`), forward-only in production; each migration
   ships with a test that applies it to the previous schema with fixture data.
 - SQL access with **sqlc** + **pgx/v5**; no ORM. Every generated query runs inside `db.InOrg`.
+- Every migration that adds a table with `organization_id` MUST insert it into `offboarding_table` with a
+  `delete_order` lower than every registered table it references; `TestOffboardingRegistry` fails otherwise. Only a
+  table whose rows must outlive the organization's deletion (today `offboarded_device`) stays out, listed in that
+  test (ADR 0052 decision 4, plan M17 decision 8).
 
 ---
 

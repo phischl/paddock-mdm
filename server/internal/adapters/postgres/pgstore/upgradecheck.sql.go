@@ -106,9 +106,10 @@ func (q *Queries) UpgradeCheckHaltedConfigRollouts(ctx context.Context) (int64, 
 }
 
 const upgradeCheckOrganizationIDs = `-- name: UpgradeCheckOrganizationIDs :many
-SELECT id FROM organization ORDER BY id
+SELECT id FROM organization WHERE status NOT IN ('deleting', 'deleted') ORDER BY id
 `
 
+// An organization that is deleting or deleted refuses every organization transaction (PDK-1038).
 func (q *Queries) UpgradeCheckOrganizationIDs(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, upgradeCheckOrganizationIDs)
 	if err != nil {

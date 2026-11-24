@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // FleetHost plays osquery of one host against Fleet's public device endpoints (fleet.<domain>): it enrolls with the
 // global enroll secret and answers Fleet's detail queries as an Ubuntu 24.04 host with the given deb packages; every
-// policy passes. The inventory gates and the portal end-to-end tests run without VMs this way; the VM gates
+// policy passes unless AgentBinarySHA256 makes the agent binary policy fail. The inventory gates and the portal end-to-end tests run without VMs this way; the VM gates
 // (test/system) run the real fleetd.
 type FleetHost struct {
 	HTTP     *http.Client
@@ -23,7 +27,24 @@ type FleetHost struct {
 	Packages [][2]string // name, version
 	// Hardware are the asset facts the host reports (plan M8d decision 6); nil reports none.
 	Hardware *FleetHardware
-	nodeKey  string
+	// AgentBinarySHA256 is the hash of the paddockd the host runs; "" passes every policy. When set, the agent binary
+	// policy (paddock_agent_binary_known) fails unless its query lists this hash, as osquery would answer it.
+	AgentBinarySHA256 string
+	// AgentNotRunning makes the agent-running policy (paddock_agent_running) fail, as osquery answers it while no
+	// genuine agent runs; every other policy is answered as before (plan M5a amendment 2026-11-16 b).
+	AgentNotRunning bool
+	// AgentRunningQueryFails makes the agent-running policy's query fail (status 1, no rows), as osquery reports a
+	// query it cannot run; Fleet then stores no answer (plan M5a amendment 2026-11-16 d, F6).
+	AgentRunningQueryFails bool
+	// Identifier is the host identifier the host enrolled under; Token is the device token its orbit registered
+	// (EnrollFleetBound), which the device reports in its check-ins (ADR 0057).
+	Identifier   string
+	Token        string
+	enrollSecret string
+	hostname     string
+	nodeKey      string
+	mu           sync.Mutex
+	listedAt     map[string]time.Time
 }
 
 // FleetHardware are the asset facts of a simulated host as osquery reports them.
@@ -38,28 +59,72 @@ type FleetHardware struct {
 // EnrollFleet enrolls a host whose hardware UUID is uuid (a simulated device's HardwareUUID, so that it maps to that
 // device).
 func EnrollFleet(ctx context.Context, client *http.Client, fleetURL, enrollSecret, uuid, hostname string, packages [][2]string) (*FleetHost, error) {
-	h := &FleetHost{HTTP: client, FleetURL: strings.TrimSuffix(fleetURL, "/"), UUID: uuid, Packages: packages}
+	return EnrollFleetAs(ctx, client, fleetURL, enrollSecret, uuid, uuid, hostname, packages)
+}
+
+// EnrollFleetAs enrolls an osquery host under identifier whose hardware UUID is uuid.
+func EnrollFleetAs(ctx context.Context, client *http.Client, fleetURL, enrollSecret, identifier, uuid, hostname string,
+	packages [][2]string) (*FleetHost, error) {
+	h := &FleetHost{HTTP: client, FleetURL: strings.TrimSuffix(fleetURL, "/"), UUID: uuid, Packages: packages,
+		Identifier: identifier, enrollSecret: enrollSecret, hostname: hostname}
+	return h, h.EnrollAgain(ctx)
+}
+
+// EnrollFleetBound enrolls a host the way fleetd does under its instance identifier (ADR 0057): orbit enrolls with a
+// new instance ID, registers a device token for its host, and osquery enrolls under the same instance ID.
+func EnrollFleetBound(ctx context.Context, client *http.Client, fleetURL, enrollSecret, hardwareUUID, hostname string,
+	packages [][2]string) (*FleetHost, error) {
+	h := &FleetHost{HTTP: client, FleetURL: strings.TrimSuffix(fleetURL, "/"), UUID: hardwareUUID, Packages: packages,
+		Identifier: uuid.NewString(), Token: uuid.NewString(), enrollSecret: enrollSecret, hostname: hostname}
+	var orbit struct {
+		NodeKey string `json:"orbit_node_key"`
+	}
+	if err := h.post(ctx, "/api/fleet/orbit/enroll", map[string]any{"enroll_secret": enrollSecret, "hardware_uuid": hardwareUUID,
+		"hostname": hostname, "platform": "ubuntu", "osquery_identifier": h.Identifier}, &orbit); err != nil {
+		return nil, err
+	}
+	if orbit.NodeKey == "" {
+		return nil, fmt.Errorf("orbit enrollment of %s: no node key", hostname)
+	}
+	if err := h.post(ctx, "/api/fleet/orbit/device_token", map[string]any{"orbit_node_key": orbit.NodeKey,
+		"device_auth_token": h.Token}, nil); err != nil {
+		return nil, err
+	}
+	return h, h.EnrollAgain(ctx)
+}
+
+func (h *FleetHost) key() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.nodeKey
+}
+
+// EnrollAgain enrolls the host's osquery again under its identifier and replaces its node key, as osquery does after
+// Fleet answered node_invalid.
+func (h *FleetHost) EnrollAgain(ctx context.Context) error {
 	var out struct {
 		NodeKey     string `json:"node_key"`
 		NodeInvalid bool   `json:"node_invalid"`
 	}
 	err := h.post(ctx, "/api/v1/osquery/enroll", map[string]any{
-		"enroll_secret": enrollSecret, "host_identifier": uuid,
+		"enroll_secret": h.enrollSecret, "host_identifier": h.Identifier,
 		"host_details": map[string]any{
-			"system_info":   map[string]string{"uuid": uuid, "hostname": hostname, "computer_name": hostname},
+			"system_info":   map[string]string{"uuid": h.UUID, "hostname": h.hostname, "computer_name": h.hostname},
 			"os_version":    osVersion(),
-			"osquery_info":  map[string]string{"version": "5.23.1", "uuid": uuid},
+			"osquery_info":  map[string]string{"version": "5.23.1", "uuid": h.UUID, "instance_id": h.Identifier},
 			"platform_info": map[string]string{},
 		},
 	}, &out)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if out.NodeKey == "" || out.NodeInvalid {
-		return nil, fmt.Errorf("fleet enrollment of %s: %+v", hostname, out)
+		return fmt.Errorf("fleet enrollment of %s: %+v", h.hostname, out)
 	}
+	h.mu.Lock()
 	h.nodeKey = out.NodeKey
-	return h, nil
+	h.mu.Unlock()
+	return nil
 }
 
 func osVersion() map[string]string {
@@ -67,25 +132,25 @@ func osVersion() map[string]string {
 		"patch": "5", "build": "", "platform": "ubuntu", "platform_like": "debian", "codename": "noble", "arch": "x86_64"}
 }
 
-// Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass,
-// everything else is answered empty. It reports how many queries Fleet sent.
+// Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass (the
+// agent binary policy fails while it does not list AgentBinarySHA256, the agent-running policy while AgentNotRunning; its query fails while AgentRunningQueryFails), everything else is answered empty. It reports how many queries Fleet sent.
 func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	var read struct {
 		Queries map[string]string `json:"queries"`
 	}
-	if err := h.post(ctx, "/api/v1/osquery/distributed/read", map[string]any{"node_key": h.nodeKey}, &read); err != nil {
+	if err := h.post(ctx, "/api/v1/osquery/distributed/read", map[string]any{"node_key": h.key()}, &read); err != nil {
 		return 0, err
 	}
 	if len(read.Queries) == 0 {
 		return 0, nil
 	}
 	results, statuses := map[string]any{}, map[string]int{}
-	for name := range read.Queries {
-		statuses[name] = 0
-		results[name] = h.rows(name)
+	for name, query := range read.Queries {
+		h.recordListed(query, time.Now())
+		statuses[name], results[name] = h.status(name, query), h.rows(name, query)
 	}
 	err := h.post(ctx, "/api/v1/osquery/distributed/write",
-		map[string]any{"node_key": h.nodeKey, "queries": results, "statuses": statuses, "messages": map[string]string{}}, nil)
+		map[string]any{"node_key": h.key(), "queries": results, "statuses": statuses, "messages": map[string]string{}}, nil)
 	return len(read.Queries), err
 }
 
@@ -107,8 +172,59 @@ func (h *FleetHost) WaitAnswered(ctx context.Context) error {
 	}
 }
 
-func (h *FleetHost) rows(query string) []map[string]string {
+// agentBinaryPolicyMarker identifies the agent binary policy by its query (inventory.AgentBinaryPolicy); Fleet names
+// policy queries by their ID only.
+const agentBinaryPolicyMarker = "SELECT sha256 FROM hash WHERE path = '/proc/'"
+
+// agentRunningPolicyMarker identifies the agent-running policy by its query
+// (server/internal/inventory/policies/paddock_agent_running.sql).
+const agentRunningPolicyMarker = "FROM processes WHERE name = 'paddockd'"
+
+// listedHash is a hash in the agent binary policy's list.
+var listedHash = regexp.MustCompile(`'([0-9a-f]{64})'`)
+
+// recordListed notes at as the first time a received agent binary policy listed each of its hashes.
+func (h *FleetHost) recordListed(sql string, at time.Time) {
+	if !strings.Contains(sql, agentBinaryPolicyMarker) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range listedHash.FindAllStringSubmatch(sql, -1) {
+		if _, ok := h.listedAt[m[1]]; !ok {
+			if h.listedAt == nil {
+				h.listedAt = map[string]time.Time{}
+			}
+			h.listedAt[m[1]] = at
+		}
+	}
+}
+
+// BinaryPolicyListedAt reports when Answer first received an agent binary policy that lists hash (plan M5a amendment
+// 2026-11-16, review round 1, A11): Fleet held a definition with the hash no later than then.
+func (h *FleetHost) BinaryPolicyListedAt(hash string) (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.listedAt[hash]
+	return at, ok
+}
+
+// status is osquery's status of a distributed query: 1 for the agent-running policy while AgentRunningQueryFails.
+func (h *FleetHost) status(query, sql string) int {
+	if h.failsAgentRunning(query, sql) {
+		return 1
+	}
+	return 0
+}
+
+func (h *FleetHost) failsAgentRunning(query, sql string) bool {
+	return h.AgentRunningQueryFails && strings.HasPrefix(query, "fleet_policy_query_") && strings.Contains(sql, agentRunningPolicyMarker)
+}
+
+func (h *FleetHost) rows(query, sql string) []map[string]string {
 	switch {
+	case h.failsAgentRunning(query, sql):
+		return []map[string]string{}
 	case query == "fleet_detail_query_os_version":
 		return []map[string]string{osVersion()}
 	case query == "fleet_detail_query_os_unix_like":
@@ -135,6 +251,11 @@ func (h *FleetHost) rows(query string) []map[string]string {
 				"extension_for": "", "release": "", "vendor": "", "arch": "", "installed_path": ""})
 		}
 		return rows
+	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentNotRunning && strings.Contains(sql, agentRunningPolicyMarker):
+		return []map[string]string{}
+	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentBinarySHA256 != "" &&
+		strings.Contains(sql, agentBinaryPolicyMarker) && !strings.Contains(sql, "'"+h.AgentBinarySHA256+"'"):
+		return []map[string]string{}
 	case strings.HasPrefix(query, "fleet_policy_query_"):
 		return []map[string]string{{"1": "1"}}
 	}

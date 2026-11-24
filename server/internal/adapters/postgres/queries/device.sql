@@ -171,13 +171,28 @@ SELECT * FROM device_status WHERE device_id = @device_id;
 -- name: GetLatestBundle :one
 SELECT * FROM bundle WHERE device_id = @device_id ORDER BY version DESC LIMIT 1;
 
--- Worker cache sync: identity keys with the state of their device; pending devices are not cached (plan M2a
--- decision 10).
--- name: ListCachedDeviceKeys :many
+-- Worker cache sync: identity keys with the state of their device; the caller skips pending devices (plan M2a
+-- decision 10). One page of at most @page_size keys after (@after_device, @after_key), keyset-paged by device ID (plan
+-- M17 amendment r point 6). The device and its status are scalar subqueries on their primary keys, so no cached
+-- generic plan can join them by the organization's rows: a plan built while the worker reconciled a small
+-- organization and reused for one of 70 000 devices joined every key with every device (7.5 minutes, PDK-1071).
+-- name: ListCachedDeviceKeysPage :many
 -- last_seq restores the device's check-in counter together with its key (0 = never checked in).
-SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.state, coalesce(s.last_seq, 0)::bigint AS last_seq
-FROM device_identity_key k JOIN device d ON d.id = k.device_id LEFT JOIN device_status s ON s.device_id = d.id
-WHERE d.state <> 'pending' AND (sqlc.narg(device_id)::uuid IS NULL OR d.id = sqlc.narg(device_id)::uuid)
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE (k.device_id, k.key_id) > (@after_device::uuid, @after_key::text)
+ORDER BY k.device_id, k.key_id
+LIMIT @page_size;
+
+-- The identity keys of one device, as ListCachedDeviceKeysPage (a change notification).
+-- name: ListCachedDeviceKeysOfDevice :many
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE k.device_id = @device_id
 ORDER BY k.key_id;
 
 -- Update now (plan M8d decisions 26 and 29).
@@ -197,3 +212,21 @@ WHERE agent_update_requested_at < @before::timestamptz;
 -- name: ListAgentUpdateRequests :many
 SELECT id, agent_update_requested_version, agent_update_requested_at FROM device
 WHERE agent_update_requested_at IS NOT NULL ORDER BY id;
+
+-- The device token and the announced enrollment reset the agent reported (ADR 0057), for active devices only; an older
+-- report never overwrites a newer one.
+-- name: RecordFleetDeviceToken :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, pending_token, token_reported_at)
+SELECT d.id, d.organization_id, @token::text, @reported_at::timestamptz FROM device d
+WHERE d.id = @device_id AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE
+  SET pending_token = EXCLUDED.pending_token, token_reported_at = EXCLUDED.token_reported_at
+  WHERE device_fleet_binding.token_reported_at IS NULL
+     OR device_fleet_binding.token_reported_at < EXCLUDED.token_reported_at;
+
+-- name: RecordFleetEnrollmentReset :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+SELECT d.id, d.organization_id, @reset_at::timestamptz FROM device d WHERE d.id = @device_id AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE SET reset_announced_at = EXCLUDED.reset_announced_at
+  WHERE device_fleet_binding.reset_announced_at IS NULL
+     OR device_fleet_binding.reset_announced_at < EXCLUDED.reset_announced_at;

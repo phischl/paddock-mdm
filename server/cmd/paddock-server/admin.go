@@ -34,9 +34,10 @@ import (
 
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
 // agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt,
-// agent-rollout-resume: ADR 0034 amendment 2026-10-26; upgrade-check: plan M16 decision 4).
+// agent-rollout-resume: ADR 0034 amendment 2026-10-26; upgrade-check: plan M16 decision 4; enrolment-link: ADR 0053
+// decision 1).
 type adminCommand struct {
-	name    string             // bump-bundle-seq | raise-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check
+	name    string             // bump-bundle-seq | raise-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check | record-bundle-prune | enrolment-link
 	by      int64              // bump-bundle-seq only
 	atLeast int64              // raise-bundle-seq only
 	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
@@ -46,6 +47,9 @@ type adminCommand struct {
 	dir     string             // agent-release
 	rollout app.RolloutOptions // agent-rollout
 	json    bool               // upgrade-check
+	prune   app.BundlePrune    // record-bundle-prune
+	check   bool               // record-bundle-prune --check
+	user    string             // enrolment-link
 }
 
 // parseAdmin parses the arguments after "admin"; every error is a usage error.
@@ -77,6 +81,10 @@ func parseAdmin(args []string) (adminCommand, error) {
 			return adminCommand{}, errUsage
 		}
 		cmd.atLeast = n
+	case "record-bundle-prune":
+		if err := parseBundlePrune(&cmd, args[1:]); err != nil {
+			return adminCommand{}, err
+		}
 	case "recompile":
 		all := fs.Bool("all", false, "")
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || !*all {
@@ -145,10 +153,64 @@ func parseAdmin(args []string) (adminCommand, error) {
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
 			return adminCommand{}, errUsage
 		}
+	case "enrolment-link":
+		fs.Func("username", "", onceFlag(&cmd.user))
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || strings.TrimSpace(cmd.user) == "" {
+			return adminCommand{}, errUsage
+		}
 	default:
 		return adminCommand{}, errUsage
 	}
 	return cmd, nil
+}
+
+// Bounds of record-bundle-prune: far above any bucket, so a larger value is a typo.
+const (
+	minPruneKeep  = 2
+	maxPruneKeep  = 1000
+	maxPruneCount = 1_000_000_000
+)
+
+// parseBundlePrune parses record-bundle-prune: either --check alone, or all six counts, each given exactly once.
+func parseBundlePrune(cmd *adminCommand, args []string) error {
+	fs := flag.NewFlagSet("admin record-bundle-prune", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&cmd.check, "check", false, "")
+	var keep, listed, devices, selected, deleted, failed int64
+	seen := map[string]bool{}
+	count := func(name string, dst *int64) {
+		fs.Func(name, "", func(v string) error {
+			if seen[name] {
+				return errors.New("flag given twice")
+			}
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 || n > maxPruneCount {
+				return errors.New("count out of range")
+			}
+			seen[name], *dst = true, n
+			return nil
+		})
+	}
+	count("keep", &keep)
+	count("listed", &listed)
+	count("devices", &devices)
+	count("selected", &selected)
+	count("deleted", &deleted)
+	count("failed", &failed)
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return errUsage
+	}
+	if cmd.check {
+		if len(seen) != 0 {
+			return errUsage
+		}
+		return nil
+	}
+	if len(seen) != 6 || keep < minPruneKeep || keep > maxPruneKeep || selected > listed || deleted+failed > selected {
+		return errUsage
+	}
+	cmd.prune = app.BundlePrune{Keep: keep, Listed: listed, Devices: devices, Selected: selected, Deleted: deleted, Failed: failed}
+	return nil
 }
 
 // runAdmin runs a restore command with the worker's configuration (plan M6c decisions 20–22): in the Compose stack as
@@ -179,7 +241,7 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	}
 	// End all sessions also ends the portal users' Authentik sessions (plan M8f decision 18).
 	var akCfg config.Authentik
-	if cmd.name == "end-sessions" {
+	if cmd.name == "end-sessions" || cmd.name == "enrolment-link" {
 		akCfg = config.LoadAuthentik(l)
 	}
 	if err := l.Err(); err != nil {
@@ -211,6 +273,16 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stdout, "raised bundle_seq of %d devices to at least %d\n", n, cmd.atLeast)
+	case "record-bundle-prune":
+		if cmd.check {
+			return platformPool.Ping(ctx)
+		}
+		// A run with failed keys is recorded as a failure event: the command succeeds, so the host script can tell a
+		// recorded failure from a record that could not be written (which exits 1).
+		if err := admin.RecordBundlePrune(ctx, cmd.prune); err != nil && !errors.Is(err, app.ErrBundlePruneIncomplete) {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "recorded the prune of %d bundle versions\n", cmd.prune.Deleted)
 	case "recompile":
 		n, err := admin.RecompileAll(ctx)
 		if err != nil {
@@ -254,8 +326,39 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		return runAutoUnsealCLI(ctx, cmd.sub, app.NewAutoUnseal(admin.Runner(), platformPool, nil), os.Stdout)
 	case "upgrade-check":
 		return runUpgradeCheck(ctx, cmd, pool, platformPool, vkCfg, baoAddr, os.Stdout)
+	case "enrolment-link":
+		ak := authentik.New(akCfg.URL, akCfg.Token)
+		links := app.NewPlatformEnrolmentLinks(admin.Runner(), platformPool, ak, ak)
+		return runEnrolmentLink(ctx, links, cmd.user, os.Stdout)
 	}
 	return nil
+}
+
+// enrolmentLinkCreator is app.PlatformEnrolmentLinks.
+type enrolmentLinkCreator interface {
+	CreateCLI(ctx context.Context, username string) (app.EnrolmentLink, error)
+}
+
+// runEnrolmentLink is paddock-server admin enrolment-link (ADR 0053 decision 1, plan M12h-2 amendment f addendum b):
+// it prints the one-time sign-in setup link of a platform administrator or of an organization account with a portal
+// role once, on stdout only; the link is never logged or audited. Creating it ended every older link of the account
+// (plan M12h-2 amendment f). For an account connected to an upstream source it says why the link sets up only the
+// passkey.
+func runEnrolmentLink(ctx context.Context, links enrolmentLinkCreator, username string, out io.Writer) error {
+	l, err := links.CreateCLI(ctx, username)
+	if err != nil {
+		return err
+	}
+	username = strings.TrimSpace(username)
+	if l.PasskeyOnly {
+		if _, err := fmt.Fprintf(out, "%s signs in with the password of its upstream identity source: the link sets up only the passkey\n",
+			username); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(out, "sign-in setup link for %s (valid until %s, usable once; every older link of the account no longer works):\n%s\n", username,
+		l.ExpiresAt.UTC().Format(time.RFC3339), l.Link)
+	return err
 }
 
 // errUpgradeCheckFailed ends admin upgrade-check with exit code 1 after the report is printed.

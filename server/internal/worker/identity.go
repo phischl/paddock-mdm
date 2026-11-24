@@ -9,11 +9,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -39,7 +39,7 @@ const ReconcileAuthentikConcurrency = 1
 // further refusal is logged as a repeated one (PDK-424).
 const refusedRepeatedly = 3
 
-var metricDirectoryRefusals = promauto.NewCounter(prometheus.CounterOpts{
+var metricDirectoryRefusals = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "paddock_identity_directory_refusals_total",
 	Help: "Organization rounds of admin-accounts and rounds of platform-admins refused because every role group listing " +
 		"was empty and the directory probe did not show that the service token sees the directory (app.ErrDirectoryEmpty, " +
@@ -66,6 +66,7 @@ type Identity struct {
 	sync       *app.IdentitySync
 	accounts   *app.AdminAccounts
 	roles      *app.RoleMembership
+	mfa        *app.MFAEnrolment
 	brand      BrandFlows
 	brandRetry time.Duration
 	org        *db.OrgPool
@@ -79,13 +80,17 @@ type Identity struct {
 	// refused counts the consecutive refused admin-accounts rounds per organization. It lives in this process only; the
 	// metric, not this count, is what survives a change of the replica holding the round's lock.
 	refused map[uuid.UUID]int
+	// enrolMarked collects the role group members of the running admin-accounts round for the removal of their
+	// enrolment marks at its end, one device listing for all organizations.
+	enrolMarked []ports.IdentityUser
 }
 
-// NewIdentity creates the identity rounds.
-func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, roles *app.RoleMembership, brand BrandFlows, org *db.OrgPool,
-	platform *db.PlatformPool, syncEvery, reconcile time.Duration) *Identity {
-	return &Identity{sync: s, accounts: accounts, roles: roles, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
-		syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{}, refused: map[uuid.UUID]int{}}
+// NewIdentity creates the identity rounds; mfa nil leaves the second-factor enrolment marks alone.
+func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, roles *app.RoleMembership, mfa *app.MFAEnrolment, brand BrandFlows,
+	org *db.OrgPool, platform *db.PlatformPool, syncEvery, reconcile time.Duration) *Identity {
+	return &Identity{sync: s, accounts: accounts, roles: roles, mfa: mfa, brand: brand, brandRetry: brandRetryInterval, org: org,
+		platform: platform, syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{},
+		refused: map[uuid.UUID]int{}}
 }
 
 // RunBrandFlows ensures the default brand's recovery and device-code flows at start and then every reconcile interval
@@ -114,7 +119,33 @@ func (i *Identity) RunSync(ctx context.Context) error {
 // ctx ends: administrator accounts follow their role groups in the identity provider, and every change of a role
 // group's members is recorded (plan M8b decision 36, PDK-111).
 func (i *Identity) RunAdminAccounts(ctx context.Context) error {
-	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.adminAccounts)
+	return i.loop(ctx, i.syncEvery, "admin-accounts", i.adminAccountsRound)
+}
+
+// adminAccountsRound is one admin-accounts round under its lock: the one-time seed of the second-factor enrolment marks
+// first, so that it marks the administrators existing at the upgrade (ADR 0053 decision 4), then every organization,
+// then the removal of the marks of the administrators who have enrolled a passkey meanwhile, with one device listing
+// for all organizations. A failed seed does not stop the organizations; it is repeated next round.
+func (i *Identity) adminAccountsRound(ctx context.Context) error {
+	const name = "admin-accounts"
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
+	var seedErr, clearErr error
+	_, err := i.platform.WithLeaderLock(sys, identityAdminAccountsLockKey, func(ctx context.Context) error {
+		ctx = httpx.WithRequestID(ctx, name+"-"+i.now().UTC().Format(time.RFC3339))
+		if i.mfa != nil {
+			seedErr = i.mfa.Seed(ctx)
+		}
+		err := i.eachOrganization(ctx, name, i.adminAccounts)
+		i.mu.Lock()
+		marked := i.enrolMarked
+		i.enrolMarked = nil
+		i.mu.Unlock()
+		if i.mfa != nil {
+			clearErr = i.mfa.Clear(ctx, marked)
+		}
+		return err
+	})
+	return errors.Join(err, seedErr, clearErr)
 }
 
 // adminAccounts lists an organization's role groups once for both consumers of the round. A round refused because the
@@ -126,7 +157,23 @@ func (i *Identity) adminAccounts(ctx context.Context) error {
 	}
 	err = errors.Join(i.accounts.Reconcile(ctx, groups), i.roles.SyncOrganization(ctx, groups))
 	i.noteRefusal(ctx, err)
+	i.noteEnrolMarks(groups)
 	return err
+}
+
+// noteEnrolMarks keeps the listed members of a role group listing that carry the enrolment mark for the end of the
+// round.
+func (i *Identity) noteEnrolMarks(groups *app.RoleGroups) {
+	if i.mfa == nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, u := range groups.ListedMembers() {
+		if u.MFAEnrolAtLogin {
+			i.enrolMarked = append(i.enrolMarked, u)
+		}
+	}
 }
 
 // noteRefusal counts a refused round of the caller's organization (uuid.Nil: the platform round) and warns from
@@ -172,6 +219,9 @@ func (i *Identity) platformAdmins(ctx context.Context) error {
 	groups := i.roles.PlatformRoleGroups(ctx)
 	err := errors.Join(i.accounts.ReconcilePlatform(ctx, groups), i.roles.SyncPlatform(ctx, groups))
 	i.noteRefusal(ctx, err)
+	if i.mfa != nil {
+		err = errors.Join(err, i.mfa.Clear(ctx, groups.ListedMembers()))
+	}
 	return err
 }
 
@@ -204,19 +254,25 @@ func (i *Identity) loop(ctx context.Context, interval time.Duration, name string
 func (i *Identity) Round(ctx context.Context, lock int64, name string, fn func(ctx context.Context) error) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := i.platform.WithLeaderLock(sys, lock, func(ctx context.Context) error {
-		orgs, err := i.org.OrganizationIDs(ctx)
-		if err != nil {
-			return err
-		}
-		round := name + "-" + i.now().UTC().Format(time.RFC3339)
-		for _, org := range orgs {
-			if err := fn(systemContext(ctx, org, round)); err != nil && ctx.Err() == nil {
-				slog.WarnContext(ctx, "identity round of an organization failed", "round", name, "organization_id", org, "error", err)
-			}
-		}
-		return nil
+		return i.eachOrganization(ctx, name, fn)
 	})
 	return err
+}
+
+// eachOrganization runs fn for every organization in its system context; a failing organization does not stop the
+// others.
+func (i *Identity) eachOrganization(ctx context.Context, name string, fn func(ctx context.Context) error) error {
+	orgs, err := i.org.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	round := name + "-" + i.now().UTC().Format(time.RFC3339)
+	for _, org := range orgs {
+		if err := fn(systemContext(ctx, org, round)); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "identity round of an organization failed", "round", name, "organization_id", org, "error", err)
+		}
+	}
+	return nil
 }
 
 func (i *Identity) syncOrg(ctx context.Context) error {

@@ -109,7 +109,10 @@ both roles and follows the control plane's steps.
    | `check` | `./paddock check` (`--online` on the audit host and a lab: the audit bucket's Object Lock, read over A's running stack; the backup targets' revisions and the running containers against the hardening matrix are compared in the post-checks): every item PASS, else the run stops, and A still runs. |
    | `backup` | On the control plane and on a lab host with backups: `<old dir>/paddock backup now --label pre-upgrade-<B> --wait`. A release without `backup now` (other than 0.1.0-alpha.8, below) is refused before anything changes. |
    | `audit-writer-stop` | Audit host and lab, when B's `Schema:` line names audit migrations (or is missing): `<old dir>/paddock compose stop paddock-audit-writer`. B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the queue and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index (`docs/operations/capacity.md`, *Audit index commit sequence backfill*). |
-   | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. |
+   | `broker` | Control plane and lab, before `up` (after `secrets` rendered B's definitions and after the backup): `./paddock bootstrap broker --import` imports B's RabbitMQ users and permissions into A's running broker with `rabbitmqctl import_definitions` (0.1.0-alpha.11: the audit writer may publish to `paddock.offboarding`, the worker may read `worker.offboarding`), so that B's services find them when `up` waits for them to become healthy. No restart: the broker imports its definitions file only when it starts, and `up` does not restart it when only that file changed. The import only adds or widens permissions, which A does not use; it changes nothing else, repeating it changes nothing, and a failed `up` or a rollback runs unaffected. The definitions file reaches `rabbitmqctl` on stdin; nothing of it is printed or written. A failure stops the upgrade before `up`, with A still running. |
+   | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. 0.1.0-alpha.11: migrations 00139–00157 build an index on `organization_id` for each of the 19 tables the organization deletion works through that had none (tables that already had one are left as they are), concurrently, so the database keeps serving writes while they run. On a large installation the first start after the upgrade can take several minutes longer, mostly for `outbox` and `action` (devstack with 7.3 million `outbox` and 7 million `action` rows: 34 s in total, 20 s for `outbox` and 13 s for `action`). A concurrent build also waits for every transaction open in the database when it starts, so `up` takes longer while long transactions run. Do not interrupt it. If it is interrupted, `./paddock up` runs the migrations again: an index whose build was cut off is dropped and built again. |
+   | `broker-check` | Control plane and lab, after `up`: `./paddock bootstrap broker --check` compares the broker's permissions on vhost `paddock` exactly with B's definitions (`check-broker`): a missing user, other patterns, or a user B's definitions do not name fail the step. `./paddock check --online` reports the same. |
+   | `buckets` | Control plane and lab: `./paddock bootstrap buckets --add-missing` creates the object-store users and policies B adds (0.1.0-alpha.11: the two users of organization deletion). It only adds what is missing: no bucket setting, existing policy, user secret or escrowed object changes; it only removes the obsolete bucket-wide escrow read `paddock-escrow-read`, and refuses that while the api user lacks `paddock-escrow-api`. It fails when it cannot verify the organization deletion's credentials; `./paddock bootstrap buckets` (without `--add-missing`) sets every user's secret and policy again. A rollback leaves the added users in place; A does not use them. |
    | `openbao` | Control plane and lab: with `BAO_TOKEN` set, `./paddock bootstrap openbao` (idempotent). Without it, the step prints the manual step when B's `Upgrade:` line names OpenBao and is otherwise skipped. |
    | `post-checks` | `./paddock ps` shows every service healthy; the new server's `admin upgrade-check --target-version <B>` reports the `migrations` item at the binary's version (control plane and lab); `./paddock check --online` (audit host and lab). |
 
@@ -150,6 +153,9 @@ unless the release notes of B say agents come first. Devices outside the window 
 
 ## Rollback
 
+A rollback across the Valkey 9.2 move (0.1.0-alpha.11) also needs fresh Valkey volumes: see *Per release*, 0.1.0-alpha.11,
+*Valkey 9.2*.
+
 `./paddock rollback <old dir> [--yes]`, in B's directory. `--yes` skips the terminal question `yes` (the restore's own
 confirmation is answered by it too); `<old dir>` is the directory the upgrade ran from. Migrations only move forward
 (`server/migrations/`; there is no down migration), so the rollback depends on B's `Schema:` line:
@@ -169,6 +175,11 @@ confirmation is answered by it too); `<old dir>` is the directory the upgrade ra
   so A's writer inserts into a superset schema.
 - **A lab host without backups** (`PADDOCK_LAB_BACKUP` not `yes`) refuses a rollback after a schema change: there is no
   set to restore.
+- **`PADDOCK_PG_MAX_CONNECTIONS` above 100**: a rollback to a release that starts PostgreSQL with 100 whatever `.env`
+  says (0.1.0-alpha.10 and older) is refused before anything stops, because its database cannot recover data written
+  with more: set it to 100 (or remove it) in `.env` and run `./paddock rollback` again. The pre-upgrade backup was
+  taken at the previous release's setting and restores as is (`docs/operations/capacity.md`, "PostgreSQL connection
+  budget").
 
 **Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt; the
 running stack is B (the version label of its containers; a later upgrade from this directory supersedes the record);
@@ -190,7 +201,8 @@ repeated rollback), the value comes from B's high-water file. `./paddock upgrade
 directory (`migrate-from`), so the file never starts empty in a new release's directory. `docs/operations/restore.md`, *Bundle sequence*, has the
 rule. An upgrade again after a rollback runs in the same B directory, whose `bundle-seq/` B's release handed to uid
 999: when A's file is higher, `migrate-from` puts a new `bundle-seq/` with A's file in its place and keeps the old one
-as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads. Remove it: its
+as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads. `./paddock up`,
+which the upgrade runs, removes it when it runs as root. Remove it otherwise: its
 high-water is lower than the live one and must never be taken for it. Until then `./paddock check` warns (item
 `upgrade: no leftover bundle-seq directories`) and names each path and the command; the warning never fails the check
 or the upgrade.
@@ -208,6 +220,37 @@ Never edit the shipped files of a bundle to change behaviour: `./paddock verify`
 
 One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what B changes for A's installation. The
 older notes are in the *Archive*.
+
+### 0.1.0-alpha.11, from 0.1.0-alpha.10
+
+**Third-party images (2026-11-24).** Fleet moves to v4.96.0; because `FLEET_IMAGE` changed, a rollback restores the
+Fleet dump of the pre-upgrade backup of the step `backup`. OpenBao moves to 2.7.3: the step `up` recreates OpenBao and
+it starts **sealed**, so have three custodians ready (or automatic unseal on). Authentik moves to 2026.8.6, RabbitMQ to
+4.4.1 and nginx (lab smoke test only) to 1.31.10. The AWS CLI image of the bucket bootstrap scripts moves to 2.42.2.
+`./paddock pull` does not fetch it, because it is no Compose service: on a host without registry access, load the image
+`AWS_CLI_IMAGE` of B's `versions.env` (`docker save` on a connected host, `docker load` here) before one of these
+commands runs. Devices install Himmelblau 4.0.9 with their current agent at the next login drift check.
+
+**Valkey 9.2.** Valkey (the control plane's cache and Fleet's Redis) moves from 9.1.3 to 9.2.0. The data files 9.2
+writes do not load in 9.1, and `./paddock rollback` keeps the volumes, so a rollback to 0.1.0-alpha.10 needs fresh Valkey
+volumes. Both hold rebuildable data only. After B's `down` and before A's final `up`:
+
+1. Stop the stack of this project: `./paddock down` in B's directory. A rollback that runs the command
+   `./paddock rollback <old dir>` stops B itself, restores and starts A, whose `valkey` and `fleet-redis` then fail
+   their health check on the 9.2 data; run `./paddock down` in A's directory then.
+2. Remove the two volumes: `docker volume rm "${PADDOCK_PROJECT}_valkey-data" "${PADDOCK_PROJECT}_fleet-redis-data"`,
+   with the `PADDOCK_PROJECT` of `.env`, default `paddock` (`docker volume ls` lists them).
+3. Start A: `<old dir>/paddock up`. `valkey` and `fleet-redis` start empty.
+4. Rebuild the device caches from PostgreSQL: `<old dir>/paddock compose run --rm --no-deps paddock-worker admin
+   rebuild-cache`. Fleet's Redis refills by itself.
+
+**Inventory hosts bound to their device (ADR 0057).** Upgrade the server first, then the agents through a staged
+rollout. Each device enrolls its fleetd once more after its agent updates; a new Fleet host appears per device, and
+the previous one stays in Fleet without data being stored for it. Inventory of a device pauses for up to about 10
+minutes around its re-enrollment.
+Keep each rollout wave below about 1,500 agent updates per hour; a larger wave can leave a device's new host unbound
+for longer than 60 minutes, which raises one false `second_host` report for it. Upgrade all roles together
+(`./paddock up` does). A `PaddockDLQ` alert during the upgrade window can come from heartbeats; they need no replay.
 
 ### 0.1.0-alpha.10, from 0.1.0-alpha.9
 

@@ -568,8 +568,14 @@ func (a *Authentik) CreateUser(ctx context.Context, username, password string, g
 	return a.CreateUserWithEmail(ctx, username, username, password, groups...)
 }
 
+// CreateUserWithoutPassword creates an internal user without a password, as the operator creates a platform
+// administrator by hand (install §9 step 1), and returns its pk.
+func (a *Authentik) CreateUserWithoutPassword(ctx context.Context, username string, groups ...string) (int, error) {
+	return a.CreateUserWithEmail(ctx, username, username, "", groups...)
+}
+
 // CreateUserWithEmail is CreateUser with a separate email, for a username that is no email address (Authentik
-// validates the email).
+// validates the email). An empty password leaves the user without one.
 func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, password string, groups ...string) (int, error) {
 	var u struct {
 		PK int `json:"pk"`
@@ -579,8 +585,10 @@ func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, pa
 	}, &u); err != nil {
 		return 0, err
 	}
-	if err := a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", u.PK), map[string]any{"password": password}, nil); err != nil {
-		return u.PK, err
+	if password != "" {
+		if err := a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", u.PK), map[string]any{"password": password}, nil); err != nil {
+			return u.PK, err
+		}
 	}
 	for _, g := range groups {
 		if err := a.AddToGroup(ctx, username, g); err != nil {
@@ -593,6 +601,32 @@ func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, pa
 // SetPassword sets the password of a user.
 func (a *Authentik) SetPassword(ctx context.Context, pk int, password string) error {
 	return a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", pk), map[string]any{"password": password}, nil)
+}
+
+// SetUserAttribute sets one attribute of a user and keeps the others (Authentik replaces the whole object).
+func (a *Authentik) SetUserAttribute(ctx context.Context, pk int, key string, value any) error {
+	var u struct {
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u); err != nil {
+		return err
+	}
+	if u.Attributes == nil {
+		u.Attributes = map[string]any{}
+	}
+	u.Attributes[key] = value
+	return a.do(ctx, http.MethodPatch, fmt.Sprintf("/core/users/%d/", pk), map[string]any{"attributes": u.Attributes}, nil)
+}
+
+// UserAttribute reads one attribute of a user; nil when it is not set.
+func (a *Authentik) UserAttribute(ctx context.Context, pk int, key string) (any, error) {
+	var u struct {
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u); err != nil {
+		return nil, err
+	}
+	return u.Attributes[key], nil
 }
 
 // SetActive sets is_active of a user.

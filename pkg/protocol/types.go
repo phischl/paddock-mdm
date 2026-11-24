@@ -92,6 +92,34 @@ type CheckinRequest struct {
 	// OSRelease is the os-release identification of the device (keys id and version_id, as at enrollment); an agent
 	// of an earlier release leaves it out and the server keeps the enrollment value (plan M13a decision 14, M2).
 	OSRelease map[string]string `json:"os_release,omitempty"`
+	// FleetDeviceToken is fleetd's current device token (/opt/orbit/identifier), sent when it changed since the last
+	// successful check-in (ADR 0057). Agents before 0.1.0-alpha.11 leave it out.
+	FleetDeviceToken string `json:"fleet_device_token,omitempty"`
+	// FleetEnrollmentResetAt is when the agent reset fleetd's enrollment to enroll it under its instance identifier,
+	// sent until a check-in with the new device token succeeded, at most 24 hours (ADR 0057). Agents before
+	// 0.1.0-alpha.11 leave it out.
+	FleetEnrollmentResetAt *time.Time `json:"fleet_enrollment_reset_at,omitempty"`
+}
+
+// ValidFleetDeviceToken reports whether s has the format of fleetd's device token, a lower-case UUID (ADR 0057).
+func ValidFleetDeviceToken(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Agent architectures of CheckinRequest.Arch.
@@ -665,9 +693,23 @@ type (
 	}
 	// TamperProtectedFileChanged: a protected file was changed outside Paddock: one the agent cannot restore itself
 	// (e.g. a PAM file), or one of fleetd's files, which it restores (plan M5a decision 5).
+	// Reason is empty for a change; ADR 0056 sets it when the check of Paddock's own components reports itself.
 	TamperProtectedFileChanged struct {
-		File string `json:"file"`
+		File   string `json:"file"`
+		Reason string `json:"reason,omitempty"`
 	}
+)
+
+// Reasons of TamperProtectedFileChanged sent by the check of Paddock's own components (ADR 0056; plan M5a R5, R14,
+// R16).
+const (
+	// TamperReasonCheckSuspended: the check could not run for longer than a fixed bound; File blocks it.
+	TamperReasonCheckSuspended = "check_suspended"
+	// TamperReasonBaselineReset: the baseline was corrupt or missing and was recorded anew; File is the baseline.
+	TamperReasonBaselineReset = "baseline_reset"
+	// TamperReasonUpdateResultUnstaged: an update result named no release the agent staged; the baseline of the agent
+	// slots was kept, and File is the update result (plan M5a R16).
+	TamperReasonUpdateResultUnstaged = "update_result_unstaged"
 )
 
 // Outcomes of login.nss_shield.

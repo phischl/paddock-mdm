@@ -72,6 +72,9 @@ const (
 	KeyRetired     = "retired"
 	KeyRejected    = "rejected"
 	KeyRevoked     = "revoked"
+	// KeyOffboarded is the key of a device whose organization is being deleted or was deleted and that has not
+	// reported its removal: the gateway serves it the uninstall and nothing else (plan M17 decision 15).
+	KeyOffboarded = "offboarded"
 )
 
 // KeyStatus combines the key status and the device state into DeviceKey.Status.
@@ -99,10 +102,15 @@ func (c *Cache) PutDeviceKey(ctx context.Context, keyID string, k DeviceKey, las
 	if err := c.RestoreSeq(ctx, k.DeviceID, lastSeq); err != nil {
 		return err
 	}
-	return c.putHash(ctx, deviceKeyKey(keyID), time.Time{}, map[string]string{
+	return c.putHash(ctx, deviceKeyKey(keyID), time.Time{}, deviceKeyFields(k))
+}
+
+// deviceKeyFields is the hash dk:<key_id> holds for k.
+func deviceKeyFields(k DeviceKey) map[string]string {
+	return map[string]string{
 		"device": k.DeviceID.String(), "org": k.OrganizationID.String(), "status": k.Status,
 		"public_key": base64.StdEncoding.EncodeToString(k.PublicKey),
-	})
+	}
 }
 
 // DeviceKey reads a cached identity key.
@@ -130,6 +138,10 @@ type Enrollment struct {
 	DeviceID       uuid.UUID // uuid.Nil until the worker created the device
 	Reason         string    // rejection reason
 }
+
+// ReasonOrganizationUnavailable is the Reason of an enrollment the worker refused because its organization is deleting
+// or deleted; the gateway answers it with identity_revoked (plan M17 amendment 2026-11-14 e point 11).
+const ReasonOrganizationUnavailable = "organization_inactive"
 
 func enrollmentKey(id uuid.UUID) string { return "enr:" + id.String() }
 

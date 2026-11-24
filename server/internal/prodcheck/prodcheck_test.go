@@ -535,7 +535,7 @@ func TestRetentionInterval(t *testing.T) {
 func TestAuditIndexRetention(t *testing.T) {
 	withWorker := func(env map[string]*string) *fixture {
 		f := newFixture(t)
-		f.cfg.Services["paddock-worker"] = prodcheck.Service{Environment: env}
+		f.cfg.Services["paddock-worker"] = f.offboardWorker(t, prodcheck.Service{Environment: env})
 		harden(f.cfg)
 		return f
 	}
@@ -692,6 +692,7 @@ var labItems = []string{
 	"rate limits are on",
 	"backup: no S3 credentials or encryption key on the worker",
 	"audit index retention of the retention round",
+	"offboarding: object-store credentials on paddock-worker only, and complete there",
 	"release public keys are production keys",
 }
 
@@ -730,11 +731,11 @@ func newLabFixture(t *testing.T) *fixture {
 	f.cfg.Services["paddock-api"] = api
 	f.cfg.Services["paddock-escrow-reader"] = prodcheck.Service{ExtraHosts: labHosts()}
 	f.cfg.Services["paddock-revocation-issuer"] = prodcheck.Service{ExtraHosts: labHosts()}
-	f.cfg.Services["paddock-worker"] = prodcheck.Service{
+	f.cfg.Services["paddock-worker"] = f.offboardWorker(t, prodcheck.Service{
 		ExtraHosts: labHosts(),
 		Environment: map[string]*string{"PADDOCK_TLS_PROBE_ADDR": ptr(labProxy + ":443"),
 			"PADDOCK_AUDIT_RETENTION_DAYS": ptr("400"), "PADDOCK_AUDIT_INDEX_RETENTION_DAYS": ptr("400")},
-	}
+	})
 	harden(f.cfg)
 	return f
 }

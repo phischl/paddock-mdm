@@ -75,6 +75,25 @@ rb_check_schema() {
   done
 }
 
+# rb_carry_offboard_keys <new dir> <old dir>: copies the four rustfs_*_offboard_* key files of the new release's .secrets/
+# into the old directory's, where the old release ignores them. A later ./paddock upgrade copies .secrets/ from the old
+# directory again; without these files its `secrets` step would generate new keys and the bucket bootstrap would add two
+# more users beside the two this upgrade created (PDK-1054d). Only absent files are copied, so a key the old directory
+# holds is never replaced. Best effort: the rollback does not fail on it, the bootstrap removes stale users anyway.
+rb_carry_offboard_keys() {
+  local f name
+  for f in "$1"/.secrets/rustfs_*_offboard_*; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f")"
+    [[ ! -e "$2/.secrets/$name" ]] || continue
+    # Through a temporary name, so that an interrupted copy never leaves half a key behind. With the source's mode
+    # (0644 from gen-prod-secrets.sh inside the 0700 .secrets/): the services' uid 65532 must read the copy a later
+    # upgrade takes over (PDK-1084); the umask only keeps the half-written temporary file private.
+    (umask 077 && cp --preserve=mode -- "$f" "$2/.secrets/.$name.tmp" && mv -- "$2/.secrets/.$name.tmp" "$2/.secrets/$name") ||
+      echo "rollback: could not carry $name into $2/.secrets; a later upgrade creates new organization deletion keys and its bucket bootstrap removes the users of these" >&2
+  done
+}
+
 # rb_restore <old dir> <new dir> <at> <yes> <components…>: in a subshell with the old directory's libraries. Every
 # precondition of the old release's restore (the key, its preflight: schema versions, stanzas, the oldest backup, the
 # OpenBao snapshot and the Fleet dump at the point) and its confirmation run before anything stops (Agent design
@@ -180,7 +199,7 @@ rb_legacy_restore() {
 # rollback_main <new dir> <arguments of ./paddock rollback>
 rollback_main() {
   local new="$1" old="" yes="" arg schema record state at="" attempt="" stale="" old_version new_version components=()
-  local answer="" status=0 current superseded running="" lenient="" v bad="" legacy="" fleet=no problem
+  local answer="" status=0 current superseded running="" lenient="" v bad="" legacy="" fleet=no problem pg_max
   shift
   for arg in "$@"; do
     case "$arg" in
@@ -198,6 +217,16 @@ rollback_main() {
   [[ -x "$old/paddock" && -f "$old/.env" ]] || rb_die "$old is no bundle directory of an installation (no ./paddock or .env)" 2
   old_version="$(sed -n 's/^version=//p' "$old/VERSION" 2>/dev/null | head -n 1)"
   new_version="$(sed -n 's/^version=//p' "$new/VERSION" 2>/dev/null | head -n 1)"
+  # A release whose Compose files do not know PADDOCK_PG_MAX_CONNECTIONS (0.1.0-alpha.10 and older) starts PostgreSQL
+  # with 100 connections, and a database or backup written with more pauses its recovery there (plan M19 D1.3).
+  pg_max="$(env_value PADDOCK_PG_MAX_CONNECTIONS)"
+  # Compose also reads quoted or commented values ("150", 150 # note) as a number, so anything but a plain number is
+  # refused rather than taken as "not above 100".
+  [[ "$pg_max" =~ ^[0-9]*$ ]] ||
+    rb_die "PADDOCK_PG_MAX_CONNECTIONS is '$pg_max', not a whole number: write it as a plain number in .env; nothing was changed"
+  if [[ -n "$pg_max" ]] && ((10#$pg_max > 100)) && ! grep -qs PADDOCK_PG_MAX_CONNECTIONS "$old/compose.yaml"; then
+    rb_die "PADDOCK_PG_MAX_CONNECTIONS is above 100, which the previous release does not support. Set it to 100 (or remove it) in .env and run ./paddock rollback again; nothing was changed"
+  fi
   record="$new/.upgrade-rollback"
   state="$new/.upgrade-state"
   RB_RECORD=""
@@ -347,6 +376,7 @@ rollback_main() {
     }
   fi
   rm -f "$RB_PHASE"
+  rb_carry_offboard_keys "$new" "$old"
   # The record is retired before the old release starts: the data is the pre-upgrade state now, and a second rollback
   # must not restore it again. A later ./paddock upgrade starts again at the check and copies .env and .secrets/ again:
   # the old release runs in between and may be reconfigured.

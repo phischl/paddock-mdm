@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -28,25 +27,26 @@ const retentionLockKey = 0x7061646420726574
 const legacyLoginHistoryLockKey = 0x70616464206c6f67
 
 var (
-	metricRetentionLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	metricRetentionLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_retention_last_success_timestamp_seconds",
 		Help: "When the retention round last purged a store in every organization without an error.",
 	}, []string{"store"})
-	metricRetentionDeleted = promauto.NewCounterVec(prometheus.CounterOpts{
+	metricRetentionDeleted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_retention_deleted_total",
 		Help: "Rows the retention round deleted, per store; devices whose inventory it purged for store retired_inventory.",
 	}, []string{"store"})
 	// metricRetentionStores lets an alert notice stores whose last success is never exported, e.g. because a pass
 	// fails from the start (PaddockRetentionPurgeMissing).
-	metricRetentionStores = promauto.NewGauge(prometheus.GaugeOpts{
+	metricRetentionStores = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_retention_stores",
 		Help: "Number of stores the retention round purges.",
 	})
 )
 
 // retentionPass purges one store of the context's organization and returns what it deleted: rows, or devices for
-// app.StoreRetiredInventory (plan M10 §6.6). round is the state the round shares across its organizations. platform,
-// when set, purges the store's rows of the platform pseudo-organization once per round, after the organizations.
+// app.StoreRetiredInventory (plan M10 §6.6). round is the state the round shares across its organizations. purge is nil
+// for a store of platform data only (offboarded_device). platform, when set, purges the store's rows of the platform
+// pseudo-organization once per round, after the organizations.
 type retentionPass struct {
 	store    string
 	purge    func(ctx context.Context, now time.Time, round *app.RetentionRound) (int64, error)
@@ -106,6 +106,13 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 	}
 }
 
+// WithOffboardedDevices adds the purge of the records of devices of deleted organizations (plan M17 decision 15). The
+// records are platform data, so the pass runs once per round, after the organizations.
+func (r *Retention) WithOffboardedDevices(o *app.OffboardedDevices) *Retention {
+	r.passes = append(r.passes, retentionPass{store: app.StoreOffboardedDevice, platform: o.Purge})
+	return r
+}
+
 // Run runs the round at start and then every interval until ctx ends; only the replica holding the lock acts.
 func (r *Retention) Run(ctx context.Context) error {
 	metricRetentionStores.Set(float64(len(r.passes)))
@@ -143,6 +150,9 @@ func (r *Retention) purge(ctx context.Context) error {
 	var errs []error
 	for _, org := range orgs {
 		for i, pass := range r.passes {
+			if pass.purge == nil {
+				continue
+			}
 			n, err := pass.purge(systemContext(ctx, org, "retention-round"), now, round)
 			// A failed pass still reports the rows of the batches, or the devices, it committed before the failure.
 			metricRetentionDeleted.WithLabelValues(pass.store).Add(float64(n))

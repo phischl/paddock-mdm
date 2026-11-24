@@ -87,7 +87,7 @@ func TestAccessReview(t *testing.T) {
 	admin.stepUp(t)
 	expectStatus(t, call(t, admin.Portal, http.MethodPost, "/api/v1/api-tokens/"+revoked.Token.ID+"/revoke", nil), http.StatusOK, "")
 
-	d, _ := escrowedDevice(t, admin.Portal)
+	d, _, _ := escrowedDevice(t, admin.Portal)
 	admin.stepUp(t)
 	expectStatus(t, call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+d.DeviceID+"/local-admin/reveal",
 		map[string]any{"confirm_hostname": getDevice(t, admin.Portal, d.DeviceID).Hostname}), http.StatusOK, "")

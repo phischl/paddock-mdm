@@ -315,3 +315,13 @@ package's `control` file and refuse it unless `Package`, `Version` (the release 
 fleetd its `package_version`) and `Architecture` match what it is stored as; one shared check, negative tests per
 path, with the Debian package reader the stored-packages upload already uses (plan M13c §3.4). Until then:
 residual risk RR-136.
+
+## Note 2026-11-14 — the control-field check has its own reader (PDK-1003, plan M19 D6)
+
+Amendment 2026-11-11 c named the Debian package reader of the stored-packages upload (`software.ParseDeb`, plan M13c
+§3.4) for the control-field check. Plan M19 D6 built a separate reader instead, `server/internal/debcontrol`, which
+reads the members from an `io.ReaderAt` without loading the whole package into memory (release packages are up to
+128 MiB) and refuses an `.xz` control member. The rule of amendment c is unchanged: `Package`, `Version` and
+`Architecture` must match the name, release and architecture a package is stored under, and fleet-osquery's `Version`
+must match the stored `package_version`. Two readers of the same format exist until the follow-up PDK-1003b merges
+them.

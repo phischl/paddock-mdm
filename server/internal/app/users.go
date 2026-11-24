@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/domain/user"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -22,11 +24,12 @@ type Users struct {
 	runner *ActionRunner
 	org    *db.OrgPool
 	dir    ports.UserDirectory
+	now    func() time.Time
 }
 
 // NewUsers creates the use cases.
 func NewUsers(runner *ActionRunner, org *db.OrgPool, dir ports.UserDirectory) *Users {
-	return &Users{runner: runner, org: org, dir: dir}
+	return &Users{runner: runner, org: org, dir: dir, now: time.Now}
 }
 
 // Specs of the privileged user actions.
@@ -36,6 +39,8 @@ var (
 	SpecUserDelete = ActionSpec{Code: audit.CodeUserDeleted, AllowedRoles: RolesAdmin}
 	SpecUserLock   = ActionSpec{Code: audit.CodeUserLocked, AllowedRoles: RolesAdmin}
 	SpecUserUnlock = ActionSpec{Code: audit.CodeUserUnlocked, AllowedRoles: RolesAdmin}
+	// SpecUserEnrolmentLink is the sign-in setup link of ADR 0053 decision 1.
+	SpecUserEnrolmentLink = ActionSpec{Code: audit.CodeUserEnrolmentLinkCreated, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
 // UserQuery selects a page of users.
@@ -176,6 +181,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 	spec.Params = map[string]any{"username": in.Username, "display_name": in.DisplayName}
 	var out CreatedUser
 	var slug, pk string
+	var revoked *int
 	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 			org, err := orgOf(ctx)
@@ -223,7 +229,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			if err != nil {
 				return err
 			}
-			if out.RecoveryLink, err = u.dir.RecoveryLink(ctx, pk); err != nil {
+			if out.RecoveryLink, revoked, err = replaceRecoveryLink(ctx, u.dir, pk); err != nil {
 				// Without a link nobody can set the password: remove the user again, the attempt failed.
 				if derr := u.dir.DeleteUser(context.WithoutCancel(ctx), pk); derr != nil {
 					return errors.Join(err, derr)
@@ -232,7 +238,8 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			}
 			return nil
 		},
-		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
+			recordRevoked(rec, revoked)
 			if externalErr != nil {
 				_, err := q.DeleteAppUser(ctx, out.User.ID)
 				return err
@@ -462,4 +469,131 @@ func (u *Users) lockable(ctx context.Context, q *pgstore.Queries, rec Recorder, 
 	}
 	o, err := q.GetOrganization(ctx, cur.OrganizationID)
 	return cur, o, err
+}
+
+// EnrolmentLink is a one-time sign-in setup link (ADR 0053 decision 1): shown once, never stored, logged or audited.
+type EnrolmentLink struct {
+	Link string
+	// ExpiresAt is when the link expires at the latest: taken before the identity provider created it.
+	ExpiresAt time.Time
+	// PasskeyOnly is set by the host command for an account connected to an upstream source: its password stays with
+	// that source and the link sets up only the passkey.
+	PasskeyOnly bool
+}
+
+// EnrolmentLink creates a one-time sign-in setup link for a user of the caller's organization, with which the account
+// sets up a passkey if it has none, and a password only if Paddock created the account and it has none (audited:
+// user.enrolment_link_created with previous_links_revoked, step-up). It never marks an account with
+// ports.AttrPasswordByLink, so a synced account's link sets up only the passkey. It ends the account's older links
+// first and issues none when that fails (502 upstream_unavailable). A locked user, a user deactivated in the identity
+// provider, a user not provisioned there and a direct member of paddock.platform.admins (ErrPlatformAdministratorLink)
+// get none (409 invalid_state).
+func (u *Users) EnrolmentLink(ctx context.Context, id uuid.UUID) (EnrolmentLink, error) {
+	spec := SpecUserEnrolmentLink
+	spec.Target = &audit.Target{Type: "user", ID: id.String()}
+	var pk string
+	var out EnrolmentLink
+	var revoked *int
+	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+			cur, err := q.GetAppUser(ctx, id)
+			if err != nil {
+				return notFound(err)
+			}
+			rec.SetTarget(audit.Target{Type: "user", ID: id.String(), Display: cur.Username})
+			rec.SetParam("username", cur.Username)
+			switch {
+			case cur.AuthentikPk == "":
+				return problem.InvalidState.WithDetail("the user is not provisioned in the identity provider")
+			case cur.Locked:
+				return problem.InvalidState.WithDetail("the user is locked")
+			}
+			pk = cur.AuthentikPk
+			return nil
+		},
+		func(ctx context.Context) error {
+			if err := refusePlatformAdministrator(ctx, u.dir, pk); err != nil {
+				return err
+			}
+			var err error
+			out, revoked, err = recoveryLinkOfActive(ctx, u.dir, pk, u.now, nil)
+			return err
+		},
+		func(_ context.Context, _ *pgstore.Queries, rec Recorder, _ error) error {
+			recordRevoked(rec, revoked)
+			return nil
+		})
+	if err != nil {
+		return EnrolmentLink{}, err
+	}
+	return out, nil
+}
+
+// ErrPlatformAdministratorLink refuses an organization administrator's sign-in setup link for an account that is also
+// a direct member of paddock.platform.admins (ADR 0045 dual role, plan M12h-2 amendment f): such a link would let an
+// organization administrator prepare the sign-in of a platform administrator.
+var ErrPlatformAdministratorLink = problem.InvalidState.WithDetail(
+	"platform administrators receive their setup link from the host operator")
+
+// refusePlatformAdministrator returns ErrPlatformAdministratorLink when the identity provider user pk is a direct member
+// of paddock.platform.admins. A missing group has no members; any other listing error fails closed.
+func refusePlatformAdministrator(ctx context.Context, dir ports.UserDirectory, pk string) error {
+	group := organization.PlatformAdminsGroup()
+	members, err := ListRoleGroups(ctx, dir, group).Members(group)
+	if errors.Is(err, ports.ErrGroupNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		if m.PK == pk {
+			return ErrPlatformAdministratorLink
+		}
+	}
+	return nil
+}
+
+// recoveryLinkOfActive creates the one-time link of the identity provider user pk, refusing a deactivated user: a link
+// must not prepare the sign-in of an account someone switched off. prepare, if set, runs once the user is known to be
+// active and before any link is ended or created; its error issues no link. revoked is as for replaceRecoveryLink.
+func recoveryLinkOfActive(ctx context.Context, dir ports.UserDirectory, pk string, now func() time.Time,
+	prepare func(context.Context) error) (EnrolmentLink, *int, error) {
+	active, err := dir.UserActive(ctx, pk)
+	if err != nil {
+		return EnrolmentLink{}, nil, err
+	}
+	if !active {
+		return EnrolmentLink{}, nil, problem.InvalidState.WithDetail("the user is deactivated in the identity provider")
+	}
+	if prepare != nil {
+		if err := prepare(ctx); err != nil {
+			return EnrolmentLink{}, nil, err
+		}
+	}
+	expires := now().Add(ports.RecoveryLinkValidity).UTC()
+	link, revoked, err := replaceRecoveryLink(ctx, dir, pk)
+	if err != nil {
+		return EnrolmentLink{}, revoked, err
+	}
+	return EnrolmentLink{Link: link, ExpiresAt: expires}, revoked, nil
+}
+
+// replaceRecoveryLink ends the unexpired one-time links of the identity provider user pk and then creates a new one,
+// so only the newest link of an account works (plan M12h-2 amendment f). When the older links cannot be ended, no
+// link is created. revoked is how many older links were ended, nil when ending them failed.
+func replaceRecoveryLink(ctx context.Context, dir ports.UserDirectory, pk string) (link string, revoked *int, err error) {
+	n, err := dir.RevokeRecoveryLinks(ctx, pk)
+	if err != nil {
+		return "", nil, err
+	}
+	link, err = dir.RecoveryLink(ctx, pk)
+	return link, &n, err
+}
+
+// recordRevoked records the audit param previous_links_revoked once the older links were ended.
+func recordRevoked(rec Recorder, revoked *int) {
+	if revoked != nil {
+		rec.SetParam("previous_links_revoked", *revoked)
+	}
 }

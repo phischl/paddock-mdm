@@ -21,6 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
@@ -162,6 +163,13 @@ type bff struct {
 	// loginMFAOptional accepts a portal ID token without "mfa" in amr and without a validated WebAuthn authenticator
 	// (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
 	loginMFAOptional bool
+	passkeys         PasskeyLookup
+}
+
+// PasskeyLookup reads whether an identity provider account has a WebAuthn device (authentik.Client).
+type PasskeyLookup interface {
+	UserMembership(ctx context.Context, username, uid string) (ports.IdentityUser, []string, bool, error)
+	UserAuthenticators(ctx context.Context, pks []string) (map[string]ports.Authenticators, error)
 }
 
 func randomToken() string {
@@ -245,6 +253,35 @@ var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFAReq
 var errPasskeyRequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonPasskeyRequired,
 	Status: http.StatusForbidden}, problem.Forbidden)
 
+// errMFAEnrolmentRequired is the audit error code of a login refused for its factors whose account has no passkey;
+// denied like errMFARequired.
+var errMFAEnrolmentRequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFAEnrolmentRequired,
+	Status: http.StatusForbidden}, problem.Forbidden)
+
+// withoutPasskey reports whether the account of the ID token claims has no WebAuthn device. Such an account cannot
+// fix a refused sign-in by signing in again: the sign-in denies an administrator without a passkey, who enrols one
+// through a one-time link (ADR 0053 amendment c). A failed or inconclusive lookup reports false, which keeps the
+// factor reason.
+func (b *bff) withoutPasskey(ctx context.Context, c idClaims, username string) bool {
+	if b.passkeys == nil {
+		return false
+	}
+	u, _, found, err := b.passkeys.UserMembership(ctx, username, c.Subject)
+	if err != nil || !found {
+		if err != nil {
+			slog.WarnContext(ctx, "passkey lookup of a refused sign-in failed", "error", err)
+		}
+		return false
+	}
+	auths, err := b.passkeys.UserAuthenticators(ctx, []string{u.PK})
+	if err != nil {
+		slog.WarnContext(ctx, "passkey lookup of a refused sign-in failed", "error", err)
+		return false
+	}
+	a, ok := auths[u.PK]
+	return ok && !a.WebAuthn
+}
+
 // loginFactorDenial is the sign-in policy of the portal and the MCP login (ADR 0034 amendment 2026-10-29, PDK-531),
 // the one place that decides which factors a role needs: it returns the denial reason and audit error of a login whose
 // ID token lacks one, "" when the factors suffice. Every login needs "mfa" in amr; every role also needs a validated
@@ -327,6 +364,9 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	// The check precedes the choice of the active role, so it holds for a role switch (which runs this callback with a
 	// new ID token) and for any later fallback between the roles.
 	if reason, cause := loginFactorDenial(claims, res, b.loginMFAOptional); reason != "" {
+		if !res.Denied && b.withoutPasskey(ctx, claims, username) {
+			reason, cause = app.ReasonMFAEnrolmentRequired, errMFAEnrolmentRequired
+		}
 		slog.WarnContext(ctx, "ID token refused for its sign-in factors", "reason", reason, "mfa_classes", claims.MFAClasses)
 		b.accounts.RecordLoginFailure(ctx, ip, username, reason, "", cause)
 		denied(w, r, reason)

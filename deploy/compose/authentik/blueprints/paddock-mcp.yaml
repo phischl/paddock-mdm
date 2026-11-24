@@ -11,19 +11,6 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Public OIDC application of paddockctl mcp (device authorization grant)
 entries:
-  # The login flow, the groups and the authenticator classes mappings.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-portal.yaml
-      required: true
-  # The authorization flow with the MFA stage.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-device.yaml
-      required: true
-
   - model: authentik_providers_oauth2.oauth2provider
     id: provider
     identifiers:

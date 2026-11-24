@@ -10,7 +10,7 @@
 # ./paddock rollback needs (the old directory, the backup label, the point in time just before the first `up`).
 # shellcheck shell=bash
 
-UG_STEPS=(upgrade-check migrate-from secrets pull check backup audit-writer-stop up openbao post-checks)
+UG_STEPS=(upgrade-check migrate-from secrets pull check backup audit-writer-stop broker up broker-check buckets openbao post-checks)
 
 # UG_RETIRED: the services an earlier release defines and this one no longer does. `up` and `down` without
 # --remove-orphans leave their containers running beside this release (PDK-845), so the step up removes them through
@@ -77,7 +77,15 @@ ug_fail() {
       echo "  Roll back: ./paddock rollback $UG_OLD (once the cause of a passing failure, such as a port or a pull, is fixed," >&2
       echo "  $again continues at the step up instead)." >&2
       ;;
-    openbao | post-checks)
+    broker)
+      echo "  ./paddock up did not run: $UG_OLD_VERSION still runs from $UG_OLD. The broker may already hold some of" >&2
+      echo "  $UG_NEW_VERSION's users and permissions; $UG_OLD_VERSION does not use them." >&2
+      if [[ -n "$UG_STOP_AUDIT_WRITER" ]] && ug_done audit-writer-stop; then
+        echo "  Only its audit writer is stopped; to keep it running, start it with $UG_OLD/paddock compose start paddock-audit-writer." >&2
+      fi
+      echo "  Fix the cause (is the broker running? ./paddock ps rabbitmq), then run $again again: it continues at the step $step (.upgrade-state)." >&2
+      ;;
+    broker-check | buckets | openbao | post-checks)
       echo "  The new release $UG_NEW_VERSION runs on the migrated data." >&2
       echo "  Fix the cause, then run $again again: it continues at the step $step (.upgrade-state). Roll back" >&2
       echo "  (./paddock rollback $UG_OLD) only when the new release cannot be fixed." >&2
@@ -124,7 +132,8 @@ ug_show() {
 # matrix (plan M12h decision 10): it describes the new release, the containers before up are the old release's.
 ug_prod_check_step() {
   if [[ "$UG_HOST" != controlplane ]]; then
-    PADDOCK_CHECK_SKIP_REVISIONS=1 PADDOCK_CHECK_SKIP_CONTAINERS=1 ug_show "$UG_NEW/paddock" check --online </dev/null
+    PADDOCK_CHECK_SKIP_REVISIONS=1 PADDOCK_CHECK_SKIP_CONTAINERS=1 PADDOCK_CHECK_SKIP_BROKER=1 \
+      ug_show "$UG_NEW/paddock" check --online </dev/null
   else
     ug_show "$UG_NEW/paddock" check </dev/null
   fi
@@ -306,6 +315,44 @@ ug_migrate_from_step() {
   ug_show "$UG_NEW/paddock" migrate-from "$UG_OLD"
 }
 
+# ug_broker_step: the RabbitMQ users and permissions of the release (PDK-1017: the audit writer publishes to
+# paddock.offboarding, the worker reads worker.offboarding) imported into the old release's running broker before up
+# (main §45): the broker imports its definitions file only when it starts, `up` does not restart it when only that
+# file changed, and the new services must find their permissions when `up` waits for them to become healthy. The
+# import sets every user and permission of the file, which the secrets step has rendered, changes nothing else and is
+# repeatable; the old release's users keep theirs, and the new permissions only widen what the old release may do,
+# so a failed `up` and a rollback run unaffected. The definitions reach rabbitmqctl on stdin, nothing is printed or
+# written.
+ug_broker_step() {
+  if [[ "$UG_HOST" == audit ]]; then
+    echo "skipped: the audit host runs no RabbitMQ"
+  else
+    ug_show "$UG_NEW/paddock" bootstrap broker --import </dev/null
+  fi
+}
+
+# ug_broker_check_step: the exact comparison of the broker's permissions with the release's definitions, once the new
+# release runs; a user the definitions no longer name is reported here.
+ug_broker_check_step() {
+  if [[ "$UG_HOST" == audit ]]; then
+    echo "skipped: the audit host runs no RabbitMQ"
+  else
+    ug_show "$UG_NEW/paddock" bootstrap broker --check </dev/null
+  fi
+}
+
+# ug_buckets_step: the object-store users and policies a release adds (plan M17 amendment k: the organization deletion's
+# two users) are created once the new stack runs. --add-missing changes nothing that exists: no bucket setting, policy,
+# user secret or escrowed object; it removes only known-obsolete policies (paddock-escrow-read). A rollback leaves the
+# added users behind, unused by the older release and inert.
+ug_buckets_step() {
+  if [[ "$UG_HOST" == audit ]]; then
+    echo "skipped: the audit host runs no control-plane object store"
+  else
+    ug_show "$UG_NEW/paddock" bootstrap buckets --add-missing </dev/null
+  fi
+}
+
 ug_openbao_step() {
   if [[ "$UG_HOST" == audit ]]; then
     echo "skipped: the audit host runs no OpenBao"
@@ -378,6 +425,18 @@ ug_plan() {
         if [[ "$UG_BACKUP" == yes ]] && la8_applies "$UG_OLD_VERSION"; then
           what="$UG_OLD/paddock compose stop pgbackrest pgbackrest-authentik and flush both (the backup bucket's WAL archive ends here), then $what"
         fi
+        ;;
+      broker)
+        [[ "$UG_HOST" != audit ]] || continue
+        what="./paddock bootstrap broker --import (imports the RabbitMQ users and permissions of this release into the running broker before up, adds only, no restart)"
+        ;;
+      broker-check)
+        [[ "$UG_HOST" != audit ]] || continue
+        what="./paddock bootstrap broker --check (the broker's permissions match this release's definitions exactly)"
+        ;;
+      buckets)
+        [[ "$UG_HOST" != audit ]] || continue
+        what="./paddock bootstrap buckets --add-missing (creates the object-store users and policies this release adds, changes none, removes obsolete ones)"
         ;;
       openbao)
         [[ "$UG_HOST" != audit ]] || continue
@@ -488,7 +547,10 @@ upgrade_main() {
   ug_step check ug_prod_check_step
   ug_step backup ug_backup_step
   ug_step audit-writer-stop ug_audit_writer_step
+  ug_step broker ug_broker_step
   ug_step up ug_up_step
+  ug_step broker-check ug_broker_check_step
+  ug_step buckets ug_buckets_step
   ug_step openbao ug_openbao_step
   ug_step post-checks ug_post_checks_step
   rm -f "$UG_STATE"

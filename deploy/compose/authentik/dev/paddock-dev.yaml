@@ -8,14 +8,10 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Development users and MFA-less admin login (PADDOCK_ENV=development only)
 entries:
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-portal.yaml
-      required: true
-
-  # Skip the authenticator validation stage of paddock-admin-login. A policy that always fails is bound to the
-  # stage binding, so re-applying the portal blueprint does not bring the stage back.
+  # Skip the authenticator validation stages of paddock-admin-login. A policy that fails is bound to each stage
+  # binding, so re-applying the portal blueprint does not bring the stages back. It passes only for an account with the
+  # test attribute paddock_dev_enforce_mfa, so that the acceptance gates of ADR 0053 run the shipped deny and enrolment
+  # paths with temporary users while every other account signs in without a second factor.
   - model: authentik_policies_expression.expressionpolicy
     id: skip-mfa
     identifiers:
@@ -23,32 +19,52 @@ entries:
     attrs:
       expression: |
         # This blueprint is only mounted by compose.dev.yaml (PADDOCK_ENV=development).
-        return False
+        return bool(request.user.attributes.get("paddock_dev_enforce_mfa"))
 
   # The policy identifies the binding, not the target: !Find returns the flow stage binding's own pk, but the stored
-  # target is its policy binding model pk, so a target identifier never matched and every re-apply failed.
+  # target is its policy binding model pk, so a target identifier never matched and every re-apply failed. Each stage
+  # binding is found by its stage: since ADR 0053 a deny stage and its enrolment sibling share an order. Every one of
+  # them evaluates its policies in mode "all", so this policy skips it.
+  # Stage A and its enrolment sibling at order 30 of paddock-admin-login.
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf skip-mfa
       order: 0
     attrs:
-      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-admin-login-mfa]]]]
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 4
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-admin-login-mfa-enrol]]]]
   # The same skip for the second factor Paddock adds to Authentik's default authentication flow (plan M8x decision 5).
-  # Order 1 keeps the identifiers of the two bindings of this policy apart.
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf skip-mfa
       order: 1
     attrs:
-      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, default-authentication-flow]]], [order, 31]]
-  # The portal login's WebAuthn enrolment stage B (plan M8f decision 13, amended 2026-10-18) would send the TOTP-only
-  # test users to the WebAuthn setup; its binding evaluates its policies in mode "all", so this policy skips it.
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, default-authentication-flow]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-default-login-mfa]]]]
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 6
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, default-authentication-flow]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-default-login-mfa-enrol]]]]
+  # The portal login's WebAuthn stage B (plan M8f decision 13, amended 2026-10-18) and its enrolment sibling would
+  # deny or send the TOTP-only test users to the WebAuthn setup.
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf skip-mfa
       order: 2
     attrs:
-      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 31]]
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-admin-login-webauthn]]]]
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 5
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-admin-login-webauthn-enrol]]]]
   # Stage C (the passkey confirmation after an enrolment) would deny the test users, who have no WebAuthn device; the
   # api accepts their sign-in without a passkey through PADDOCK_LOGIN_MFA_OPTIONAL.
   - model: authentik_policies.policybinding
@@ -56,16 +72,26 @@ entries:
       policy: !KeyOf skip-mfa
       order: 3
     attrs:
-      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 32]]
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-admin-login-webauthn-confirm]]]]
+
+  # The device sign-in flow's second-factor pair at order 30 (plan M12h-2 amendment e). The pair in
+  # paddock-device-authorization keeps running on the development stack: every test user has a scripted TOTP
+  # authenticator or is a device user, and gate I1 asserts the TOTP setup there (PDK-1047).
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 7
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-device-authentication]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-device-mfa]]]]
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 8
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-device-authentication]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, paddock-device-mfa-enrol]]]]
 
   # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
   # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-stepup.yaml
-      required: true
-
   - model: authentik_policies_expression.expressionpolicy
     id: skip-stepup-webauthn
     identifiers:

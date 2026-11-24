@@ -16,13 +16,15 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
-	_ ports.Inventory      = (*Client)(nil)
-	_ ports.InventoryAdmin = (*Client)(nil)
+	_ ports.Inventory       = (*Client)(nil)
+	_ ports.InventoryAdmin  = (*Client)(nil)
+	_ ports.InventoryBinder = (*Client)(nil)
 )
 
 // hostsPerPage is the page size of the host list.
@@ -35,6 +37,7 @@ type host struct {
 	OsqueryVersion    string     `json:"osquery_version"`
 	OrbitVersion      *string    `json:"orbit_version"`
 	SeenTime          *time.Time `json:"seen_time"`
+	LastEnrolledAt    *time.Time `json:"last_enrolled_at"`
 	DetailUpdatedAt   time.Time  `json:"detail_updated_at"`
 	SoftwareUpdatedAt time.Time  `json:"software_updated_at"`
 	PolicyUpdatedAt   time.Time  `json:"policy_updated_at"`
@@ -62,6 +65,15 @@ type host struct {
 		Name     string `json:"name"`
 		Response string `json:"response"` // pass, fail, or "" before the host answered
 	} `json:"policies"`
+}
+
+// policyUpdatedAt returns when the host last stored policy results; nil for none and for Fleet's placeholder
+// 2000-01-01 of a host that never stored any (plan M5a amendment 2026-11-24 f, F-L1).
+func policyUpdatedAt(at time.Time) *time.Time {
+	if at.Before(time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		return nil
+	}
+	return &at
 }
 
 // changedAt is the newest of the host's detail, software and policy updates.
@@ -95,10 +107,20 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 	}
 	var res ports.HostPage
 	for _, h := range out.Hosts {
-		if h.UUID == "" || h.changedAt().Before(since) {
+		hw := text(h.UUID)
+		if hw == "" {
 			continue
 		}
-		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: h.UUID, ChangedAt: h.changedAt()})
+		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, EnrolledAt: h.LastEnrolledAt}
+		if h.SeenTime != nil {
+			seen.SeenAt = *h.SeenTime
+		}
+		seen.PolicyUpdatedAt = policyUpdatedAt(h.PolicyUpdatedAt)
+		res.Seen = append(res.Seen, seen)
+		if h.changedAt().Before(since) {
+			continue
+		}
+		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, ChangedAt: h.changedAt()})
 	}
 	if len(out.Hosts) == hostsPerPage {
 		res.Next = strconv.Itoa(page + 1)
@@ -107,7 +129,8 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 }
 
 // HostInventory implements ports.Inventory with one request: Fleet's host detail carries the software with its
-// vulnerabilities and the policy results.
+// vulnerabilities and the policy results. A host Fleet no longer knows (a 404 with Fleet's own error body) is
+// problem.NotFound; other failures are classified like DeleteHost's. Every string is cleaned by text (PDK-1122k).
 func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	id, err := strconv.Atoi(string(ref))
 	if err != nil {
@@ -116,13 +139,19 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	var out struct {
 		Host host `json:"host"`
 	}
-	if err := c.do(ctx, "GET", "/api/latest/fleet/hosts/"+strconv.Itoa(id), nil, &out); err != nil {
-		return ports.HostInventory{}, fmt.Errorf("get fleet host %d: %w", id, err)
+	err = c.do(ctx, "GET", "/api/latest/fleet/hosts/"+strconv.Itoa(id), nil, &out)
+	st := (*errStatus)(nil)
+	switch {
+	case errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body):
+		return ports.HostInventory{}, fmt.Errorf("%w: get fleet host %d: %w", problem.NotFound, id, err)
+	case err != nil:
+		return ports.HostInventory{}, hostError(err, fmt.Sprintf("get fleet host %d", id))
 	}
 	h := out.Host
-	inv := ports.HostInventory{OSVersion: h.OSVersion, AgentVersion: h.OsqueryVersion, LastSeenAt: h.SeenTime}
+	inv := ports.HostInventory{OSVersion: text(h.OSVersion), AgentVersion: text(h.OsqueryVersion), LastSeenAt: h.SeenTime}
+	inv.PolicyUpdatedAt = policyUpdatedAt(h.PolicyUpdatedAt)
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
-		inv.AgentVersion = *h.OrbitVersion
+		inv.AgentVersion = text(*h.OrbitVersion)
 	}
 	inv.Hardware = ports.HostHardware{
 		Vendor: hardwareText(h.HardwareVendor), Model: hardwareText(h.HardwareModel), Serial: hardwareText(h.HardwareSerial),
@@ -130,11 +159,12 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		DiskTotalBytes: int64(math.Round(max(h.GigsTotalDiskSpace, 0) * 1e9)),
 	}
 	for _, s := range h.Software {
-		p := ports.SoftwarePackage{Name: s.Name, Version: s.Version, Source: s.Source}
+		p := ports.SoftwarePackage{Name: keyText(s.Name, maxKeyRunes), Version: keyText(s.Version, maxKeyRunes),
+			Source: keyText(s.Source, maxSourceRunes)}
 		for _, v := range s.Vulnerabilities {
-			vuln := ports.Vulnerability{CVE: v.CVE, CVSSScore: v.CVSSScore}
+			vuln := ports.Vulnerability{CVE: keyText(v.CVE, maxSourceRunes), CVSSScore: v.CVSSScore}
 			if v.ResolvedInVersion != nil {
-				vuln.FixedVersion = *v.ResolvedInVersion
+				vuln.FixedVersion = keyText(*v.ResolvedInVersion, maxKeyRunes)
 			}
 			p.Vulnerabilities = append(p.Vulnerabilities, vuln)
 		}
@@ -142,7 +172,9 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	for _, p := range h.Policies {
 		if p.Response == "pass" || p.Response == "fail" {
-			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: p.Name, Passing: p.Response == "pass"})
+			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: keyText(p.Name, maxKeyRunes), Passing: p.Response == "pass"})
+		} else {
+			inv.UnansweredPolicies = append(inv.UnansweredPolicies, keyText(p.Name, maxKeyRunes))
 		}
 	}
 	return inv, nil
@@ -194,6 +226,42 @@ func (c *Client) HostSeenAt(ctx context.Context, ref ports.HostRef) (time.Time, 
 	return time.Time{}, hostError(err, fmt.Sprintf("get fleet host %d", id))
 }
 
+// ResolveDeviceToken implements ports.InventoryBinder with GET /api/latest/fleet/device/{token}?exclude_software=true,
+// one attempt: the next round retries. It refuses a token that does not match the device token format without a
+// request. 401 and 404 are problem.NotFound; a 200 without host.id is problem.UpstreamUnavailable. The token is a
+// credential for Fleet's device endpoints, so no error carries the request URL or Fleet's answer (ADR 0057, H12).
+func (c *Client) ResolveDeviceToken(ctx context.Context, token string) (ports.HostRef, string, error) {
+	if !protocol.ValidFleetDeviceToken(token) {
+		return "", "", fmt.Errorf("%w: fleet: the device token has an invalid format", problem.NotFound)
+	}
+	var out struct {
+		Host *struct {
+			ID   int    `json:"id"`
+			UUID string `json:"uuid"`
+		} `json:"host"`
+	}
+	_, err := c.once(ctx, http.MethodGet, "/api/latest/fleet/device/"+token+"?exclude_software=true", nil, &out)
+	st := (*errStatus)(nil)
+	ue := (*url.Error)(nil)
+	switch {
+	case err == nil && out.Host != nil && out.Host.ID > 0:
+		return ports.HostRef(strconv.Itoa(out.Host.ID)), strings.ToLower(text(out.Host.UUID)), nil
+	case err == nil:
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: the answer has no host", problem.UpstreamUnavailable)
+	case errors.As(err, &st) && (st.code == http.StatusUnauthorized || st.code == http.StatusNotFound):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: HTTP %d", problem.NotFound, st.code)
+	case errors.As(err, &st):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: HTTP %d", problem.UpstreamUnavailable, st.code)
+	case errors.Is(err, context.Canceled):
+		return "", "", fmt.Errorf("resolve a fleet device token: %w", context.Canceled)
+	case errors.As(err, &ue):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: %s", problem.UpstreamUnavailable,
+			strings.ReplaceAll(ue.Err.Error(), token, "[token]"))
+	}
+	return "", "", fmt.Errorf("%w: resolve a fleet device token: %s", problem.UpstreamUnavailable,
+		strings.ReplaceAll(err.Error(), token, "[token]"))
+}
+
 // hostError classifies a failed request about one host: Fleet's refusal of this one host (hostRefused) is
 // problem.InvalidState; a canceled context stays unclassified, so a shutdown does not count as Fleet failing; every
 // other failure (5xx, 3xx, a 4xx without Fleet's error body, timeout, connection error) is
@@ -237,13 +305,30 @@ func isFleetErrorBody(body string) bool {
 // maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).
 const maxHardwareRunes = 128
 
-func hardwareText(s string) string {
-	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) <= maxHardwareRunes {
+func hardwareText(s string) string { return keyText(strings.TrimSpace(text(s)), maxHardwareRunes) }
+
+// maxKeyRunes and maxSourceRunes bound the software, vulnerability and policy strings Paddock stores to the widths of
+// Fleet's own columns (255 for names and versions, 64 for sources): they are parts of btree keys, and PostgreSQL
+// refuses a key over about 2.7 kB, which would fail the host's store (PDK-1122k). At these widths a key stays below
+// that even with 4-byte runes.
+const (
+	maxKeyRunes    = 255
+	maxSourceRunes = 64
+)
+
+// keyText is text cut to at most n runes.
+func keyText(s string, n int) string {
+	s = text(s)
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return string([]rune(s)[:maxHardwareRunes])
+	return string([]rune(s)[:n])
 }
+
+// text removes the NUL bytes PostgreSQL refuses in text from a string a host reported: Fleet's JSON may carry them,
+// and one host's refused value must not fail the inventory round (PDK-1122k). Decoding JSON already replaces invalid
+// UTF-8, so NUL is the only byte left that PostgreSQL refuses.
+func text(s string) string { return strings.ReplaceAll(s, "\x00", "") }
 
 // VulnerabilityState implements ports.Inventory: a digest of Fleet's vulnerable software versions and their CVEs.
 func (c *Client) VulnerabilityState(ctx context.Context) (string, error) {

@@ -255,12 +255,18 @@ func TestFleetHostInUseGrant(t *testing.T) {
 		}
 		_, err = conn.Exec(ctx, "SELECT paddock_fleet_host_in_use($1, 'h1')", uuid.Must(uuid.NewV7()))
 		expectPermissionDenied(t, role+" EXECUTE paddock_fleet_host_in_use", err)
+		_, err = conn.Exec(ctx, "SELECT paddock_fleet_host_in_use_outside($1, 'h1')", uuid.Must(uuid.NewV7()))
+		expectPermissionDenied(t, role+" EXECUTE paddock_fleet_host_in_use_outside", err)
 		_ = conn.Close(ctx)
 	}
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
 	use, err := f.platform.FleetHostInUse(sys, uuid.Must(uuid.NewV7()), "no-such-host")
 	if err != nil || use != db.FleetHostUnused {
 		t.Fatalf("paddock_platform: %q (%v), want %q", use, err, db.FleetHostUnused)
+	}
+	use, err = f.platform.FleetHostInUseOutside(sys, uuid.Must(uuid.NewV7()), "no-such-host")
+	if err != nil || use != db.FleetHostUnused {
+		t.Fatalf("paddock_platform outside: %q (%v), want %q", use, err, db.FleetHostUnused)
 	}
 }
 
@@ -1024,5 +1030,19 @@ func TestInOrgSnapshot(t *testing.T) {
 	})
 	if n != 2 {
 		t.Fatalf("%d groups after the snapshot, want 2", n)
+	}
+}
+
+// TestIsDataError (PDK-1122k): PostgreSQL's refusals of a statement's data are data errors; a lost connection, a
+// timeout, a serialization failure and errors that are not PostgreSQL's are not.
+func TestIsDataError(t *testing.T) {
+	for code, want := range map[string]bool{"22021": true, "22001": true, "23503": true, "23505": true, "54000": true,
+		"54001": false, "40001": false, "57014": false, "08006": false, "25P04": false, "42501": false} {
+		if got := db.IsDataError(fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: code})); got != want {
+			t.Errorf("SQLSTATE %s: %v, want %v", code, got, want)
+		}
+	}
+	if db.IsDataError(errors.New("connection reset")) || db.IsDataError(context.Canceled) || db.IsDataError(nil) {
+		t.Error("an error that is not PostgreSQL's counts as a data error")
 	}
 }

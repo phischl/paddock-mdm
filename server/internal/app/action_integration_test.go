@@ -24,9 +24,10 @@ import (
 var commitTrigger sync.Once
 
 type harness struct {
-	runner *app.ActionRunner
-	super  *pgx.Conn
-	org    uuid.UUID
+	runner  *app.ActionRunner
+	super   *pgx.Conn
+	org     uuid.UUID
+	orgPool *db.OrgPool
 }
 
 func newHarness(t *testing.T) harness {
@@ -75,9 +76,10 @@ func newHarnessWith(t *testing.T, opts ...app.RunnerOption) harness {
 	t.Cleanup(func() { _ = super.Close(ctx) })
 
 	h := harness{
-		runner: app.NewActionRunner(orgPool, platformPool, func(context.Context) string { return "corr-" + t.Name() }, opts...),
-		super:  super,
-		org:    uuid.Must(uuid.NewV7()),
+		runner:  app.NewActionRunner(orgPool, platformPool, func(context.Context) string { return "corr-" + t.Name() }, opts...),
+		super:   super,
+		org:     uuid.Must(uuid.NewV7()),
+		orgPool: orgPool,
 	}
 	_, err = super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Test', 'active')",
 		h.org, "t"+h.org.String()[24:])

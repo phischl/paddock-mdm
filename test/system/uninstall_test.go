@@ -52,11 +52,6 @@ func (w *uninstallWorld) packagesGone(t *testing.T) {
 	}
 }
 
-// vmAdmin is the test VMs' install administrator (PADDOCK_USER of test/vms) and acme's break-glass account; it keeps
-// passwordless sudo through /etc/sudoers.d/90-paddock, which names the user, not a group. The VMs have no vagrant
-// account: Himmelblau's NSS module answers for that name with a synthetic entry.
-const vmAdmin = "paddock"
-
 // inSudo reports whether an account is a member of the sudo group.
 func (w *uninstallWorld) inSudo(user string) bool {
 	return strings.Contains(" "+w.Must("id -nG "+user)+" ", " sudo ")

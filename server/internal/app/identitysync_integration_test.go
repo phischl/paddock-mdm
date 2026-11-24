@@ -54,6 +54,8 @@ type directory struct {
 	// deviceListings counts the listings of device login groups; deviceListFail makes them fail.
 	deviceListings int
 	deviceListFail error
+	// ensures counts the EnsureOrganization calls (PDK-1021).
+	ensures int
 }
 
 func newDirectory() *directory {
@@ -61,7 +63,13 @@ func newDirectory() *directory {
 }
 
 func (d *directory) EnsureOrganization(context.Context, string) (ports.OrgIdentityRefs, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ensures++
 	return ports.OrgIdentityRefs{}, d.fail
+}
+func (d *directory) DeleteOrganization(context.Context, string) (ports.OrgIdentityDeletion, error) {
+	return ports.OrgIdentityDeletion{}, errors.New("not used")
 }
 func (d *directory) CreateUser(context.Context, string, ports.NewIdentityUser) (string, error) {
 	return "", errors.New("not used")
@@ -69,6 +77,7 @@ func (d *directory) CreateUser(context.Context, string, ports.NewIdentityUser) (
 func (d *directory) UpdateUser(context.Context, string, string, string) error { return nil }
 func (d *directory) DeleteUser(context.Context, string) error                 { return nil }
 func (d *directory) RecoveryLink(context.Context, string) (string, error)     { return "", nil }
+func (d *directory) RevokeRecoveryLinks(context.Context, string) (int, error) { return 0, nil }
 func (d *directory) UserActive(context.Context, string) (bool, error)         { return true, d.fail }
 func (d *directory) LockUser(context.Context, string, string, bool) error     { return d.fail }
 func (d *directory) UnlockUser(context.Context, string, string, bool) error   { return d.fail }

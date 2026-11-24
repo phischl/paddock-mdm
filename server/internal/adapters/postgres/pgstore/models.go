@@ -180,6 +180,13 @@ type BackupKey struct {
 	RetiredAt          *time.Time
 }
 
+type BackupLeader struct {
+	ID         bool
+	Epoch      int64
+	Holder     string
+	AcquiredAt time.Time
+}
+
 type BackupRestorePlan struct {
 	ID             uuid.UUID
 	Kind           string
@@ -361,6 +368,7 @@ type Device struct {
 	CompiledOsVersionID         string
 	CompiledAgentVersion        string
 	DenialLockCheckedAt         *time.Time
+	UninstallReason             *string
 }
 
 type DeviceAlert struct {
@@ -473,6 +481,17 @@ type DeviceEventSeen struct {
 	ReceivedAt     *time.Time
 }
 
+type DeviceFleetBinding struct {
+	DeviceID         uuid.UUID
+	OrganizationID   uuid.UUID
+	PendingToken     *string
+	TokenReportedAt  *time.Time
+	HostID           *string
+	BoundAt          *time.Time
+	ResetAnnouncedAt *time.Time
+	SuspendedAt      *time.Time
+}
+
 type DeviceGroup struct {
 	ID                 uuid.UUID
 	OrganizationID     uuid.UUID
@@ -513,21 +532,40 @@ type DeviceIdentityKey struct {
 	CreatedAt      time.Time
 }
 
-type DeviceInventoryRef struct {
+type DeviceInventoryLeftHost struct {
 	DeviceID       uuid.UUID
 	OrganizationID uuid.UUID
-	ExternalID     string
-	LastSeenAt     *time.Time
-	OsVersion      string
-	FleetdVersion  string
-	SyncedAt       time.Time
-	HardwareVendor string
-	HardwareModel  string
-	HardwareSerial string
-	CpuBrand       string
-	CpuCores       int32
-	MemoryBytes    int64
-	DiskTotalBytes int64
+	HostID         string
+	Reason         string
+	LeftAt         time.Time
+	AttemptedAt    *time.Time
+	RemovedAt      *time.Time
+}
+
+type DeviceInventoryRef struct {
+	DeviceID              uuid.UUID
+	OrganizationID        uuid.UUID
+	ExternalID            string
+	LastSeenAt            *time.Time
+	OsVersion             string
+	FleetdVersion         string
+	SyncedAt              time.Time
+	HardwareVendor        string
+	HardwareModel         string
+	HardwareSerial        string
+	CpuBrand              string
+	CpuCores              int32
+	MemoryBytes           int64
+	DiskTotalBytes        int64
+	PolicyUpdatedAt       *time.Time
+	FleetEnrolledAt       *time.Time
+	FleetReenrolledAt     *time.Time
+	FleetClaimSince       *time.Time
+	FleetClaimReportedAt  *time.Time
+	FleetSilentSince      *time.Time
+	FleetSilentCheckinAt  *time.Time
+	FleetSilentReportedAt *time.Time
+	FleetResetHoldAt      *time.Time
 }
 
 type DeviceLoginAssignment struct {
@@ -700,6 +738,7 @@ type InventoryPolicyResult struct {
 	Passing        bool
 	UpdatedAt      time.Time
 	AlertedAt      *time.Time
+	FailingSince   *time.Time
 }
 
 type IpAllowlistEntry struct {
@@ -827,6 +866,19 @@ type NotificationPseudonymLookup struct {
 	ResolvedAt       *time.Time
 }
 
+type OffboardedDevice struct {
+	DeviceID         uuid.UUID
+	OrganizationID   uuid.UUID
+	Keys             json.RawMessage
+	OffboardedAt     time.Time
+	CommandEnvelopes json.RawMessage
+}
+
+type OffboardingTable struct {
+	TableName   string
+	DeleteOrder int32
+}
+
 type OpenbaoAutoUnseal struct {
 	ID                    int16
 	State                 string
@@ -850,13 +902,36 @@ type OpenbaoAutoUnseal struct {
 }
 
 type Organization struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Domains   []string
+	ID                          uuid.UUID
+	Slug                        string
+	Name                        string
+	Status                      string
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+	Domains                     []string
+	DeletionRequestedAt         *time.Time
+	DeletionRequestedBy         *string
+	DeletionReason              *string
+	DeleteAfter                 *time.Time
+	OffboardingStep             *string
+	OffboardingErrorCode        *string
+	DeletedAt                   *time.Time
+	IdpEnsuredAt                *time.Time
+	IdpEnsureRevision           *string
+	DeletionUninstallsIssued    *int32
+	DeletionUninstallsSkipped   *int32
+	DeletingCommittedAt         *time.Time
+	OffboardingWaitVxids        []string
+	OffboardingWaitTakenAt      *time.Time
+	RecoveryExports             int32
+	RecoveryExportsSince        *time.Time
+	OffboardingCounts           json.RawMessage
+	AuditRetirementRequestedAt  *time.Time
+	AuditFinalVerifiedAt        *time.Time
+	AuditFinalOutcome           *string
+	OffboardingDbOrder          *int32
+	OffboardingCursor           *string
+	OffboardingFailuresRecorded []string
 }
 
 type OrganizationDmsSetting struct {
@@ -903,6 +978,16 @@ type OrganizationMcpSetting struct {
 	AllowedOperations []string
 	UpdatedAt         time.Time
 	UpdatedBy         uuid.NullUUID
+}
+
+type OrganizationPatchSla struct {
+	OrganizationID uuid.UUID
+	CriticalDays   int32
+	HighDays       int32
+	MediumDays     int32
+	LowDays        int32
+	UpdatedAt      time.Time
+	UpdatedBy      uuid.NullUUID
 }
 
 type OrganizationPrivacySetting struct {
@@ -1040,6 +1125,12 @@ type PlatformMcpSetting struct {
 	AllowedOperations []string
 	UpdatedAt         time.Time
 	UpdatedBy         uuid.NullUUID
+}
+
+type PlatformMfaEnrolment struct {
+	ID             bool
+	FirstAttemptAt time.Time
+	SeededAt       *time.Time
 }
 
 type PlatformRoleMember struct {
@@ -1208,6 +1299,16 @@ type SoftwareRequest struct {
 	DecidedAt      *time.Time
 	DecisionReason *string
 	Justification  string
+	ReportedSeq    *int64
+}
+
+type SoftwareRequestWithdrawal struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+	EventSeq       int64
+	ReceivedAt     time.Time
 }
 
 type SoftwareSource struct {
@@ -1259,6 +1360,11 @@ type VulnerabilityFinding struct {
 	CvssVector        *string
 	FleetSeverity     *string
 	FleetFixedVersion *string
+}
+
+type VulnerabilitySlaSummary struct {
+	OrganizationID uuid.UUID
+	Day            time.Time
 }
 
 type VulnerabilitySummary struct {

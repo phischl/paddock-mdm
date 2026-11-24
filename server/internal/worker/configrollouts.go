@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
@@ -24,7 +23,7 @@ const configRolloutLockKey = 0x7061646420636672
 
 // metricConfigRollouts counts the configuration rollouts by status across organizations; no organization label
 // (plan M11 decision 33, amendment R2.15).
-var metricConfigRollouts = promauto.NewGaugeVec(prometheus.GaugeOpts{
+var metricConfigRollouts = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "paddock_config_rollouts",
 	Help: "Staged configuration rollouts by status across all organizations, as of the last rollout round.",
 }, []string{"status"})

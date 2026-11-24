@@ -21,6 +21,12 @@ var msgIDAliases = map[Code]string{ //nolint:gosec // audit code aliases, not cr
 	CodeDeviceGroupMaintenanceWindowRemoved:      "device_group.window_removed",
 	CodeSoftwareRepositoryCredentialRotated:      "software_repository.cred_rotated",
 	CodeDeviceSoftwareRequestWithdrawn:           "device.sw_request_withdrawn",
+	CodeOrganizationDeletionStepCompleted:        "organization.deletion_step_done",
+	CodeOrganizationDeletionStepFailed:           "organization.deletion_step_fail",
+	CodePlatformOffboardedDeviceUninstalled:      "platform.offboarded_uninstalled",
+	CodePlatformDeletedOrganizationAuditRead:     "platform.deleted_org_audit_read",
+	CodeOrganizationAuditRetirementRequested:     "organization.audit_retire_req",
+	CodeDeviceTamperAgentBinaryChanged:           "device.tamper_agent_bin_changed",
 }
 
 // MsgID returns the RFC 5424 MSGID of c: the code itself when it fits MaxMsgIDLen, its alias otherwise.

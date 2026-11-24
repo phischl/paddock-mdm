@@ -17,7 +17,8 @@ x-paddock-logging: &paddock-logging
 services:
   audit-postgres:
     # PostgreSQL refuses a key file that others can read; the entrypoint copies the bind-mounted key with mode 0600
-    # for the postgres user before it starts the server with TLS.
+    # for the postgres user before it starts the server with TLS. This command replaces the one of compose.audit.yaml, so
+    # it repeats its max_connections.
     command:
       - sh
       - -c
@@ -26,6 +27,7 @@ services:
         install -m 600 -o postgres -g postgres /run/secrets/audit_postgres_tls_key /var/run/postgresql/tls/server.key &&
         exec docker-entrypoint.sh postgres -c ssl=on -c ssl_min_protocol_version=TLSv1.2
         -c ssl_cert_file=/run/secrets/audit_postgres_tls_crt -c ssl_key_file=/var/run/postgresql/tls/server.key
+        -c max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}
     secrets: [audit_postgres_tls_crt, audit_postgres_tls_key]
     ports:
       # The api's read-only audit view (paddock_audit_reader).

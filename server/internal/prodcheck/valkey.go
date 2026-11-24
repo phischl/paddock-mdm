@@ -23,11 +23,14 @@ const (
 	fleetRedisConfFile = "fleet-redis.conf"
 )
 
-// valkeyUsers maps each role service to its Valkey user (plan M12h §14.6.2).
+// valkeyUsers maps each role service to its Valkey user (plan M12h §14.6.2). The ingest workers are replicas of the
+// worker role in another mode (plan M19 D1.1) with the worker's PostgreSQL role, RabbitMQ user and AppRole, so they
+// authenticate as the worker's Valkey user too.
 var valkeyUsers = map[string]string{
 	"paddock-api":               "api",
 	"paddock-gateway":           "gateway",
 	"paddock-worker":            "worker",
+	"paddock-worker-ingest":     "worker",
 	"paddock-compiler":          "compiler",
 	"paddock-escrow-reader":     "escrow_reader",
 	"paddock-revocation-issuer": "revocation_issuer",
@@ -114,6 +117,7 @@ func checkValkeyUsers(c Config) Result {
 				want = append(want, valkeySecret(u))
 			}
 			slices.Sort(want)
+			want = slices.Compact(want)
 			got := slices.DeleteFunc(valkeyPasswordSecrets(s), func(n string) bool { return n == valkeySecret(valkeyDevUser) })
 			if !slices.Equal(got, want) {
 				f = append(f, fmt.Sprintf("%s: mounts %v, want %v", name, got, want))

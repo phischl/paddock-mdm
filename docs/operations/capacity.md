@@ -14,7 +14,7 @@ with the same scenarios before a large rollout.
 | Requirement | Target |
 | --- | --- |
 | N1 check-in | 1 000 check-ins/s against **one** gateway replica, p99 latency < 200 ms, error rate < 0.1 % |
-| N2 ingest | 5 000 device events/s with 3 worker replicas, consumer lag of `ingest.event` < 60 s |
+| N2 ingest | 5 000 device events/s with one worker and two ingest workers (`PADDOCK_WORKER_INGEST_REPLICAS=2`) at `PADDOCK_PG_MAX_CONNECTIONS=150`, consumer lag of `ingest.event` < 60 s (architecture §2.3, amendment 2026-11-14) |
 
 ## Results
 
@@ -227,6 +227,97 @@ including the last, `q`, one and two kinds, a kind without matches, `device_id`)
 no table scan refers to a query parameter. The HTTP figures after this change are still to be measured once it is
 merged and deployed.
 
+*Note, 2026-11-16 (PDK-1079, ADR 0055):* the organization pools now plan every execution, so they no longer run
+generic plans and the trap described above no longer applies to them (see Query planning). The rewrite stays as
+defence in depth, and `TestAttentionDevicesGenericPlan` still pins its plan property.
+
+## Query planning
+
+Since PDK-1079 (ADR 0055) the pools that open organization transactions run pgx's `QueryExecModeCacheDescribe`: pgx
+caches only a statement's description and sends every execution as an unnamed statement, so PostgreSQL plans it with
+the real parameter values and the organization of the transaction. A reused plan built for another organization was
+catastrophic before: a statement prepared by pgx's default statement cache keeps a generic plan, and a statement
+without parameters (the organization comes from `paddock.org_id`, not from a parameter) never gets a custom plan. On
+the development stack (PostgreSQL 18.6, one organization of 70 000 devices next to about 400 small ones), a plan built
+for a small organization took more than 5 s for the large one in the attention list and count, the outdated-schema
+and the config rollout device lists, and 300 to 430 ms instead of 0.03 to 0.06 ms in the event-gap lookups; 29 more
+queries were 150 to 1 700 times slower in one direction or the other.
+
+Pool modes (`db.openPool`; pinned by `TestPoolQueryExecModes`):
+
+| Pool | Roles | Mode |
+| --- | --- | --- |
+| `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`), `jit = off` |
+| `OrgPool.WithStatementCache()` view (same connections) | worker `ingest.heartbeat` and `ingest.event` consumers, full and ingest mode | listed statements `CacheStatement`, all others per execution; `jit = off` |
+| `PlatformPool` and its lock pool | platform endpoints, leader locks | statement cache |
+| `AuditReader`, `AuditWriterPool` | audit reader and writer | statement cache |
+| `RelayPool`, `UnsealerPool`, `BackupPool` | outbox relay, unsealer, backup and restore | statement cache |
+| health pools (`Options.HealthConn`) | readiness pings | statement cache |
+| migrations | `paddock-server migrate` (own connection) | unchanged |
+
+Planning cost, measured read-only on the development stack for PDK-1079: median 0.11 ms per query, p99 3.9 ms,
+maximum 5.6 ms. The round trips are unchanged (one per query), so plan M17 amendment j's "no extra statement per
+transaction" still holds. `TestOrganizationPoolPlansPerExecution` seeds 70 000 devices and bounds each of the former
+catastrophic queries to 1 s in the large organization after six runs in a small one on the same connection.
+
+Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): +28 % CPU seconds per
+1 000 events (median, postgres +36 %; two pairs, +32 % and +24 %), far above the 5 % budget. This led to the
+statement-cache view below.
+
+The heartbeat and event ingest keeps cached statements (ADR 0055 amendment 2026-11-15 (2), PDK-1079b): planning its
+short, keyed statements per execution cost about 30 % more CPU per event in the first N2 measurement. The worker's
+`ingest.heartbeat` and `ingest.event` consumers run on `OrgPool.WithStatementCache()`, a view of the worker's
+organization pool with the same connections, role, offboarding gate and `jit = off`; it adds no connection. The view
+runs a statement as a named, cached one only if its sqlc name is on the closed allow list `ingestStatementCached`
+(`server/internal/platform/db/statementcache.go`). Since ADR 0055 amendment 2026-11-16 (3) (PDK-1079d) a name is
+listed only if it is an insert (`INSERT … VALUES` without `SELECT`, a conflict target only on a unique index:
+`InsertDeviceEventSeen`, `InsertDeviceEventDropped`, `InsertAction`, `InsertOutbox`, `InsertDeviceLoginEvent`,
+`InsertAgentUpdateReport`, `UpsertDeviceStatus`, `SetDeviceLoginState`, `UpsertDeviceUserSeen`) or a device-keyed
+statement on a table without an index led by `organization_id` that lacks `device_id` in second place
+(`MaxDeviceEventSeenBefore`, `DeleteDeviceEventSeenBefore` on `device_event_seen`, `DeleteDeviceEventDropped` on
+`device_event_dropped`). Lookups of `device` and `device_status` by their primary key, `CloseOpenDeviceEventGaps` and
+`FinishAction` are planned per execution again: when an `ANALYZE` sample misses a small organization, a generic plan
+built there takes an index led by `organization_id` and, in a 70 000-device organization, read about 1 050 to 2 300 shared
+buffers instead of a handful. Every other statement, also on the view, is planned per execution. Migration 00158
+replaced the organization-only indexes of the three event tables by `(organization_id, device_id)`, so a generic plan
+that takes the organization index still reads only one device's rows (7 000 shared buffers before, 13 after, for
+`MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewAdmissionRule` checks the rule against the query files
+and the schema's indexes; `TestIngestViewGenericPlans` analyzes every organization table without the small
+organization's rows, forces generic plans and bounds every listed read and write, and the two event-gap lookups, to
+100 shared buffers in a 70 000-device organization.
+
+Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2;
+5 000 events/s offered, two ingest workers, 150 connections). These series measured the list as merged in PDK-1079b;
+the shorter list of PDK-1079d needs a new measurement (ADR 0055 amendment 2026-11-16 (3) decision 13):
+
+- Series 1, view against the build without per-execution planning: +0.7 % (median of three alternating pairs, 1.715
+  against 1.703 CPU seconds per 1 000 events; pairs −15.1 %, +6.5 %, −1.0 %). Within the 5 % budget.
+- Series 2a, the `(organization_id, device_id)` event-table indexes of migration 00158 against the organization-only
+  ones: −20.7 % (postgres −31.5 %). The composite indexes are cheaper.
+- Series 2b, `outbox_org_idx` (PDK-1068) present against absent: median +10.3 %, but the pairs range from −35 % to
+  +55 % with a mean of +5.9 % and the present variant always ran second on a host whose load drifted, so the
+  measurement does not separate the index's cost from noise. The index stays for the offboarding database step; a
+  re-measurement with randomized order on a quiet host follows (decisions recorded with the release).
+
+The organization pools also open their connections with `jit = off` (connection runtime parameter, no statement per
+transaction; ADR 0055 amendment 2026-11-15, PDK-1081); the other pools keep the server's default. At 70 000 active
+devices that all have a status row, the attention view's plan costs about 630 000, above PostgreSQL's
+`jit_above_cost` (100 000) and `jit_optimize_above_cost`/`jit_inline_above_cost` (500 000). With JIT, every execution
+spent about 2.3 s compiling (2.7 s in total, 0.3 to 0.4 s without JIT), whatever the plan cache does, and the worker's
+findings loop would pay it in every round. The organization roles run short, index-driven queries where compilation
+does not pay off. `TestOrganizationPoolPlansPerExecution` runs with that data and the production pool configuration,
+and `TestPoolQueryExecModes` asserts `jit = off` on the organization pools and the default on the others.
+
+Residual risk until alpha.12 (ADR 0055 amendment 2026-11-16 (4) decision 17): PostgreSQL's foreign-key check on
+`(organization_id, id)` can read a whole organization per written row while that organization is missing from the
+statistics of the parent table, for example right after it grew by thousands of devices or users. Migration 00160
+makes autoanalyze of `device`, `app_user` and `user_group` start after 1 % changed rows plus 50 (instead of 10 %), so
+the statistics catch up about a minute after the burst (measured on PostgreSQL 18.6: 58 s after 10 000 new devices
+next to 100 000, and the check fell from 2 065 to 6 buffers); `TestParentAutoanalyzeSettings` pins the settings. The
+settings are table storage parameters and survive a pgBackRest restore. Runbook: after a large enrolment or identity
+import, if check-ins or writes of that organization slow down, run `ANALYZE device;` (or `ANALYZE app_user,
+user_group;`) in the `paddock` database.
+
 ## Authentik web workers
 
 Every portal login, step-up, device login and every call of the worker's identity rounds is a request to
@@ -277,6 +368,79 @@ empty index and needs none of this.
 - **Planning figure:** about 1.5 min per million events in the index. Count the events before an upgrade with
   `SELECT count(*) FROM audit_event` on `paddock_audit`.
 
+## Identity rounds
+
+The worker reconciles the identity provider every 10 minutes (`IdentitySync.Reconcile`: `EnsureOrganization` per
+active organization, plus the device login groups) and the admin accounts every 5 minutes. Every call is a request to
+`authentik-server` and a burst of queries on `authentik-postgres`, also while nobody uses the portal. The cost grows
+with the number of organizations, so it is measured at **250 organizations** (PDK-1020) and again after every change
+of the rounds (PDK-1021 repeats it with the same procedure).
+
+### Procedure
+
+Run it on a development stack only (`make load-orgs` refuses a stack with production markers, like `make
+load-identities`), with the worker as the only load: no portal sessions, no load test, no other Paddock stack on the
+host. Record the commit (`git rev-parse --short HEAD` of the image's checkout) and the hardware next to the figures.
+
+1. **Seed.** Log in to the portal as the platform admin, copy the value of the `paddock_session` cookie (browser
+   developer tools) into `bin/load/platform-session` (a file inside the checkout, mode 0600), then
+
+   ```sh
+   make load-orgs COOKIE_FILE=bin/load/platform-session N=250
+   ```
+
+   creates the organizations `load-001` … `load-250` through `POST /api/platform/v1/organizations`
+   (`test/load/cmd/orgseed`). It is repeatable: organizations that exist are counted, not recreated. The session
+   expires; use a fresh cookie for a second run. Sign out of the portal afterwards so the window below has no activity.
+   `orgseed` creates no devices: the platform principal cannot act inside an organization, and a login assignment
+   needs a device of that organization. The figures therefore measure `EnsureOrganization` and the admin-account
+   round, not the per-device group calls (see "Limits of the baseline").
+2. **Settle.** Wait until the worker log shows a finished reconcile round (`docker logs <paddock-worker>` ends with
+   the last `authentik organization ensured` line of an organization and stays quiet) so that the first round after
+   the seeding (which creates groups) is not part of the window.
+3. **Measure 10 minutes without portal activity.** Note the start time `T0` (UTC, `date -u +%Y-%m-%dT%H:%M:%SZ`),
+   start `docker stats --format '{{.Name}} {{.CPUPerc}}' <authentik-postgres>` in a second shell, sampling every 2 s
+   into a file (`while sleep 2; do docker stats --no-stream --format '{{.CPUPerc}}' <authentik-postgres>; done >
+   bin/load/pg-cpu.txt`), and wait 10 minutes. The window covers one reconcile round and two admin-accounts rounds.
+4. **Count the requests by path.** There is no Paddock metric for Authentik requests; Authentik's access log names
+   every API request with its path:
+
+   ```sh
+   docker logs <authentik-server> --since <T0> --until <T0+10m> 2>&1 | grep '"paddock-service"' \
+     | grep -o '"event": "/api/v3/[a-z_/]*' | sort | uniq -c | sort -rn
+   ```
+
+   Sum the counts for the total. (`grep '"paddock-service"'` keeps the requests of Paddock's service account.)
+5. **CPU average.** `awk '{ sub("%",""); s+=$1; n++ } END { printf "%.1f%%\n", s/n }' bin/load/pg-cpu.txt` (percent of
+   one core).
+6. **Round duration.** In the worker log, the time between the first and the last `authentik organization ensured`
+   line of the reconcile round inside the window.
+7. **Repeat** steps 2–6 once; the two runs must agree within 10 %. Record the mean.
+
+### Cleanup
+
+Offboard the organizations `load-001` … `load-250` through organization offboarding (M17) after the measurement,
+with a grace period of 0 (development and test stacks only). Never run the measurement on a stack whose data must be
+kept and that cannot be offboarded: use a separate scratch stack instead, and remove it afterwards.
+
+### Baseline at 250 organizations
+
+PLACEHOLDER (PDK-1020, measurement still open): the lead fills this table after running the procedure above.
+
+| Item | Baseline (current code) | After PDK-1021 |
+| --- | --- | --- |
+| Commit | _tbd_ | _tbd_ |
+| Hardware | _tbd_ | _tbd_ |
+| Authentik requests in 10 min, total | _tbd_ | _tbd_ |
+| of which per path (`/api/v3/...`) | _tbd_ | _tbd_ |
+| `authentik-postgres` CPU average | _tbd_ | _tbd_ |
+| Reconcile round duration | _tbd_ | _tbd_ |
+
+### Limits of the baseline
+
+Organizations without devices do not exercise `DeviceLoginGroups`; with devices the round costs 14 + 1 requests per
+organization instead of 14 (PDK-570), so the baseline is a lower bound of the real cost.
+
 ## Backup repository
 
 The local backup repository (volume `backup-repo` of the control-plane host, `docs/operations/backup.md`) is the one
@@ -323,7 +487,7 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `postgres` | control plane | 2 GiB | `PADDOCK_POSTGRES_MEM_LIMIT` | 190–245 MiB |
 | `authentik-postgres` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT` | 210–215 MiB |
 | `audit-postgres` | audit | 1 GiB | `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT` | 50–75 MiB |
-| `valkey` | control plane | 512 MiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
+| `valkey` | control plane | 1 GiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
 | `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
 | `fleet-mysql` | control plane | 2 GiB | `PADDOCK_FLEET_MYSQL_MEM_LIMIT` | 645–655 MiB |
 | `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
@@ -334,12 +498,34 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
 | `authentik-server` | control plane | 2 GiB | `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` | 860 MiB–1.05 GiB idle with 4 web workers; 1.1 GiB peak at the first start |
 | `authentik-worker` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT` | 265–330 MiB; 370 MiB peak at the first start |
+| `paddock-worker-ingest` | control plane | 1 GiB per replica | `PADDOCK_WORKER_INGEST_MEM_LIMIT` | not measured yet (no replica by default) |
 
 The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
 a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
 larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRES_MEM_LIMIT` when you raise
-`shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
-reached there points to a leak, not to a larger installation.
+`shared_buffers` or the number of connections.
+
+Valkey grows with the devices it serves: every live device keeps its identity key, counters and pending commands, and
+every device of a deleted organization that has not reported its removal keeps its key and its signed uninstall for
+365 days after the deletion (about 2.3 KB each). Size the limit by
+
+`PADDOCK_VALKEY_MEM_LIMIT ≥ 2 × (64 MiB + live devices × 2.0 KB + offboarded devices × 2.3 KB)`
+
+Count the devices of an organization from the moment its deletion runs as offboarded devices. The deletion frees each
+device's live entries before it writes its offboarded ones, page by page, so a deleting organization never holds both.
+
+Measured on the development stack (plan M17 amendment s): 220 MiB for 110 000 live devices, 175 MiB more once their
+organization was deleted and they were handed over. For example, 70 000 live plus 70 000 offboarded devices need
+2 × (64 MiB + 137 MiB + 157 MiB) ≈ 716 MiB (a KB here is 1 024 bytes), so the default of 1 GiB fits. The entrypoint sets Valkey's `maxmemory` to
+60 % of the container's limit with the policy `noeviction`: at that point Valkey refuses writes that need memory (the
+cache sync and new sessions fail and log it) but keeps serving reads and deletions, so check-ins of known devices and
+an organization deletion go on; it never evicts a key, because an evicted counter or nonce weakens replay protection
+and an evicted device key looks like an outage. The remaining 40 % is the copy-on-write headroom of an AOF rewrite. A
+container without a limit gets no `maxmemory` (the entrypoint logs one line). `./paddock check --online` warns
+(`valkey: memory headroom`) when Valkey uses more than half of its limit. While Valkey is at its ceiling, a device's
+suspension or revocation cannot be written to its cache entry either; the device still cannot authenticate, because the
+gateway's nonce write is refused too, and the next cache reconcile (at most a minute after memory is free) writes the
+new status.
 
 The vulnerability figure for `fleet` is the cgroup peak (`memory.peak`, page cache included) of one run of
 `fleet vuln_processing` that downloaded every feed into an empty volume (850 MiB on disk), measured on a scratch stack
@@ -359,8 +545,130 @@ RustFS's resident memory grows with the objects it serves: 90 MiB on a fresh vol
 development stack's `audit-rustfs` after many acceptance runs (anonymous memory; its cgroup's `memory.peak`, page
 cache included, reached 7.4 GiB, which the kernel reclaims below the limit). When an object store is killed at its
 limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` (or
-`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
+`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together.
+
+The control plane's `rustfs` needs **1 GiB of `PADDOCK_RUSTFS_MEM_LIMIT` per 20 000 objects, at least 2 GiB**. Count
+every bundle version that is stored, plus the escrow objects (one LUKS header per encrypted disk, diagnostics while
+they are retained). A device gets a new bundle version with every recompile, and until it is pruned every version stays:
+a test installation held about 69 per device after twelve days. `./paddock bundles prune` (a dry run) prints the number
+it would remove; `./paddock bundles prune --yes` removes every version but the newest two per device and anything younger
+than 10 minutes. Run it after large recompiles and in the monthly capacity review. A `--yes` run is audited
+(`platform.bundle_versions_pruned`, system actor `paddock-server admin`; the person is known from the host's own access
+control, as for RR-90); the dry run is not. The portal's bundle history stays. After an in-place restore, do not run `bundles prune --yes` until the recompile that follows it has finished. Automatic pruning is planned for
+0.1.0-alpha.12. The figure comes from the §62 measurement of plan M17 amendment s on RustFS 1.0.4: at 2 GiB the
+store was killed in a loop with 110 000 bundle objects (330 000 directories), from RustFS's own scanner, and stayed
+below the limit from about 55 000 objects on; 20 000 per GiB leaves headroom. For example, 70 000 devices with two
+bundle versions (the floor after a prune; it grows by one per device with every recompile until the next prune) and one
+LUKS header each hold 210 000 objects and need 11 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
 small.
+
+After a prune or an organization deletion that removed more objects than the limit is sized for, follow section
+"Object store after a large deletion": the store can keep being killed although few objects are left (RR-147).
+
+## Object store after a large deletion
+
+RustFS keeps a data-usage cache per bucket in its volume, `.rustfs.sys/buckets/<bucket>/.usage-cache.bin` and its copy
+`.usage-cache.bin.bkp`. The cache grows with the objects the bucket held when RustFS last wrote it, and RustFS loads it
+at every start. After a large deletion (`./paddock bundles prune --yes`, or the step `objects` of an organization
+deletion, which removes the organization's bundles and escrow objects) the cache still describes the old, larger
+bucket. If it is larger than the store can load within `PADDOCK_RUSTFS_MEM_LIMIT`, the kernel kills RustFS before its
+scanner writes a fresh one, Docker restarts it, and the loop does not end by itself (RR-147). Measured on the
+development stack with RustFS 1.0.4: a 229 MB cache of `paddock-bundles` from about 400 000 objects killed the store at
+2 GiB about every 2 minutes with about 10 000 live objects and no client load; after the procedure below it stayed between
+155 and 295 MiB and wrote a cache of 63 KB.
+
+While the store loops, every object-store operation fails or is cut off: uploads of recompiled bundles and escrow
+objects, downloads of bundles and agent artifacts, a running prune (failed batches with 503) and the organization
+deletion's step `objects` (`object_store_unavailable`, retried every round). Devices keep working with their current
+configuration and fetch the new one once the store is back. The procedure moves cache files only; it never touches objects,
+and moving the files back undoes it.
+
+**When.** Run it whenever the signs below appear. Run it pre-emptively after a prune or an organization deletion that
+removed more than 20 000 objects per GiB of `PADDOCK_RUSTFS_MEM_LIMIT` (40 000 at the default of 2 GiB): the bucket
+then held more objects before the deletion than the limit is sized for, and its cache describes that bucket. This
+trigger is a conservative one taken from the sizing rule; the one measured loop followed a bucket of about 400 000 objects. The prune
+prints the number it deleted; an organization deletion records it as the count of
+`organization.deletion_step_completed` for the step `objects` and as `objects_deleted` in `organization.deleted`. Wait
+until the prune has returned or the step `objects` has completed. The store is down for about a minute; run the
+procedure outside the busiest hours.
+
+**Recognise.** On the control-plane host:
+
+```bash
+id="$(./paddock compose ps -q rustfs)"
+./paddock ps rustfs                                   # "Restarting" or "unhealthy", or a recent start time
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}' "$id"
+docker exec "$id" cat /sys/fs/cgroup/memory.events    # oom_kill rises
+journalctl -k --since -1h | grep -i 'killed process.*(rustfs)'
+docker stats --no-stream "$id"                        # MEM USAGE climbs to the limit within minutes, without load
+```
+
+The loop is this case when the restart count keeps rising, RustFS is OOM-killed, and its memory reaches the limit within
+a few minutes of each start while no prune, deletion or other client load runs.
+
+**Fix.** Stop the store, list the caches, move the caches of the affected bucket aside inside the volume, start it:
+
+```bash
+./paddock compose stop rustfs
+./paddock compose run --rm --no-deps -T --entrypoint sh rustfs -c \
+  'du -sk /data/.rustfs.sys/buckets/*/.usage-cache.bin*'
+./paddock compose run --rm --no-deps -T --entrypoint sh rustfs -c '
+  set -eu
+  aside=/data/.rustfs.sys/usage-cache-aside-$(date -u +%Y%m%dT%H%M%SZ)
+  for bucket in "$@"; do
+    mkdir -p "$aside/$bucket"
+    for f in .usage-cache.bin .usage-cache.bin.bkp; do
+      src="/data/.rustfs.sys/buckets/$bucket/$f"
+      if [ -e "$src" ]; then mv "$src" "$aside/$bucket/"; fi
+    done
+  done
+  du -sk "$aside"/*/.usage-cache.bin*' sh paddock-bundles
+./paddock compose start rustfs
+```
+
+End the move command with the name of every bucket whose cache the listing shows at tens of megabytes or more:
+`paddock-bundles` after a prune, `paddock-bundles paddock-escrow` after an organization deletion if both are large.
+The commands run in the store's own image and as its own user, so the files keep their owner. Keep the printed `usage-cache-aside-…` directory
+at least until the store has run a day without a restart; it holds no object data.
+
+**Verify.** Watch the store for 15 minutes:
+
+```bash
+id="$(./paddock compose ps -q rustfs)"
+./paddock ps rustfs                                   # healthy
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}}' "$id"   # stays 0 false
+docker stats --no-stream "$id"                        # well below the limit
+./paddock compose exec -T rustfs sh -c 'du -sk /data/.rustfs.sys/buckets/*/.usage-cache.bin'
+```
+
+RustFS writes the new cache within a few minutes, at first in passes of a few MB and then at the size of the live
+bucket (63 KB for about 10 000 objects in the measurement above). Then repeat a prune that the loop interrupted; an
+organization deletion continues by itself.
+
+If the store still loops, the live objects exceed the sizing rule: raise `PADDOCK_RUSTFS_MEM_LIMIT` and the host's RAM
+(section "Memory limits") and apply it with `./paddock up`. Moving the files back into the bucket's directory while the
+store is stopped restores the previous state; it is needed only to hand the old cache to an analysis, because RustFS
+rebuilds the cache from the objects.
+
+## Organization deletion
+
+The deletion request issues every active device's uninstall before it answers `202`, within a budget of 2 minutes
+(plan M17 amendment t point 4). Its duration grows with the organization's devices, faster than linearly:
+
+| Devices | Request duration (development stack) |
+| --- | --- |
+| 110 000 | 9.2 s |
+| 218 034 | 27.3 s |
+
+- The request is **supported up to about 250 000 devices per organization**.
+- Above that, or behind a proxy whose read timeout is below 60 s, raise the proxy's read timeout to at least 120 s for
+  `/api/platform/`. The server's own write timeout is 120 s. The bundled Caddy sets no response timeout, and
+  `deploy/compose/nginx/paddock.conf.example` sets 300 s.
+- A request that timed out at the client is either complete or withdrawn as a whole: when the request ends early,
+  the server cancels the issue and withdraws the deletion. Read the organization's status before you repeat the
+  request.
+- The deletion steps that run after the grace period have no such limit: every step whose work grows with the
+  organization yields and continues in the next round.
 
 ## PostgreSQL connection budget
 
@@ -376,6 +684,7 @@ Control-plane database (`postgres`):
 | --- | --- | --- |
 | `paddock-api` | organization 8, platform 4 | 12 |
 | `paddock-worker` | organization 8, platform 8, leader locks 12, readiness 2 | 30 |
+| `paddock-worker-ingest` (per replica, none by default) | organization 8, platform 2, readiness 1 | 11 |
 | `paddock-notifier` | notifier 8, platform 2 | 10 |
 | `paddock-compiler` | 8 | 8 |
 | `paddock-backup` | backup 4, platform 3 | 7 |
@@ -386,18 +695,48 @@ Control-plane database (`postgres`):
 | operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
 
 Together the long-running roles of one control plane hold at most **81** connections, 85 while an operator command
-runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`. The worker runs 19
-rounds that each hold a leader lock connection for their whole duration; with 12 lock connections a round that finds
+runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`: at the default 100
+the budget of `./paddock check` (below) is used up exactly. The worker runs 20
+rounds that each hold a leader lock connection for their whole duration (the organization deletion round of M17 is
+the 20th; it adds no pool and no connection); with 12 lock connections a round that finds
 them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
 organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
 round such as commands or escrow waits only when they all run at once. A further api replica adds 12 and uses up the
-spare. A further worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 30 and does
-not fit: the budget then holds only while not every pool is full at once, and otherwise roles fail with
-`too many clients already`.
+spare. A further full worker replica (`--scale paddock-worker=N`) adds up to 30 and does not fit: the budget then
+holds only while not every pool is full at once, and otherwise roles fail with `too many clients already`, and it
+would run every round a second time for nothing, since a leader lock lets only one replica run each.
 
-Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
-restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not
-possible because of insufficient parameter settings").
+For more ingest throughput (N2) add ingest workers instead: set `PADDOCK_WORKER_INGEST_REPLICAS=2` in the bundle's
+`.env` (the service `paddock-worker-ingest` declares `deploy.replicas: ${PADDOCK_WORKER_INGEST_REPLICAS:-0}`, so
+`./paddock up`, upgrades and restores keep the number). An ingest worker (`PADDOCK_WORKER_MODE=ingest`) runs only
+the queue consumers (enrollment, heartbeats, events, issued commands, command results, escrow), no round and no
+leader lock, holds at most 11 connections and does not receive the Authentik, Fleet or bundle-bucket credentials
+(it shares the worker's OpenBao login); its `/readyz` answers
+`ready mode=ingest`. Two of them add 22 connections, 103 in all, which exceeds the default of 100: they need
+`PADDOCK_PG_MAX_CONNECTIONS=150` (see the restore and rollback notes of that setting before raising it).
+
+Raise `max_connections` only through `PADDOCK_PG_MAX_CONNECTIONS` in `.env` (default 100; both databases start with
+`-c max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}`), never with a `-c` of your own or a mounted configuration
+file. PostgreSQL writes the value into its WAL and into every backup, and a database restored onto a server that starts
+with a lower value pauses its recovery and stays read-only ("hot standby is not possible because of insufficient
+parameter settings"). Therefore:
+
+- **Restores start with the backup's value.** `./paddock restore` (and the rollback's restore from 0.1.0-alpha.11 on)
+  reads `max_connections` from the restored cluster's control file (`pg_controldata`) before its first start and starts
+  it with the larger of that value and `PADDOCK_PG_MAX_CONNECTIONS`, logging both. The next `./paddock up` starts the
+  recovered database with the configured value again; set `PADDOCK_PG_MAX_CONNECTIONS` to the logged value to keep it.
+- **No rollback to 0.1.0-alpha.10 above 100.** That release starts PostgreSQL with 100 whatever `.env` says; alpha.11's
+  `./paddock rollback` refuses it while `PADDOCK_PG_MAX_CONNECTIONS` is above 100: set it to 100 (or remove it) in
+  `.env` and run `./paddock rollback` again. The rollback restores the pre-upgrade backup, which the previous release
+  took at its own setting.
+
+`./paddock check` computes the budget from the effective configuration (`docker compose config`, which resolves the
+replicas of `.env`): each long-running role's maximum from the table above times its replicas, against
+`max_connections` less 3 for the superuser, 12 for pgBackRest and `paddock-migrate` and 4 for one operator command
+(81 at the default 100). The item `postgres: connection budget` FAILs (and the check exits 1) above that and WARNs with
+fewer than 5 connections to spare: the default configuration warns with 79 of 81, with the automatic unseal 81 of 81;
+both are accurate and exit 0. The maxima live in one table in
+`deploy/bundle/paddock` (`PG_ROLE_MAX_CONNS`); a test compares it with the pools in `server/cmd/paddock-server`.
 
 The audit database (`audit-postgres`) keeps the same default: the api's audit reader (8), the audit writer (8 per
 replica), the notifier's audit reader (2) and an operator command (`paddock-server audit …` 8, the restore's escrow
@@ -413,7 +752,7 @@ legitimate request; a request beyond them is refused, not queued.
 | Request body, `admin.` | 2 MiB; 256.5 MiB for the platform uploads (a stored package of at most 256 MiB with its multipart framing) | Caddy | 413 from the edge |
 | Request body, `auth.`, `device.`, `bundles.` | 1 MiB (`bundles.`: 33 MiB for an escrowed LUKS header) | Caddy | 413 from the edge |
 | Request body, `fleet.` | 64 MiB | Caddy | 413 from the edge |
-| Reading a request (api, gateway, escrow-reader) | headers 10 s, whole request 60 s | Go server | connection closed; a body sent at 1 byte/s ends after 60 s (about 120 s when the server answers a POST, PUT, PATCH or DELETE successfully without reading the body: residual risk RR-131) |
+| Reading a request (api, gateway, escrow-reader) | headers 10 s, whole request 60 s | Go server | connection closed; a body sent at 1 byte/s ends after 60 s |
 | Writing a response (api, gateway, escrow-reader) | 120 s; 30 min for agent release and package uploads; the audit export download 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h | Go server | connection closed |
 | Idle keep-alive connection | 120 s | Go server | connection closed |
 | Requests per minute | `PADDOCK_RATELIMIT_*`, `PADDOCK_DEVICE_PER_IP_LIMIT` (`install.md` section 4) | api, gateway | 429 `rate_limited` |
@@ -437,10 +776,13 @@ per minute) sees a fleet instead of one load generator. The gateway honours that
 rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
 1. **Identities.** Create auto-approving enrollment tokens in a dedicated organization (at most 1 000 devices per
-   token, so 10 tokens for 10 000 devices) and save each token's enrollment configuration as JSON. Then
+   token, so 10 tokens for 10 000 devices) and save each token's enrollment configuration as JSON:
+   `make load-enrol-configs ORG=load-enrol TOKENS=10 USES=1000` creates the organization if it is missing and writes
+   `bin/load/token-1.json …` (git-ignored; it signs in like `make dev-seed` and refuses production like
+   `load-identities`). Then
 
    ```sh
-   make load-identities CONFIGS='token-1.json … token-10.json' COUNT=10000
+   make load-identities CONFIGS='bin/load/token-1.json … bin/load/token-10.json' COUNT=10000
    ```
 
    enrolls the devices through the real enrollment API (`test/load/cmd/identities`) and writes their IDs and keys to
@@ -455,8 +797,10 @@ rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
    ramps to `RATE` during `WARMUP`, then holds it for `DURATION`; thresholds apply to the held phase only. Devices
    report the bundle they were offered as applied, so the held phase measures steady-state check-ins.
-3. **Ingest (N2).** Scale the workers to 3 replicas (`docker compose … up -d --scale paddock-worker=3`), start the
-   observability profile (`make up` does) and run
+3. **Ingest (N2).** Set `PADDOCK_PG_MAX_CONNECTIONS=150` and `PADDOCK_WORKER_INGEST_REPLICAS=2` in
+   `deploy/compose/.env` and start the stack again (two ingest workers; each answers `ready mode=ingest`, for example
+   `docker compose … exec prometheus wget -qO- http://worker-ingest-ops:9090/readyz`), start the observability profile
+   (`make up` does) and run
 
    ```sh
    make load-test SCENARIO=ingest EVENTS_PER_S=5000 BATCH=50 VUS=200 DURATION=5m DRAIN=2m

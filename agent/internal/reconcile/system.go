@@ -55,6 +55,9 @@ func (o OS) WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid
 // Remove implements System.
 func (o OS) Remove(path string) error { return fsutil.Remove(o.path(path)) }
 
+// RemoveAll implements System.
+func (o OS) RemoveAll(path string) error { return os.RemoveAll(o.path(path)) }
+
 // LookupUser implements System from /etc/passwd, never through NSS: Himmelblau's NSS module answers for any user
 // name with a synthetic entry (plan M5a step 0a), and os/user would ask NSS in a cgo build.
 func (o OS) LookupUser(name string) (int, error) { return o.localID("/etc/passwd", name) }

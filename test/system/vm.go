@@ -394,3 +394,16 @@ func (v *VM) Autologin(t *testing.T, name string) Session {
 	})
 	return found
 }
+
+// WaitLogged sleeps for d after logging what the test waits for and for how long, so a deliberate wait in a run of
+// hours does not look like a hang (PDK-962). Use it for every wait of 60 s or more.
+func WaitLogged(t testing.TB, reason string, d time.Duration) {
+	t.Helper()
+	t.Logf("waiting %s (until %s): %s", d, time.Now().Add(d).UTC().Format("15:04:05Z"), reason)
+	time.Sleep(d)
+}
+
+// vmAdmin is the test VMs' install administrator (PADDOCK_USER of test/vms) and acme's break-glass account; it keeps
+// passwordless sudo through /etc/sudoers.d/90-paddock, which names the user, not a group. The VMs have no vagrant
+// account: Himmelblau's NSS module answers for that name with a synthetic entry.
+const vmAdmin = "paddock"

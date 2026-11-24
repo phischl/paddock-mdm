@@ -90,6 +90,13 @@ SELECT count(*) FROM agent_upload_lease WHERE version = @version AND expires_at 
 -- name: ListAgentArtifacts :many
 SELECT * FROM agent_artifact WHERE version = @version ORDER BY arch;
 
+-- The hashes of every published agent artifact, all architectures (plan M5a amendment 2026-11-16, A2): the agent
+-- binary policy accepts exactly these. A future withdrawal of a release must keep its hashes here (ADR 0056
+-- decision 4).
+-- name: ListPublishedAgentHashes :many
+SELECT DISTINCT a.sha256 FROM agent_artifact a JOIN agent_release r ON r.version = a.version
+WHERE r.status = 'published' ORDER BY a.sha256;
+
 -- name: InsertAgentRollout :one
 INSERT INTO agent_rollout (version, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status,
                            started_by)

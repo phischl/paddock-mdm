@@ -20,13 +20,37 @@ token (60 requests per hour and address). Development and CI stacks skip that lo
 `FLEET_CPE_TRANSLATIONS_URL` in the development and CI section at the end of `deploy/compose/versions.env`, which
 the operator bundle does not ship) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
 latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's limit still gets the data the
-inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
-API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
-variables still exist and move the pin to a current `fleetdm/nvd` release (its asset `cpe-<sha256>.sqlite.gz` and
-`cpe_translations.json`). Fleet skips its once-a-day check when the CPE URL is set and downloads the database on
-every vulnerability run, which is why the development period stays at 1 hour (see the round intervals below); if the
-pinned release is ever pruned, the inventory gates fail with Fleet's download error
-and the pin is moved the same way.
+inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, Windows Office, Go vulnerability
+database, OVAL and OSV syncs still use the API; Fleet logs each failure (`"cron":"vulnerabilities"`, for example
+`updating OSV artifacts` with `github http status error: 403`) and continues its run with the data already on disk.
+With its default OSV setting, Fleet matches Ubuntu deb packages (except kernel images) only through its OSV
+artifacts (OVAL when OSV is off), not through the CPE dictionary, so a Fleet that has never downloaded the artifact
+for an Ubuntu release reports no package findings for its hosts until a later run gets past the limit; once the artifact
+is on disk, a failed sync leaves the last one in use. Gate F3 therefore seeds an artifact with its two
+findings into Fleet's volume before it waits (ADR 0009 amendment 2026-11-24 (c)); the seed
+exists only in the development and test stack, and an artifact Fleet downloads itself takes precedence over it. Fleet
+skips its once-a-day check when the CPE URL is set and downloads the database on every vulnerability run, which is why
+the development period stays at 1 hour (see the round intervals below); if the pinned release is ever pruned, the
+inventory gates fail with Fleet's download error and the pin is moved as in the checklist below.
+
+## Checklist for a `FLEET_IMAGE` upgrade
+
+Work through it for every change of `FLEET_IMAGE`, in addition to green inventory gates (F0–F4), and record the result
+with the upgrade:
+
+1. **Direct URLs.** The three variables above still exist in the new version; move the pin to a current `fleetdm/nvd`
+   release (its assets `cpe-<sha256>.sqlite.gz` and `cpe_translations.json`).
+2. **Matching source per platform.** In Fleet's source at the new tag, compare with the table in ADR 0009 amendment
+   2026-11-24 (c) which data matches the software of an Ubuntu host and where Fleet finds that data: the phases of
+   `scanVulnerabilities` in `cmd/fleet/cron.go`, the sources `TranslateSoftwareToCPE` excludes
+   (`server/vulnerabilities/nvd/cpe.go`, `oval.SupportedSoftwareSources`), the default of
+   `vulnerabilities.osv_for_vulnerabilities`, and whether each source is fetched from a configurable URL or through
+   GitHub's API. Release notes and green gates do not show such a change: a runner within GitHub's limit passes either
+   way. A difference needs an architect decision before the upgrade merges.
+3. **OSV seed of gate F3.** `OSVArtifact` and `OSVVulnerability` in `server/vulnerabilities/osv/analyzer.go` still
+   have the fields the seed writes, artifacts are still named `osv-ubuntu-<release>-<date>.json.gz`, and Fleet still
+   prefers the artifact of the current day, then the newest by name, and removes older ones after a successful lookup
+   (`osv/artifact.go`), so that its own download keeps winning over the seed dated 2000-01-01.
 
 ## What is published
 
@@ -54,7 +78,9 @@ section of every v2 bundle. The agent of an amd64 device then:
 1. writes `/opt/orbit/secret.txt` (the enroll secret, 0600), `/etc/paddock/orbit.env` (Fleet URL, path of the secret,
    the system trust store `/etc/ssl/certs/ca-certificates.crt`, updates, scripts and Fleet Desktop off; 0600) and the
    drop-in `/etc/systemd/system/orbit.service.d/90-paddock.conf`, which makes `orbit.service` read `orbit.env` after
-   the package's `/etc/default/orbit`;
+   the package's `/etc/default/orbit`. `orbit.env` also sets `ORBIT_HOST_IDENTIFIER=instance`. On a device whose fleetd
+   was enrolled before, the agent re-enrolls fleetd once (it stops `orbit.service` and removes orbit's node key, device
+   token and osquery database);
 2. downloads the package from `https://bundles.<domain>/<path>` (derived from the agent's `device.<domain>` server
    URL), checks its SHA-256 and installs it with `dpkg -i` (killed after 15 minutes like every package run of the
    agent, then retried after a back-off);
@@ -71,14 +97,32 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 `paddock-worker`:
 
 1. pushes Paddock's policies (`server/internal/inventory/policies/*.sql`: `paddock_agent_running`,
-   `disk_encrypted`) as global Fleet policies for Linux; they return pass or fail, never rows;
+   `disk_encrypted`, and `paddock_agent_binary_known`, which the worker builds from the SHA-256 of every published
+   agent artifact; ADR 0056) as global Fleet policies for Linux; they return pass or fail, never rows. Applying them is
+   idempotent, so a release published since the previous round reaches Fleet in this round;
 2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
    start, whenever Fleet's set of vulnerable software versions changed (Fleet matches vulnerabilities on its own
    schedule, about hourly, without marking hosts as changed) and every 12th round;
-3. maps each host to a device by hardware UUID: a host maps only if exactly one active or quarantined device in any
-   organization has its UUID. Hosts that map to no device or to several are never stored and are counted in the metric
-   `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A reinstalled device that enrolled again keeps its
-   hardware UUID: retire the old device so that its host maps again;
+3. binds each device to the host its agent named (fleetd's device token, resolved through Fleet's device endpoint) and
+   stores only that host for the device. A device whose agent has not named a host yet keeps the host Paddock already
+   stores for it while Fleet lists it with the device's hardware UUID (the lowest Fleet ID when none is stored yet). A
+   host that already speaks for another device is never bound to a device (`result="host_in_use"`); retire a device's
+   previous record before you enroll the machine again. A host a device no longer speaks from (its previous stored
+   host, or a stored host Fleet lists with another hardware UUID) stays reserved for that device and is removed from
+   Fleet in the same or the next round (`device.inventory_host_removed`, `paddock_inventory_previous_hosts_total`).
+   After a Fleet rebuild or restore, such a host ID can name another machine's record; the record is removed and the
+   machine's fleetd enrolls again under a new ID. Retiring a device reserves its stored host in the same way; the next
+   inventory round removes it from Fleet. Paddock's copy of the retired device's inventory follows the retention
+   period. Hosts that do not speak for a device are counted in the log attribute `ignored`;
+   `paddock_inventory_host_bindings_total` counts the binding decisions by `result`. Hosts that map to no device are
+   never stored and are counted in the metric `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A retired
+   device keeps its hardware UUID until retention has purged its inventory (`retired_inventory_days`) or it was retired
+   as uninstalled. Meanwhile, a device with the same UUID whose agent has not named its inventory host yet stores
+   nothing. That includes a machine enrolled again, in the same or another organization. A device whose agent runs
+   0.1.0-alpha.11 or later binds its own host and is not affected. To release the UUID earlier, uninstall the old
+   device before you retire it (`POST /api/v1/devices/{id}/uninstall`), or let its organization lower
+   `retired_inventory_days` (`PUT /api/v1/settings/privacy`, minimum 1 day; this applies to all of its retired devices,
+   and the retention round runs every 6 hours);
 4. stores, per mapped device and under its organization, the OS version, the fleetd (or osquery) version, the last
    time Fleet saw the host, its hardware facts (manufacturer, model, serial number, processor and physical cores,
    memory size, total disk size; ADR 0037 decision 7), the installed packages, the matched CVEs and the policy results;
@@ -86,9 +130,47 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    Free disk space, uptime and network addresses are not copied. The device page shows the hardware facts in its
    identity panel, and the device search matches the serial number;
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
-   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
+   policy fails while it has not checked in for 15 minutes, or fails in evaluations at least 15 minutes apart although
+   it keeps checking in — then something other than the genuine agent may check in with the device's credentials
+   (fleetd's half of the mutual watch). With the default policy interval of 10 minutes the second case is reported
+   within about 40 minutes. The agent must run from `/opt/paddock/agent/` as installed; a device whose `/opt` is a
+   symbolic link to another place fails `paddock_agent_running` and is reported. The reported failure
    stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy
-   passes again.
+   passes again. It also reports, once per failure, `device.tamper_agent_binary_changed` for every active device whose
+   `paddock_agent_binary_known` policy fails: a running agent process (named `paddockd`, running a file named
+   `paddockd` or a file below `/opt/paddock/agent/`, or started by `paddock-supervisor`) runs an executable that
+   matches no published release. Only an evaluation made at least 2 minutes after the worker applied the current hash set
+   counts, so a host that has not yet evaluated a newly published release is not reported; a round in which a release
+   was published skips these reports. The failure opens a tamper finding on the device. A genuine older published
+   release passes (RR-149). If no release is published, the policy always passes. A failure that Fleet resets after a
+   new definition stays reported until the host answers again, so a publish does not repeat the event. If the device
+   was repaired and a publish reset its passing result before the worker read it, a new tamper is reported only after
+   the policy has passed again. A host that evaluated a Paddock policy's current definition without an answer (the
+   query failed there) is counted in `paddock_inventory_policy_unanswered_hosts{policy}` each full round and logged
+   as a warning. For `paddock_agent_running`, that missing answer is stored as a failing evaluation. A device
+   installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
+   policy as soon as any release is published; publish that build or install a published release. The worker logs the
+   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query.
+   It also reports, once per silence, `device.tamper_fleetd_silent` for an active device whose fleetd has not talked to
+   Fleet for 15 minutes (measured against the newest contact of any host), or whose host stored no policy results for 30
+   minutes longer than the newest host's (`reason` `policies`), while the device kept checking in (at most 60 minutes
+   between check-ins), confirmed when the device has checked in twice more and 15 more minutes have passed. After an
+   announced enrollment reset of fleetd, a suspended host binding or a re-enrollment of the device's host, the
+   confirmation counts only from 60 minutes after that event. An announced enrollment reset holds the watch at most once
+   per device in 24 hours. Reports wait while fewer than half of the live devices reach Fleet or none does: the worker
+   then logs `fleet silence watch suppressed` and sets `paddock_inventory_fleet_silent_suppressed`; a value above 0 for
+   longer than a few rounds means devices cannot reach `fleet.<domain>` (certificate, DNS, proxy) and needs the
+   operator. A site that blocks only `fleet.<domain>` raises the event for its devices;
+6. reports, once per episode, `device.tamper_fleet_host_claimed` when another host reports a device's hardware UUID
+   and keeps contacting Fleet for 15 minutes, or when the device's host was enrolled again. After a re-enrollment, agent
+   reports from Fleet wait 60 minutes. A Fleet database restore re-enrolls many hosts at once; the worker then holds
+   the re-enrollment reports of the affected binding mode (`claim_majority`, label `binding`). A bound host that Fleet
+   no longer lists with the device's hardware UUID suspends the device's binding until the device names its new host
+   (`paddock_inventory_bindings_suspended`). The worker resolves at most 200 device tokens per round: more than about
+   1,500 agent updates per hour can leave a device unresolved for longer than 60 minutes, which then raises one false
+   `second_host` report and one false `device.tamper_fleetd_silent`, so keep rollout waves below that rate. A device
+   whose binding stays suspended for longer than 60 minutes while its fleetd is silent is reported as
+   `device.tamper_fleetd_silent` too.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings
@@ -96,6 +178,23 @@ priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it s
 `severity=unknown`) and sort last; the start page tile counts the devices with critical or high findings and, next to
 it, the devices with findings of unknown severity. Treat a finding of unknown severity as worth checking: the CVE links
 to its entry in the National Vulnerability Database.
+
+## When the fleetd silence watch is suppressed
+
+`PaddockFleetSilenceWatchSuppressed` fires when the worker has held back `device.tamper_fleetd_silent` for 15 minutes
+because no live device, or fewer than half of them, reach Fleet. The worker logs `fleet silence watch suppressed` with
+`reason` (`no_fresh_peer` or `fresh_minority`), `due`, `live` and `fresh` every round.
+
+1. Check that devices reach `https://fleet.<domain>`: the certificate (`PaddockCertificateProbeFailing`), DNS, a
+   proxy, and the Fleet service (`docker compose ps fleet`, its log).
+2. A host in Fleet's host list whose last contact lies ahead of the Fleet host's clock, for example after a clock
+   correction, makes every other host look silent until that time has passed. Check the newest last contact in the
+   host list against the current time; the alert clears on its own when that time has passed.
+3. If Fleet is reachable and most devices still look silent, treat it as a possible mass tampering: compare the
+   devices' last contact with Fleet in Fleet's host list with their check-ins in the portal, and follow the incident
+   process.
+4. The alert clears in the first round in which at least half of the live devices reach Fleet; the held-back devices
+   are then reported.
 
 ## Portal and admin API
 
@@ -140,6 +239,9 @@ ssh -N -L 127.0.0.1:8412:"$ip":8080 docker-host
 The development stack publishes the port on `127.0.0.1:8412` of the development host (`compose.dev.yaml`). Changes
 made in the UI to the settings below are reset by `paddock-worker` within one round.
 
+Fleet's logs can contain device-token URLs of failed lookups (RR-151): give access to Fleet's logs only to platform
+operators.
+
 ## Bootstrap
 
 `deploy/compose/scripts/fleet-bootstrap.sh` sets Fleet up; development runs it in `make up` (also
@@ -153,6 +255,20 @@ made in the UI to the settings below are reset by `paddock-worker` within one ro
    and a new one is created. Restart `paddock-worker` after a new token.
 3. The global enroll secret from `.secrets/fleet_enroll_secret`.
 
+## When the inventory claim watch is suppressed
+
+The alert `PaddockInventoryClaimWatchSuppressed` and the log message `inventory claim watch suppressed`
+(`reason=claim_majority`, `binding`) mean that more than half of the devices of one binding mode (`device` or `first`)
+have an open episode with a re-enrollment, so the worker reports no re-enrollment of that mode. Claims of another host
+are reported, except for a device whose agent has not named its inventory host yet and whose open episode also saw a
+re-enrollment: that claim counts as a re-enrollment and is held as well (RR-22). The gauge
+`paddock_inventory_claim_watch_suppressed{binding}` counts the claims held.
+
+1. Check whether Fleet was restored or upgraded. The episodes end 60 minutes after the last re-enrollment, and the
+   alert clears.
+2. Otherwise list the Fleet hosts per hardware UUID. Several live hosts per UUID without such a cause need a security
+   review of the devices concerned.
+
 ## Settings Paddock enforces
 
 `paddock-worker` (`PADDOCK_FLEET_URL`, `PADDOCK_FLEET_TOKEN_FILE`, `PADDOCK_FLEET_PUBLIC_URL`) checks Fleet's
@@ -165,12 +281,14 @@ settings at start and every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, 
   (see `docs/compliance/privacy.md`): Linux software from the system package managers only, no network interfaces,
   no last-use times of packages, no software from users' home directories.
 - `webhook_settings`: every webhook off (activities, host status, failing policies, vulnerabilities).
+- `FLEET_OSQUERY_HOST_IDENTIFIER=provided` (compose): Fleet identifies a host by the identifier fleetd provides.
 - No scheduled queries and no query packs: they are deleted. Saved queries without a schedule stay; they could only
   run live, and live queries are off.
 
 Fleet's round intervals are environment variables of the `fleet` service: `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL`
 (default 10 minutes), `FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL` (1 hour) and `FLEET_VULNERABILITIES_PERIODICITY`
-(1 hour); the development stack uses 30 seconds, 2 minutes and 1 hour. Keep the development vulnerability period at
+(1 hour); the development stack uses 30 seconds, 2 minutes and 1 hour. Keep `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL`
+at 15 minutes or less: the worker reports a device whose policy results are 30 minutes older than the newest host's. Keep the development vulnerability period at
 1 hour or longer: with `FLEET_VULNERABILITIES_CPE_DATABASE_URL` set, Fleet downloads the 146 MB CPE database on every
 run. The inventory gates trigger the runs they need (`fleetctl trigger --name vulnerabilities` or Fleet's
 `POST /api/latest/fleet/trigger`), at most every 2 minutes while they wait; Fleet refuses a trigger while a run is

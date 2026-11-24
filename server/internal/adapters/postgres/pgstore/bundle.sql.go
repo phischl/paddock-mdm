@@ -159,6 +159,38 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 	return items, nil
 }
 
+const listDeviceGroupIDsOfDevices = `-- name: ListDeviceGroupIDsOfDevices :many
+SELECT device_id, device_group_id FROM device_group_member WHERE device_id = ANY($1::uuid[])
+ORDER BY device_id, device_group_id
+`
+
+type ListDeviceGroupIDsOfDevicesRow struct {
+	DeviceID      uuid.UUID
+	DeviceGroupID uuid.UUID
+}
+
+// The group memberships of the devices a compile renders, read in its one snapshot so that rendering needs no
+// transaction (plan M17 amendment r point 7).
+func (q *Queries) ListDeviceGroupIDsOfDevices(ctx context.Context, ids []uuid.UUID) ([]ListDeviceGroupIDsOfDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceGroupIDsOfDevices, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceGroupIDsOfDevicesRow{}
+	for rows.Next() {
+		var i ListDeviceGroupIDsOfDevicesRow
+		if err := rows.Scan(&i.DeviceID, &i.DeviceGroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDevicesWithOutdatedPlatform = `-- name: ListDevicesWithOutdatedPlatform :many
 SELECT d.id FROM device d
 LEFT JOIN device_status s ON s.device_id = d.id
@@ -223,6 +255,39 @@ func (q *Queries) ListDevicesWithOutdatedSchema(ctx context.Context) ([]uuid.UUI
 	return items, nil
 }
 
+const listLatestBundleContents = `-- name: ListLatestBundleContents :many
+SELECT d.id AS device_id, lb.content_sha256 FROM device d
+JOIN LATERAL (SELECT b.content_sha256 FROM bundle b WHERE b.device_id = d.id ORDER BY b.version DESC LIMIT 1) lb ON true
+WHERE d.id = ANY($1::uuid[])
+`
+
+type ListLatestBundleContentsRow struct {
+	DeviceID      uuid.UUID
+	ContentSha256 []byte
+}
+
+// The content digest of the latest bundle of each of the devices a compile renders, read in its one snapshot (plan
+// M17 amendment r point 7); a device without a bundle has no row.
+func (q *Queries) ListLatestBundleContents(ctx context.Context, ids []uuid.UUID) ([]ListLatestBundleContentsRow, error) {
+	rows, err := q.db.Query(ctx, listLatestBundleContents, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLatestBundleContentsRow{}
+	for rows.Next() {
+		var i ListLatestBundleContentsRow
+		if err := rows.Scan(&i.DeviceID, &i.ContentSha256); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestBundles = `-- name: ListLatestBundles :many
 SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version, config_rollout_id, icons FROM bundle ORDER BY device_id, version DESC
 `
@@ -280,7 +345,7 @@ func (q *Queries) SetDeviceBundleSeq(ctx context.Context, arg SetDeviceBundleSeq
 const setDeviceCompiledPlatform = `-- name: SetDeviceCompiledPlatform :exec
 UPDATE device SET compiled_arch = $1, compiled_os_id = $2, compiled_os_version_id = $3,
   compiled_agent_version = $4
-WHERE id = $5 AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
+WHERE id = $5 AND bundle_seq = $6 AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
   IS DISTINCT FROM ($1::text, $2::text, $3::text, $4::text)
 `
 
@@ -290,9 +355,11 @@ type SetDeviceCompiledPlatformParams struct {
 	OsVersionID  string
 	AgentVersion string
 	ID           uuid.UUID
+	BundleSeq    int64
 }
 
-// The platform inputs a compile of the device saw (PDK-695, PDK-799).
+// The platform inputs a compile of the device saw (PDK-695, PDK-799), only while the device's bundle_seq is still the one
+// that compile left: a concurrent compile that moved it on records its own (plan M17 amendment r point 7).
 func (q *Queries) SetDeviceCompiledPlatform(ctx context.Context, arg SetDeviceCompiledPlatformParams) error {
 	_, err := q.db.Exec(ctx, setDeviceCompiledPlatform,
 		arg.Arch,
@@ -300,6 +367,7 @@ func (q *Queries) SetDeviceCompiledPlatform(ctx context.Context, arg SetDeviceCo
 		arg.OsVersionID,
 		arg.AgentVersion,
 		arg.ID,
+		arg.BundleSeq,
 	)
 	return err
 }

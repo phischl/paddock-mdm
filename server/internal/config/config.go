@@ -80,6 +80,22 @@ func (l *Loader) SecretFile(name string) string {
 	return v
 }
 
+// OptionalSecretFile reads the file named by the *_FILE variable name like SecretFile, but records no problem: ok is
+// false when the variable is unset or the file is missing, unreadable or empty. For a credential whose absence fails
+// one feature closed instead of the whole role (plan M17 amendment k).
+func (l *Loader) OptionalSecretFile(name string) (secret string, ok bool) {
+	path, set := l.get(name)
+	if !set {
+		return "", false
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // the path is operator configuration
+	if err != nil {
+		return "", false
+	}
+	v := strings.TrimSpace(string(b))
+	return v, v != ""
+}
+
 // Int returns the integer variable or def.
 func (l *Loader) Int(name string, def int) int {
 	v, ok := l.get(name)

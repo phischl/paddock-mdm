@@ -38,6 +38,8 @@ type fakeAPI struct {
 	feedFailAt    int
 	// rollout and rolloutID are the staging fields of ConfigApplyResult an apply answers with (raw JSON values).
 	rollout, rolloutID string
+	// stepUp makes a real apply fail like the server does for a plan an API token cannot apply (plan M13c decision 2).
+	stepUp bool
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +69,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !dry && f.changed && r.URL.Query().Get("expected_plan") != "" {
 			w.WriteHeader(http.StatusPreconditionFailed)
 			_, _ = io.WriteString(w, `{"status":412,"code":"plan_changed","detail":"the plan differs"}`)
+			return
+		}
+		if !dry && f.stepUp {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"status":403,"code":"step_up_required","detail":"this change needs an interactive administrator: API tokens cannot complete a step-up"}`)
 			return
 		}
 		id := `"0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10"`
@@ -245,6 +252,75 @@ func TestApply(t *testing.T) {
 	}
 	if r = pc("a: [unclosed", "apply", "-f", "-"); r.code != cmd.ExitUsage {
 		t.Fatalf("bad YAML: %+v", r)
+	}
+}
+
+// softwarePlan is a plan with a change of each software section; the sources change needs a step-up.
+const softwarePlan = `{"changes":[` +
+	`{"section":"software_sources","key":"[\"vendor\"]","action":"create","fields":[]},` +
+	`{"section":"software_catalog","key":"[\"Browser\"]","action":"create","fields":[]},` +
+	`{"section":"software_assignments","key":"[null,\"Browser\",\"organization\",\"\"]","action":"update","fields":` +
+	`[{"name":"intent","before":"available","after":"required"}]}],"created":2,"updated":1,"deleted":0,"requires_step_up":["software_sources"]}`
+
+// TestApplySoftwareSections is PDK-818: the dry run prints the software changes and the step-up note, and a real apply
+// of such a plan with a token is refused with the portal hint.
+func TestApplySoftwareSections(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "software.yaml")
+	if err := os.WriteFile(file, []byte("api_version: paddock/v1\nkind: OrganizationConfig\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, pc := setup(t, softwarePlan)
+	r := pc("", "apply", "-f", file, "--dry-run")
+	want := "+ software_sources [\"vendor\"]\n+ software_catalog [\"Browser\"]\n" +
+		"~ software_assignments [null,\"Browser\",\"organization\",\"\"] intent: \"available\" -> \"required\"\n" +
+		"Plan: 2 to create, 1 to update, 0 to delete\n" +
+		"Requires a step-up: software_sources (an API token cannot apply this plan; apply these sections from the portal)\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("dry run:\n%s\n%+v", r.stdout, r)
+	}
+
+	api.stepUp = true
+	r = pc("", "apply", "-f", file)
+	if r.code != cmd.ExitError || !strings.Contains(r.stderr, "step_up_required") ||
+		!strings.Contains(r.stderr, "an API token never has; make it in the portal") || strings.Contains(r.stdout, "Applied change set") {
+		t.Fatalf("apply with a token: %+v", r)
+	}
+}
+
+// TestApplySoftwareDocument: a document with the three software sections reaches the server unchanged (keys sorted,
+// as for every document), so an export applied again changes nothing.
+func TestApplySoftwareDocument(t *testing.T) {
+	doc := `{"api_version":"paddock/v1","kind":"OrganizationConfig","software_assignments":[{"entry":"Browser",` +
+		`"intent":"required","reason":"","target":{"type":"organization"},"version":null}],"software_catalog":[],"software_sources":[]}`
+	file := filepath.Join(t.TempDir(), "paddock.yml")
+	if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, pc := setup(t, emptyPlan)
+	if r := pc("", "apply", "-f", file, "--dry-run"); r.code != 0 {
+		t.Fatalf("apply of the export: %+v", r)
+	}
+	if string(api.lastBody) != doc {
+		t.Fatalf("the document was changed on its way:\n%s\nwant\n%s", api.lastBody, doc)
+	}
+}
+
+// TestApplyPatchSLA is PDK-814: settings.patch_sla is planned field by field like the other settings sections.
+func TestApplyPatchSLA(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "paddock.yml")
+	doc := "api_version: paddock/v1\nkind: OrganizationConfig\nsettings:\n  patch_sla:\n    critical_days: 3\n    high_days: 30\n" +
+		"    medium_days: 90\n    low_days: 0\n"
+	if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, pc := setup(t, `{"changes":[{"section":"settings.patch_sla","key":"","action":"update","fields":`+
+		`[{"name":"critical_days","before":7,"after":3}]}],"created":0,"updated":1,"deleted":0}`)
+	r := pc("", "apply", "-f", file, "--dry-run")
+	if r.code != 0 || r.stdout != "~ settings.patch_sla critical_days: 7 -> 3\nPlan: 0 to create, 1 to update, 0 to delete\n" {
+		t.Fatalf("dry run:\n%s\n%+v", r.stdout, r)
+	}
+	if !strings.Contains(string(api.lastBody), `"patch_sla":{"critical_days":3,"high_days":30,"low_days":0,"medium_days":90}`) {
+		t.Fatalf("document sent %s", api.lastBody)
 	}
 }
 

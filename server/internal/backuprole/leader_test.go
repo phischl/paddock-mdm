@@ -53,6 +53,12 @@ func (l *fakeLeader) drop() {
 	l.cancel(db.ErrLeadershipLost)
 }
 
+func (l *fakeLeader) refuse() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refused = true
+}
+
 func (l *fakeLeader) allow() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -190,4 +196,77 @@ func TestStandbyProcessRunsNothing(t *testing.T) {
 	cancel()
 	<-first
 	waitFor(t, "the standby to lead", func() bool { return snap.calls.Load() > 0 })
+}
+
+// TestFencedLeadershipStopsLanesAndResumes (plan M19 D5, RR-134): when a write finds that another process took a newer
+// leader epoch, Run cancels the hanging lane and stops its rounds before any further write, counts the loss, and
+// leads again with a new epoch once the lock is free; the next leadership mirrors the earlier run.
+func TestFencedLeadershipStopsLanesAndResumes(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.engine.stall = time.Hour
+	f.engine.cfg.RoundInterval = 20 * time.Millisecond
+	leader := &fakeLeader{}
+	f.engine.lock = leader
+	slow := newHangingTarget()
+	rec := f.addTarget(t, backupset.TypeS3, slow)
+	runEngine(t, f.engine)
+	<-slow.entered
+	if n := f.store.epochCount(); n != 1 {
+		t.Fatalf("%d leader epochs taken by the first leadership, want 1", n)
+	}
+
+	leader.refuse()
+	f.store.fence()
+	waitFor(t, "the fenced leadership to end", func() bool { return !leader.holding() })
+	status, runs, mirrored := f.store.writes()
+	close(slow.release)
+	time.Sleep(200 * time.Millisecond)
+	if s, r, m := f.store.writes(); s != status || r != runs || m != mirrored {
+		t.Fatalf("writes after the fenced leadership: status %d→%d, runs %d→%d, mirrored %d→%d", status, s, runs, r,
+			mirrored, m)
+	}
+	if _, ok := f.store.statusOf(rec.ID, KindOpenBao); ok {
+		t.Error("the cancelled lane wrote a target status")
+	}
+	if got := testutil.ToFloat64(f.metrics.leaderLost); got != 1 {
+		t.Errorf("leader_lost_total %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(f.metrics.leader); got != 0 {
+		t.Errorf("leader %v after the fence, want 0", got)
+	}
+
+	leader.allow()
+	waitFor(t, "the earlier run's mirror under the new leadership", func() bool {
+		r, ok := f.store.runOf(KindOpenBao, 0)
+		return ok && r.mirrored
+	})
+	if n := f.store.epochCount(); n != 2 {
+		t.Errorf("%d leader epochs taken after leading again, want 2", n)
+	}
+	if n := f.store.duplicateWrites(); n != 0 {
+		t.Errorf("%d runs got their mirror results twice", n)
+	}
+}
+
+// TestNoEpochNoRound (plan M19 D5): a leader that cannot take its epoch runs no round and writes nothing.
+func TestNoEpochNoRound(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.engine.cfg.RoundInterval = 20 * time.Millisecond
+	f.store.fenceErr = errors.New("take the backup leader epoch: connection refused")
+	snap := &countingSnap{}
+	f.engine.snap = snap
+	f.engine.lock = &fakeLeader{}
+	runEngine(t, f.engine)
+	time.Sleep(200 * time.Millisecond)
+	if n := snap.calls.Load(); n != 0 {
+		t.Errorf("%d snapshots without a leader epoch", n)
+	}
+	if s, r, m := f.store.writes(); s+r+m != 0 {
+		t.Errorf("writes without a leader epoch: status %d, runs %d, mirrored %d", s, r, m)
+	}
+	if got := testutil.ToFloat64(f.metrics.leader); got != 0 {
+		t.Errorf("leader %v without an epoch, want 0", got)
+	}
 }

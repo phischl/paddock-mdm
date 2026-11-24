@@ -48,6 +48,32 @@ func gdmKey(d *Device, key string) string {
 	return d.Must("sudo -u gdm env DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/" + key + " 2>/dev/null")
 }
 
+// nssShieldMarker is the marker of a running himmelblaud hold (reconcile.NSSShieldMarker).
+const nssShieldMarker = "/var/lib/paddock/state/nss-shield.json"
+
+// waitSettled waits until the device reported the apply of its newest bundle and no hold of the NSS shield runs. A
+// package transaction of that apply (fleetd's installation) holds himmelblaud stopped, and pam_himmelblau writes its
+// connection errors to the stdout of the sudo that reads the greeter's keys while the daemon is down (PDK-1126).
+func waitSettled(t *testing.T, d *Device) {
+	t.Helper()
+	Until(t, "newest bundle applied and no himmelblaud hold", 5*time.Minute, 5*time.Second, nil, func() bool {
+		var page struct {
+			Items []struct {
+				Version float64         `json:"version"`
+				Report  json.RawMessage `json:"report"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID+"/bundles?page_size=10&sort=-version", nil,
+			http.StatusOK).Body, &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) == 0 || len(page.Items[0].Report) == 0 || string(page.Items[0].Report) == "null" {
+			return false
+		}
+		return d.MustRoot("test -e "+nssShieldMarker+" && echo held || echo free") == "free"
+	})
+}
+
 // gdmBanner is the banner the greeter shows.
 func gdmBanner(d *Device) string { return gdmKey(d, "banner-message-text") }
 
@@ -80,6 +106,7 @@ func gateN1(t *testing.T, d *Device) {
 		out, _ := d.SSH(context.Background(), nil, "cat /etc/paddock/notice 2>/dev/null")
 		return strings.TrimSpace(out) == text
 	})
+	waitSettled(t, d)
 	if got := gdmBanner(d); got != "'Paddock system test "+d.run+": authorized use only.\\nActivity is logged.'" {
 		t.Errorf("GDM banner %q", got)
 	}
@@ -115,6 +142,7 @@ func gateN1(t *testing.T, d *Device) {
 		out, _ := d.SSH(context.Background(), nil, "cat /etc/paddock/notice /etc/issue.d/90-paddock.issue 2>/dev/null")
 		return strings.Count(out, changed) == 2
 	})
+	waitSettled(t, d)
 	if got := gdmBanner(d); got != "'"+changed+"'" {
 		t.Errorf("GDM banner after the change %q", got)
 	}
@@ -127,6 +155,7 @@ func gateN1(t *testing.T, d *Device) {
 		out, _ := d.SSH(context.Background(), nil, "ls "+strings.Join(noticeFiles, " ")+" 2>/dev/null | wc -l")
 		return strings.TrimSpace(out) == "0"
 	})
+	waitSettled(t, d)
 	if got := gdmBanner(d); strings.Contains(got, changed) {
 		t.Errorf("GDM banner after the removal %q", got)
 	}

@@ -180,6 +180,13 @@ services:
       PADDOCK_OSV_UBUNTU_URL: ${PADDOCK_OSV_UBUNTU_URL:-http://osv-fixture:8080/Ubuntu/all.zip}
       PADDOCK_OSV_SYNC_INTERVAL: ${PADDOCK_OSV_SYNC_INTERVAL:-30s}
 
+  paddock-worker-ingest:
+    build: *paddock-build
+    environment:
+      PADDOCK_ENV: development
+      # The diagnostics bundles an ingest worker accepts expire in the full worker's unit.
+      PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}
+
   paddock-gateway:
     build: *paddock-build
     environment:

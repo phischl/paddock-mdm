@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +38,15 @@ type Stack struct {
 	// lab is set when the Stack drives the lab-profile installation of the backup gates (lab.go) instead of the
 	// development stack: alice is then the lab organization's administrator, who signs in and steps up with WebAuthn.
 	lab *Lab
+	// publishMu serializes PublishInstalledAgent's check and publish: the VMs install in parallel, and the second one
+	// must see the release the first published (plan M5a amendment 2026-11-16, review round 1, A9).
+	publishMu sync.Mutex
+	// gate, when set, is the organization administrator the Stack acts as instead of alice (gate OS1, whose VMs enroll
+	// into an organization of their own).
+	gate *orgAdmin
+	// orgGone is set once the Stack's organization was deleted: the cleanups of its resources then have nothing to
+	// delete, and a 401 or 404 is the expected answer.
+	orgGone atomic.Bool
 }
 
 func newStack(t *testing.T) *Stack {
@@ -62,6 +74,16 @@ func (s *Stack) Login(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if s.gate != nil {
+		admin, err := s.gate.login(ctx)
+		if err != nil {
+			t.Fatalf("login %s: %v", s.gate.username, err)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.alice = admin
+		return
+	}
 	alice, err := portal.Login(ctx, portal.Alice)
 	if err != nil {
 		t.Fatalf("login alice (run make dev-seed): %v", err)
@@ -90,6 +112,10 @@ func (s *Stack) StepUp(t *testing.T) {
 	t.Helper()
 	if s.lab != nil {
 		s.lab.stepUp(t, s.session(), s.lab.orgAdmin)
+		return
+	}
+	if s.gate != nil {
+		s.gate.stepUp(t, s.session())
 		return
 	}
 	for attempt := 1; ; attempt++ {
@@ -142,6 +168,9 @@ func (s *Stack) RevokeOnCleanup(t *testing.T, tokenID string) {
 // cleanupCall sends a cleanup request as alice and reports, without stopping, a status other than ok. It signs in
 // again once if the session ended, e.g. after a gate restarted the stack.
 func (s *Stack) cleanupCall(t *testing.T, method, path string, ok ...int) {
+	if s.orgGone.Load() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	res, err := s.session().Do(ctx, method, path, nil)
@@ -329,6 +358,49 @@ func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags [
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("agentrelease %s: %v\n%s", version, err, out)
 	}
+}
+
+// PublishInstalledAgent publishes the paddockd the guest just installed from the packages under test, as a release
+// without rollout that no device updates to, unless a published release already has its hash (plan M5a amendment
+// 2026-11-16, A6): the agent binary policy accepts only published binaries, and would otherwise report every VM. The
+// binary is bin/agent/amd64/paddockd, the one `make deb` packaged; the gate fails if the guest's slot binary differs
+// from it. The lab installation of the backup gates publishes nothing.
+func (s *Stack) PublishInstalledAgent(t *testing.T, vm *VM) {
+	t.Helper()
+	if s.lab != nil {
+		return
+	}
+	installed := strings.Fields(vm.Must("sudo sha256sum /opt/paddock/agent/current/paddockd"))
+	bin := filepath.Join(s.root, "bin", "agent", "amd64", "paddockd")
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("the packaged agent binary: %v", err)
+	}
+	sum := sha256.Sum256(data)
+	local := hex.EncodeToString(sum[:])
+	if len(installed) == 0 || installed[0] != local {
+		t.Fatalf("%s: the installed paddockd %v differs from %s (%s): the packages under test were not built from it",
+			vm.Name, installed, bin, local)
+	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	out, err := paddockSQL(ctx, fmt.Sprintf(`SELECT count(*) FROM agent_artifact a JOIN agent_release r ON r.version = a.version
+		WHERE r.status = 'published' AND a.sha256 = '%s'`, local))
+	if err != nil {
+		t.Fatalf("published agent hashes: %v: %s", err, out)
+	}
+	if out != "0" {
+		return
+	}
+	v := version(4, "installed")
+	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", v, "--artifact", "amd64="+bin, "--publish")
+	cmd.Dir = s.root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agentrelease %s: %v\n%s", v, err, out)
+	}
+	t.Logf("%s: published the installed paddockd %s as release %s", vm.Name, local[:12], v)
 }
 
 func agentRelease(root string) string {

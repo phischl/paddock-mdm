@@ -317,7 +317,9 @@ process holds the role's leader lock)
 and `paddock_backup_leader_lost_total`. Only the process that holds the leader lock runs rounds and mirrors; it holds
 the lock on one database connection for its whole life. When that connection stops answering, it stops its rounds and
 mirrors before writing anything more, logs `backup role lost its leader lock` and takes the lock again once it is
-free; the runs it had not finished are mirrored by the next leader. The alerts `PaddockBackupStale`, `PaddockBackupAgeMissing`,
+free; the runs it had not finished are mirrored by the next leader. Every leadership takes a new epoch; a process whose epoch another leader has replaced is
+refused its next database write, stops its rounds and mirrors, logs `backup role was fenced` and counts it on
+`paddock_backup_leader_lost_total` as well. The alerts `PaddockBackupStale`, `PaddockBackupAgeMissing`,
 `PaddockWALArchiveLag`, `PaddockWALArchiveLagMissing`, `PaddockBackupKeyUnconfirmed`,
 `PaddockBackupTargetUnreachable`, `PaddockBackupTargetHolding`, `PaddockBackupEscrowListingSuspicious` and
 `PaddockBackupRepoFull` are in `docs/operations/monitoring.md`.

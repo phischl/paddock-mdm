@@ -349,3 +349,39 @@ func TestResultJSONShape(t *testing.T) {
 		}
 	}
 }
+
+// retire marks the manifest of day retired, re-links the following days to it and updates export.json, so the
+// package differs from a valid one only by the mark (plan M17 amendment 2026-11-15 o point 7).
+func retire(t *testing.T, p *evidencetest.Pkg, day string) {
+	t.Helper()
+	prev := p.ResignManifest(day, p.Priv, func(m *auditevidence.Manifest) { m.Retired = true })
+	for i := range p.Export.Days {
+		d := &p.Export.Days[i]
+		switch {
+		case d.Day == day:
+			d.ManifestSHA256 = prev
+		case d.Day > day:
+			link := prev
+			prev = p.ResignManifest(d.Day, p.Priv, func(m *auditevidence.Manifest) { m.PrevManifestSHA256 = &link })
+			d.ManifestSHA256 = prev
+		}
+	}
+	p.Resign()
+}
+
+func TestVerifyRetiredLastDay(t *testing.T) {
+	p := evidencetest.Assemble(t, twoDays(), -1)
+	retire(t, p, "2026-04-01")
+	if res := verify(t, p.File(), p.Fingerprint()); !res.OK || res.Days != 3 {
+		t.Fatalf("an export that ends with the retired day: %+v", res)
+	}
+}
+
+func TestVerifyRejectsManifestAfterRetiredDay(t *testing.T) {
+	p := evidencetest.Assemble(t, twoDays(), -1)
+	retire(t, p, "2026-03-31")
+	res := verify(t, p.File(), p.Fingerprint())
+	if res.OK || !hasProblem(res, "2026-04-01: manifest after the retired day 2026-03-31") {
+		t.Fatalf("a signed manifest after the retired day was accepted: %v", res.Problems)
+	}
+}

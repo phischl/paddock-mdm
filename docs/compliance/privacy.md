@@ -76,6 +76,7 @@ device and are never stored:
 | --- | --- |
 | `paddock_agent_running` | a process named `paddockd` runs from `/opt/paddock/agent/`. The query reads the process table on the device to answer one yes/no question; it is not a process list, and no process name, command line or user is collected. |
 | `disk_encrypted` | the root file system is on an encrypted (dm-crypt) device |
+| `paddock_agent_binary_known` | no process that is named `paddockd`, runs a file named `paddockd` or below `/opt/paddock/agent/`, or was started by `paddock-supervisor` runs an executable whose SHA-256 is outside the published agent releases (ADR 0056). The query hashes those executables on the device to answer one yes/no question; no hash, path or process data is collected. |
 
 There is no time synchronization policy: osquery has no table for it on Linux; Paddock measures drift from the check-in instead (*Paddock agent* table).
 
@@ -110,7 +111,7 @@ data. `PADDOCK_AGENT_RELEASE_SOURCE_REPO=off` switches it off.
 
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
 *Vulnerabilities*); reading it is recorded as `device.inventory_viewed` when the organization switches *Record
-inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day; the list of devices affected by a CVE is recorded as `vulnerability.devices_viewed` (CVE and device count, once per administrator, CVE and hour). Fleet's own UI and API are not published; only platform operators reach
+inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day; the list of devices affected by a CVE is recorded as `vulnerability.devices_viewed` (CVE and device count, once per administrator, CVE and hour), and the patch compliance report as `patch_compliance.viewed` (device group filter, once per reader and day). Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).
 
 ## Diagnostics bundle (on request only)
@@ -259,6 +260,23 @@ or restrict it to *Selected tools only*, where it is not. Paddock stores of an M
 session (the session record in Valkey, `admin.login` with `channel: mcp`) plus the MCP client's name and version in the
 audit events of its changes (`actor.client`); reads through the MCP are not recorded per call (RR-89). The session
 file on the workstation holds Authentik tokens of the administrator, not data of devices or users.
+
+## Organization offboarding
+
+When an organization is deleted (ADR 0052), Paddock deletes the personal data it holds for that organization:
+administrator accounts' sessions and tokens, device records, the login traces, inventory and software data, escrowed
+secrets, configuration and change history, notification destinations, and the organization's objects in Authentik,
+Fleet and object storage (full list and legal basis: [retention.md](retention.md), section "Organization
+offboarding"). This is the processor's duty under GDPR Art. 28(3)(g) at the end of the service. Paddock keeps, on
+the legal basis of Art. 17(3)(b) and (e), the organization's audit evidence (actor display names, IP addresses,
+usernames and hostnames as in the audit log) until the audit retention you configured ends; only platform
+administrators read it, every read is recorded, and it can be handed to the customer's auditors as an evidence export.
+A tombstone (ID, slug, name, deletion reason and counts, no personal data) and, for devices that were offline, a record
+without personal data for at most 365 days are also kept. Backup sets taken before the deletion keep their copies until
+their retention ends. Nothing on the devices is deleted: local accounts, home directories and the disk encryption stay,
+Paddock removes itself, and the agent never locks or wipes. Before the deletion, administrators can export the device
+recovery keys and local administrator passwords once, encrypted to a key or passphrase they supply; Paddock stores no
+copy of that export.
 
 ## What leaves the server
 

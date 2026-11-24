@@ -95,6 +95,9 @@ const (
 	// ReasonPasskeyRequired: the portal sign-in validated no WebAuthn authenticator (ADR 0034 amendment 2026-10-29,
 	// PDK-500).
 	ReasonPasskeyRequired = "passkey_required"
+	// ReasonMFAEnrolmentRequired: the sign-in was refused for its factors and the account has no passkey, which an
+	// administrator sets up through a one-time link (ADR 0053 amendment c).
+	ReasonMFAEnrolmentRequired = "mfa_enrolment_required"
 	// ReasonMCPLoginRequired: an MCP renewal without a live login binding of its sub and auth_time (ADR 0044
 	// amendment 2026-10-28).
 	ReasonMCPLoginRequired = "mcp_login_required"
@@ -342,6 +345,9 @@ type Me struct {
 	MCPWriteEnabled bool
 	// MCPWriteEnabledAt is since when the opt-in holds (plan M14 §6.6 amendment 2026-10-29); nil while it is off.
 	MCPWriteEnabledAt *time.Time
+	// PendingDevices is the number of devices still pending approval, read only while the organization's deletion is
+	// pending (plan M17 amendment m point 1).
+	PendingDevices int
 }
 
 // MeAPIToken is the API token a request authenticated with.
@@ -386,6 +392,13 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 		me.Username, me.DisplayName, me.Locale, me.Theme, me.Organization = acc.Username, acc.DisplayName, acc.Locale, acc.Theme, &org
 		me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
 		me.MCPWriteEnabledAt = acc.McpWriteEnabledAt
+		if organization.DeletionPending(org.Status, org.DeleteAfter) {
+			n, err := q.CountPendingDevices(ctx)
+			if err != nil {
+				return fmt.Errorf("count pending devices: %w", err)
+			}
+			me.PendingDevices = int(n)
+		}
 		return nil
 	})
 	return me, unauthenticatedIfGone(err)

@@ -131,7 +131,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errNotFound)
 	})
-	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(countRequests(mux)))))
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(httpx.MarkUnreadBody(countRequests(mux))))))
 }
 
 // apiError is a device API problem.

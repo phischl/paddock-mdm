@@ -161,6 +161,17 @@ const (
 	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
 	CodeDeviceTamperServiceStopped  Code = "device.tamper_service_stopped"
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
+	// Agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part A).
+	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
+	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
+	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+	// CodeDeviceTamperFleetdSilent: fleetd stopped working with the inventory system while the device kept checking in
+	// (plan M5a amendments 2026-11-16 c and d, ADR 0056).
+	CodeDeviceTamperFleetdSilent Code = "device.tamper_fleetd_silent"
+	// CodeDeviceTamperInventoryRejected: the inventory round could not store a device's inventory (PDK-1122k).
+	CodeDeviceTamperInventoryRejected Code = "device.tamper_inventory_rejected"
+	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
+	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
 	// Update management (plan M5b decisions 1–3 and 6).
 	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
 	CodePackageHoldCreated        Code = "package_hold.created"
@@ -192,6 +203,7 @@ const (
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
 	CodePlatformBundleSeqRaised        Code = "platform.bundle_seq_raised"
+	CodePlatformBundleVersionsPruned   Code = "platform.bundle_versions_pruned"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 
 	// IP allow list of the administrative surfaces (plan M7a decision 14).
@@ -321,12 +333,19 @@ const (
 	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
 	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
 	CodeDeviceSoftwareRequested Code = "device.software_requested"
-	// A user withdrew a pending request on the device; the worker closed it (PDK-811b).
+	// The device reported that a user withdrew a pending request; closed says whether the worker closed one (PDK-811b,
+	// plan M19 D8).
 	CodeDeviceSoftwareRequestWithdrawn Code = "device.software_request_withdrawn"
 	CodeSoftwareRequestOpened          Code = "software_request.opened"
 	CodeSoftwareRequestApproved        Code = "software_request.approved"
 	CodeSoftwareRequestDenied          Code = "software_request.denied"
 	CodeSoftwareRequestExpired         Code = "software_request.expired"
+	// Patch SLA and the patch compliance report (plan M13c decisions 17 and 18): the settings, the report's view and
+	// export, and the worker's daily summary of findings open longer than the SLA (a notification code).
+	CodeSettingsPatchSLAChanged  Code = "settings.patch_sla_changed"
+	CodePatchComplianceViewed    Code = "patch_compliance.viewed"
+	CodePatchComplianceExported  Code = "patch_compliance.exported"
+	CodeVulnerabilitySLABreached Code = "vulnerability.sla_breached"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -349,6 +368,34 @@ const (
 	CodePlatformRestoreCompleted Code = "platform.restore_completed"
 	CodePlatformRestoreFailed    Code = "platform.restore_failed"
 	CodePlatformRestoreAbandoned Code = "platform.restore_abandoned"
+	// Organization offboarding (plan M17 decision 19, ADR 0052 decision 6): all in the platform pseudo-organization
+	// except audit.chain_verified.
+	CodeOrganizationDeletionRequested        Code = "organization.deletion_requested"
+	CodeOrganizationDeletionCancelled        Code = "organization.deletion_cancelled"
+	CodeOrganizationDeletionStepCompleted    Code = "organization.deletion_step_completed"
+	CodeOrganizationDeletionStepFailed       Code = "organization.deletion_step_failed"
+	CodeOrganizationDeleted                  Code = "organization.deleted"
+	CodePlatformOffboardedDeviceUninstalled  Code = "platform.offboarded_device_uninstalled"
+	CodePlatformDeletedOrganizationAuditRead Code = "platform.deleted_organization_audit_read"
+	CodeAuditEventAfterRetirement            Code = "audit.event_after_retirement"
+	// The encrypted recovery export during the grace period (plan M17 amendment b decision 25): in the organization's
+	// own log.
+	CodeOrganizationRecoveryExported Code = "organization.recovery_exported"
+	// The worker's request to the audit writer to close a deleting organization's log (plan M17 amendment 2026-11-15 o
+	// point 1).
+	CodeOrganizationAuditRetirementRequested Code = "organization.audit_retirement_requested"
+
+	// Second-factor enrolment at sign-in (ADR 0053 decision 4 and amendment d): the worker's marks of administrators who
+	// may enrol a passkey at their next sign-in.
+	CodePlatformMFAEnrolMarksSeeded  Code = "platform.mfa_enrol_marks_seeded"
+	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
+	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
+	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
+
+	// Sign-in setup links (ADR 0053 decision 1): one-time links with which an account sets its password if missing and
+	// a passkey. The link itself is never part of an event.
+	CodeUserEnrolmentLinkCreated     Code = "user.enrolment_link_created"
+	CodePlatformEnrolmentLinkCreated Code = "platform.enrolment_link_created"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -772,9 +819,14 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperProtectedFileChanged: {
 		Code: CodeDeviceTamperProtectedFileChanged, Emitted: true,
-		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration (actor: the device).",
-		Params:      deviceEventParams,
-		Outcomes:    []Outcome{OutcomeSuccess},
+		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one " +
+			"of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own components " +
+			"for longer than a fixed bound, and file names the path that blocks the check. reason baseline_reset: the agent's " +
+			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file. " +
+			"reason update_result_unstaged: an update result named no release the agent staged, the agent kept its baseline " +
+			"of its slots, and file names the update result.",
+		Params:   deviceEventParams,
+		Outcomes: []Outcome{OutcomeSuccess},
 	},
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,
@@ -872,15 +924,16 @@ var registry = map[Code]Definition{
 	CodeOrganizationDomainsChanged: {
 		Code: CodeOrganizationDomainsChanged, Emitted: true,
 		Description: "A platform administrator changed the domains of an organization; the first domain is the primary domain of device logins.",
-		Params:      []string{"slug", "domains", "old_domains"},
+		Params:      []string{"slug", "target_organization_id", "domains", "old_domains"},
 		Outcomes:    adminOutcomes,
-		Note:        "Recorded in the organization whose domains changed. A domain of another organization is refused with error_code domain_taken.",
+		Note:        "A success is recorded in the organization whose domains changed; a failure that the use case returns (not_found, invalid_request, domain_taken, invalid_state for an organization that is deleting or deleted) is recorded in the platform pseudo-organization. Every attempt that reaches the use case, a denial by the role check included, names the requested organization in target_organization_id and the target. A domain of another organization is refused with error_code domain_taken.",
 	},
 	CodeUserCreated: {
 		Code: CodeUserCreated, Emitted: true,
 		Description: "A local user was created in Authentik (without password) and in Paddock; the one-time recovery link is shown once and never recorded.",
-		Params:      []string{"username", "display_name"},
+		Params:      []string{"username", "display_name", "previous_links_revoked"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "previous_links_revoked counts the account's older one-time links ended before the new link was issued (a new link ends every older one); absent when the attempt failed before that.",
 	},
 	CodeUserUpdated: {
 		Code: CodeUserUpdated, Emitted: true,
@@ -957,10 +1010,10 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
-		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles), offboarded_device (platform pseudo-organization, once per round with expired records: the records of devices of deleted organizations older than 365 days, with the keys they kept in Valkey) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
+		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id", "organization_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032. store audit_exports of an organization whose log was closed for its deletion is recorded in the platform pseudo-organization with organization_id (plan M17 decision 16).",
 	},
 	CodeDeviceInventoryPurged: {
 		Code: CodeDeviceInventoryPurged, Emitted: true,
@@ -1249,10 +1302,45 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
-		Description: "fleetd reports that the Paddock agent does not run on a device that has not checked in for 15 minutes: the agent was stopped or removed (actor: system; the inventory system's policy paddock_agent_running).",
-		Params:      []string{"policy", "last_contact_at"},
+		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, or its query stopped answering on a host that evaluates its policies, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
+		Params:      []string{"policy", "last_contact_at", "failing_since", "evaluated_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
+	},
+	CodeDeviceTamperAgentBinaryChanged: {
+		Code: CodeDeviceTamperAgentBinaryChanged, Emitted: true,
+		Description: "fleetd reports a running Paddock agent process whose executable matches no published agent release: the agent binary, the place it runs from, or the process the supervisor started was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+	},
+	CodeDeviceTamperFleetdSilent: {
+		Code: CodeDeviceTamperFleetdSilent, Emitted: true,
+		Description: "fleetd on a device stopped working with the inventory system for at least 15 minutes while the device kept checking in with Paddock, confirmed when the device checked in twice more and 15 more minutes passed (counted from 60 minutes after an announced enrollment reset of fleetd, a suspended host binding or a re-enrollment of its host), while most other devices reached the inventory system (actor: system). reason contact: the inventory system has not heard from the device's fleetd for 15 minutes longer than from the most recent host; reason policies: fleetd still talks to it, but osquery has stored no policy results for 30 minutes longer than the most recent host (osquery stopped, frozen or broken while orbit runs). fleetd was stopped, frozen, removed or cut off from the inventory system's address only, or something other than the genuine agent checks in for the device. fleetd_seen_at and policy_updated_at are the device's last contact and last stored policy results in the inventory system's clock (absent when unknown); last_contact_at is the device's last check-in; silent_since is when the worker first found the silence.",
+		Params:      []string{"fleetd_seen_at", "policy_updated_at", "last_contact_at", "silent_since", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per silence; fleetd working with the inventory system again ends it.",
+	},
+	CodeDeviceTamperInventoryRejected: {
+		Code: CodeDeviceTamperInventoryRejected, Emitted: true,
+		Description: "The inventory round could not store the inventory of a device and skipped it (actor: system). reason fetch_refused: Fleet no longer knows the host that speaks for the device, or refused it; reason store_refused: Paddock refused the host's inventory data. fleet_host is the inventory system's ID of the host that speaks for the device. Until the device's inventory is stored again, its software, vulnerabilities and the agent reports derived from the inventory system rest on its last stored inventory.",
+		Params:      []string{"reason", "fleet_host"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per episode; the episode ends when the device's inventory is stored again.",
+	},
+	CodeDeviceInventoryHostRemoved: {
+		Code: CodeDeviceInventoryHostRemoved, Emitted: true,
+		Description: "The inventory round removed from Fleet a host that the device no longer speaks from (actor: system). reason replaced: the host Paddock stores for the device changed and fleet_host was the previous one; reason relisted: Fleet lists fleet_host, the host stored for the device, with another hardware UUID; reason retired: the device was retired and fleet_host is the host Paddock stored for it. Until it is removed, the host is reserved for the device: no other device is bound to it or stores it. left_at is when it was left. fleet_host_deleted is true when Fleet deleted the host or no longer knew it. A host that another device stores, is bound to or holds reserved is not removed and records no event. A failure keeps the reservation: upstream_unavailable when Fleet failed or could not be reached (retried next round), invalid_state when Fleet refused this host (retried after an hour). After a Fleet rebuild, the removed host can be another machine's record; that machine's fleetd enrolls again under a new ID.",
+		Params:      []string{"hostname", "fleet_host", "reason", "left_at", "fleet_host_deleted"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0057.",
+	},
+	CodeDeviceTamperFleetHostClaimed: {
+		Code: CodeDeviceTamperFleetHostClaimed, Emitted: true,
+		Description: "An inventory host other than the one that speaks for a device claims it (actor: system). kind second_host: another host reported the device's hardware UUID and kept contacting the inventory system for 15 minutes; kind reenrolled: the host that speaks for the device was enrolled again, which also happens when fleetd's local state on the device is lost, or, for a device that has not named its host, another host took the place of the one stored for it. binding is device when the device named its inventory host over its device connection, first when it has not named one yet and the host already stored for it (else the one with the lowest ID) speaks for it. Only the speaking host's data is stored for the device; after a re-enrollment, agent reports derived from the inventory system wait 60 minutes. bound_host is the inventory system's ID of the speaking host, other_hosts the IDs of the other live claimants (at most 10, ascending, comma-separated; absent when none), hosts the number of live claimants including the speaking host, enrolled_at the inventory system's time of the latest enrollment of the speaking host (absent when unknown), claim_since when the worker first saw the claim.",
+		Params:      []string{"kind", "binding", "bound_host", "other_hosts", "hosts", "enrolled_at", "claim_since"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per claim episode; the episode ends when no other live host claims the device and no re-enrollment was seen for 60 minutes.",
 	},
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,
@@ -1361,6 +1449,12 @@ var registry = map[Code]Definition{
 		Params:      []string{"at_least", "devices"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "./paddock restore runs it with the highest sequence before the restore plus 1,000,000 (ADR 0046, amendment 2026-11-07).",
+	},
+	CodePlatformBundleVersionsPruned: {
+		Code: CodePlatformBundleVersionsPruned, Emitted: true,
+		Description: "An operator ran ./paddock bundles prune --yes on the control-plane host: superseded bundle versions were deleted from the bundles bucket, keeping the newest keep per device (actor: system, platform pseudo-organization).",
+		Params:      []string{"keep", "listed", "devices", "selected", "deleted", "failed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodePlatformCacheRebuilt: {
 		Code: CodePlatformCacheRebuilt, Emitted: true,
@@ -1513,7 +1607,7 @@ var registry = map[Code]Definition{
 		Description: "A device reported a highest event sequence number below the numbers it had already delivered: its agent state was reset (re-installed or wiped). The worker forgets the delivered numbers so that the new numbering is recorded, and closes open gaps without an event (actor: system).",
 		Params:      []string{"previous_high", "reported_high", "events_seen"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "events_seen is the number of forgotten sequence numbers. A state wipe also restarts the check-in sequence, which quarantines the device as a suspected clone (device.clone_suspected).",
+		Note:        "events_seen is the number of forgotten sequence numbers. A state wipe also restarts the check-in sequence, which quarantines the device as a suspected clone (device.clone_suspected). The order of the device's software requests and withdrawals starts over too: a withdrawal reported after the reset closes a request opened before it.",
 	},
 	CodeDeviceClockDrift: {
 		Code: CodeDeviceClockDrift, Emitted: true,
@@ -1538,16 +1632,16 @@ var registry = map[Code]Definition{
 	CodeAuditChainVerified: {
 		Code: CodeAuditChainVerified, Emitted: true,
 		Description: "The audit writer verified the organization's hash chain for from_day..to_day: every manifest exists, is signed by audit-chain, links to the previous day and lists exactly the indexed objects, and every object's SHA-256 matches (actor: system audit-writer).",
-		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects"},
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "final"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day) or cli (paddock-server audit verify).",
+		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day), cli (paddock-server audit verify) or final. final is true, and trigger final, on the last verification before the organization is deleted (ADR 0052 decision 6): the days that may be sealed are sealed first, then from_day..to_day (the first through the newest sealed day) are verified as a chain and every object of the later, still open days against its index checksum (counted in objects). It is the last event of the organization's own log; its own object and the day it is filed under, sealed afterwards with the retired mark, are checked by paddockctl audit verify-export.",
 	},
 	CodeAuditChainVerificationFailed: {
 		Code: CodeAuditChainVerificationFailed, Emitted: true,
 		Description: "The audit writer found problems in the organization's hash chain for from_day..to_day (actor: system audit-writer).",
-		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "problem_count", "problems"},
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "problem_count", "problems", "final"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "problems lists at most 50 findings of at most 500 characters each; problem_count is the full number. Raises PaddockAuditChainBroken.",
+		Note:        "problems lists at most 50 findings of at most 500 characters each; problem_count is the full number. A nightly or sample run raises PaddockAuditChainBroken. final is true, and trigger final, on the last verification before the organization is deleted (ADR 0052 decision 6): it raises PaddockAuditFinalVerificationFailed instead, and it does not stop the deletion.",
 	},
 	CodeAdminRoleGranted: {
 		Code: CodeAdminRoleGranted, Emitted: true,
@@ -1777,8 +1871,9 @@ var registry = map[Code]Definition{
 	CodeAuditExportCompleted: {
 		Code: CodeAuditExportCompleted, Emitted: true,
 		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed; reason export_too_large marks a build whose events.jsonl or package exceeded PADDOCK_AUDIT_EXPORT_MAX_BYTES.",
-		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason"},
+		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason", "organization_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "An export of an organization whose log was closed for its deletion (a platform administrator's evidence export, ADR 0052 decision 7) is recorded in the platform pseudo-organization with organization_id, so the package's checksum stays in an audit log.",
 	},
 	CodeNotificationDelivered: {
 		Code: CodeNotificationDelivered, Emitted: true,
@@ -1965,10 +2060,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceSoftwareRequestWithdrawn: {
 		Code: CodeDeviceSoftwareRequestWithdrawn, Emitted: true,
-		Description: "A user withdrew a pending software request through the self-service app of a device (actor: the device; user: the user name of the withdrawing account); the worker closed the open request of that device, entry and user as withdrawn.",
-		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Description: "The device reported that a user withdrew a software request through its self-service app (actor: the device; user: the user name of the withdrawing account). closed is true when the worker closed the open request of that device, entry and user as withdrawn.",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id", "closed"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Recorded once per report; a redelivered report records nothing. A report without an open request (an administrator decided it or it expired first) changes no request. Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
+		Note:        "Recorded once per report; a redelivered report records nothing. closed is false when there was no open request the device reported before the withdrawal (an administrator decided it, it expired first, the user asked again afterwards, or the request has not been processed yet: it then never opens). Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
 	},
 	CodeSoftwareRequestOpened: {
 		Code: CodeSoftwareRequestOpened, Emitted: true,
@@ -1997,6 +2092,34 @@ var registry = map[Code]Definition{
 		Params:      []string{"catalog_entry_id", "device_id", "user", "cause"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "cause is validity_ended (30 days without a decision), approval_removed (the entry no longer requires approval, so the user may install without one) or assignment_removed (the entry has no available assignment left; an approval holds only while it exists).",
+	},
+	CodeSettingsPatchSLAChanged: {
+		Code: CodeSettingsPatchSLAChanged, Emitted: true,
+		Description: "An organization administrator changed the patch SLA: how many days a vulnerability with a fixed version may stay open per severity (0 = no SLA for that severity).",
+		Params:      withChangeSetParams([]string{"critical_days", "high_days", "medium_days", "low_days"}),
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for a value outside 0 to 365. Target is the organization.",
+	},
+	CodePatchComplianceViewed: {
+		Code: CodePatchComplianceViewed, Emitted: true,
+		Description: "An administrator, operator, auditor or API token opened the patch compliance report of the organization (the state at the moment of the view); recorded once per actor and UTC day and only while inventory_view_recorded is on. device_group_id is the filter of the first view of the day, absent without one.",
+		Params:      []string{"device_group_id", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for an unknown or foreign device group), or internal for a window that could not be claimed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. Target is the organization.",
+	},
+	CodePatchComplianceExported: {
+		Code: CodePatchComplianceExported, Emitted: true,
+		Description: "An administrator, operator, auditor or API token exported the patch compliance report of the organization (the state at the moment of the export) as JSON or CSV; every export is recorded, whatever the privacy settings.",
+		Params:      []string{"format", "device_group_id"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for an unknown format, not_found for an unknown or foreign device group. Target is the organization.",
+	},
+	CodeVulnerabilitySLABreached: {
+		Code: CodeVulnerabilitySLABreached, Emitted: true,
+		Description: "Vulnerabilities with a fixed version are open on the organization's devices longer than the organization's patch SLA (actor: system; the worker's inventory round). Use it as a notification for administrators.",
+		Params:      []string{"critical", "high", "medium", "low", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded at most once per UTC day and only while at least one finding breaches the SLA. critical to low count the breached findings per severity, devices the devices with at least one. Not part of the security preset; a destination with all or a custom list that names it receives it.",
 	},
 	CodePlatformBackupKeyGenerated: {
 		Code: CodePlatformBackupKeyGenerated, Emitted: true,
@@ -2117,6 +2240,111 @@ var registry = map[Code]Definition{
 		Params:      restorePlanParams,
 		Outcomes:    adminOutcomes,
 		Note:        "The plan's state becomes abandoned and its outcome_detail reads abandoned by <administrator>. Failure with invalid_request without the typed word, not_found, or invalid_state for a plan that is not running (cancel an approved plan instead). Platform pseudo-organization.",
+	},
+	CodeOrganizationDeletionRequested: {
+		Code: CodeOrganizationDeletionRequested, Emitted: true,
+		Description: "A platform administrator requested the deletion of an organization after a step-up and the typed slug; every active device received the command uninstall (mode leave) and the organization is deleted after the grace period unless the deletion is cancelled (ADR 0052).",
+		Params:      []string{"slug", "reason", "grace_days", "delete_after", "uninstalls_issued", "uninstalls_skipped"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "Platform pseudo-organization; the devices' uninstalls record no device.uninstall_requested. grace_days is 7 to 90 (0 to 90 on a development stack); uninstalls_skipped counts active devices with an open uninstall or an open Lock or Destroy. Failure with invalid_request for a wrong confirm_slug, a reason outside 2 to 500 characters or grace_days outside the bounds, not_found, or invalid_state when a deletion is already requested or the organization is not active or provisioning_failed.",
+	},
+	CodeOrganizationRecoveryExported: {
+		Code: CodeOrganizationRecoveryExported, Emitted: true,
+		Description: "An organization administrator or a platform administrator exported every LUKS recovery key and the newest local administrator password of every non-retired device of an organization whose deletion is pending, after a step-up, as one OpenPGP message encrypted to a public key or a passphrase they supplied (ADR 0052 amendment b).",
+		Params:      []string{"recipient", "key_fingerprint", "devices", "secrets", "requester_scope"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "Recorded in the organization's own log, also for a platform administrator; an attempt for an unknown organization goes to the platform pseudo-organization. recipient is public_key or passphrase; key_fingerprint is the public key's fingerprint (public_key only); devices and secrets count the device lines and the decrypted secrets; requester_scope is organization or platform. Never a secret or the passphrase. Failure with invalid_request for an invalid recipient, not_found, invalid_state when no deletion is pending, export_limit after five successful exports in the grace period, or upstream_unavailable (also when the download broke off while streaming); denied with step_up_required.",
+	},
+	CodeOrganizationDeletionCancelled: {
+		Code: CodeOrganizationDeletionCancelled, Emitted: true,
+		Description: "A platform administrator cancelled the pending deletion of an organization; every offboarding uninstall the devices had not received was withdrawn, received ones run to completion.",
+		Params:      []string{"slug", "uninstalls_cancelled"},
+		Outcomes:    adminOutcomes,
+		Note:        "Platform pseudo-organization. Failure with not_found, or invalid_state when no deletion is pending or the request is still issuing its uninstalls.",
+	},
+	CodeOrganizationDeletionStepCompleted: {
+		Code: CodeOrganizationDeletionStepCompleted, Emitted: true,
+		Description: "The worker completed one step of an organization's deletion (actor: system).",
+		Params:      []string{"slug", "step", "count", "uninstalls_reissued", "disarms_issued"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization. step is sessions, devices, outbox, authentik, fleet, objects, valkey, audit_final, database or tombstone; count is what the step removed or recorded over all its attempts; the database step stores it after each batch in a transaction of its own, the other steps per attempt, so a worker that stops between a database batch and its stored count, or inside one call to Authentik, Fleet, the object store or Valkey, can undercount that batch or call (a lower bound, never too high). For step devices, count is the devices recorded as offboarded (each once, however often the step runs), uninstalls_reissued counts the devices that got a fresh uninstall because they had none they could still act on, or whose pending uninstall would have expired within the retention and was replaced with the same mode (plan M17 amendments e point 10 and m point 2), and disarms_issued counts the delete_self_lock commands that disarm the devices' dead man's switch (amendment n); both are totals over all attempts of the step.",
+	},
+	CodeOrganizationDeletionStepFailed: {
+		Code: CodeOrganizationDeletionStepFailed, Emitted: true,
+		Description: "A step of an organization's deletion failed and is retried in the next round (actor: system).",
+		Params:      []string{"slug", "step", "error_code"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "Platform pseudo-organization; recorded once per step and error code until the step succeeds (the worker metric paddock_offboarding_step_failing shows a failure for as long as it lasts). error_code is authentik_unavailable, fleet_unavailable, object_store_unavailable, object_retained (Object Lock keeps objects of the organization), valkey_unavailable, outbox_pending (unpublished outbox rows of the organization), audit_writer_pending (step audit_final: the audit writer has not acknowledged the final verification more than one hour after the request), database_error, signing_unavailable (step devices: the uninstall commands could not be signed) or finalize_waiting (step devices or tombstone, after more than one hour waiting for organization transactions that were open when the deletion started).",
+	},
+	CodeOrganizationDeleted: {
+		Code: CodeOrganizationDeleted, Emitted: true,
+		Description: "The worker deleted an organization's data and left its tombstone in status deleted (actor: system).",
+		Params:      []string{"slug", "devices_offboarded", "devices_pending_dropped", "rows_deleted", "objects_deleted", "authentik_objects_deleted", "fleet_hosts_deleted", "audit_final_outcome"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization. The audit evidence of the organization is kept until its retention ends. The counts are the sums of the steps' counts (organization.deletion_step_completed), lower bounds when a worker stopped inside a step. audit_final_outcome is verified or failed, the outcome of the final verification of the organization's audit chain (ADR 0052 decision 6); failed does not stop the deletion and raises PaddockAuditFinalVerificationFailed. devices_pending_dropped counts the devices still pending approval that were deleted without an uninstall: they never received a bundle and cannot verify one (plan M17 amendment m point 1).",
+	},
+	CodePlatformOffboardedDeviceUninstalled: {
+		Code: CodePlatformOffboardedDeviceUninstalled, Emitted: true,
+		Description: "A device of a deleted organization reported that it removed Paddock (actor: system).",
+		Params:      []string{"device_id", "organization_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization; the device's platform record and cache keys are deleted.",
+	},
+	CodePlatformDeletedOrganizationAuditRead: {
+		Code: CodePlatformDeletedOrganizationAuditRead, Emitted: true,
+		Description: "A platform administrator read the retained audit evidence of a deleted organization (ADR 0052 decision 7).",
+		Params:      []string{"organization_id", "slug", "resource", "export_id", "from_day", "to_day", "purpose"},
+		Outcomes:    adminOutcomes,
+		Note:        "Platform pseudo-organization; recorded for every attempt. resource is audit_events (a page of the log), audit_exports (the list of evidence exports), audit_export_request (a new export, with from_day, to_day and purpose; step-up) or audit_export_download (with export_id). An organization that is not deleted, or a caller who is no platform administrator, is answered not_found.",
+	},
+	CodeAuditEventAfterRetirement: {
+		Code: CodeAuditEventAfterRetirement, Emitted: true,
+		Description: "The audit writer received an event of an organization whose log was closed for its deletion and recorded it here instead of dropping it (actor: system audit-writer).",
+		Params:      []string{"organization_id", "original_code", "original_event_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization. Written instead of an event of a retired organization (plan M17 decision 16): the event's own params are not kept; the audit writer's own records of an evidence export (audit.export_completed, retention.purged of store audit_exports) keep their code and params instead. The event ID is derived from original_event_id, so a redelivery is recorded once.",
+	},
+	CodeOrganizationAuditRetirementRequested: {
+		Code: CodeOrganizationAuditRetirementRequested, Emitted: true,
+		Description: "The organization deletion asked the audit writer for the final verification of the organization's audit chain and to close its log (actor: system).",
+		Params:      []string{"organization_id", "slug"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization; recorded once per deletion by step audit_final (plan M17 amendment 2026-11-15 o). The audit writer then records audit.chain_verified or audit.chain_verification_failed with final true in the organization's own log.",
+	},
+	CodePlatformMFAEnrolMarksSeeded: {
+		Code: CodePlatformMFAEnrolMarksSeeded, Emitted: true,
+		Description: "The worker's one-time seed after the upgrade marked the administrators without a passkey (paddock_mfa_enrol_at_login), so that they set one up at their next sign-in instead of being denied (ADR 0053 decision 4).",
+		Params:      []string{"marked", "totp_only", "organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only when the seed marked at least one account. marked counts the accounts marked, totp_only those of them with only an authenticator app, organizations the organizations with a marked account (the platform group not counted). Failure when a mark failed after others were written: marked is the count written; the unmarked accounts need a sign-in setup link. No usernames; Authentik's event log holds the per-account changes. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodePlatformMFAEnrolMarksCleared: {
+		Code: CodePlatformMFAEnrolMarksCleared, Emitted: true,
+		Description: "The worker removed the enrolment mark of administrators who have set up a passkey (ADR 0053 decision 4).",
+		Params:      []string{"cleared"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only for a round that removed at least one mark; cleared counts them. Failure when a removal failed after others were written; the next round retries it. No usernames. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodeOrganizationInactiveDenied: {
+		Code: CodeOrganizationInactiveDenied, Emitted: true,
+		Description: "An action was refused because its organization is being deleted or was deleted (403 organization_inactive). Actor and target are those of the refused attempt.",
+		Params:      []string{"organization_id", "attempted_code", "status"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted. The organization's unavailability wins over every other outcome: an attempt refused before the gate (missing step-up, role, MCP guard) or failing after it is recorded here as well, once, when the gate refuses its own record, and is answered with organization_inactive.",
+	},
+	CodeUserEnrolmentLinkCreated: {
+		Code: CodeUserEnrolmentLinkCreated, Emitted: true,
+		Description: "An organization administrator created a one-time sign-in setup link for a user of the organization (ADR 0053 decision 1): valid 24 hours; the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. A new link ends every older one.",
+		Params:      []string{"username", "previous_links_revoked"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "The link is shown once to the administrator and never recorded. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Denied with step_up_required without a fresh step-up, forbidden for another role. Failure with not_found, invalid_state (the user is locked, deactivated, not provisioned in the identity provider, or a direct member of paddock.platform.admins) or upstream_unavailable.",
+	},
+	CodePlatformEnrolmentLinkCreated: {
+		Code: CodePlatformEnrolmentLinkCreated, Emitted: true,
+		Description: "The operator created a one-time sign-in setup link for an administrator account with paddock-server admin enrolment-link (ADR 0053 decision 1, plan M12h-2 amendment f addendum b): a platform administrator or an organization account with a portal role (admins, operators or auditors) created by hand in the identity provider; valid 24 hours; the account sets up a passkey if it has none, and a password if it has none unless it is connected to an upstream identity source (SCIM included). A new link ends every older one.",
+		Params:      []string{"username", "organization_id", "passkey_only", "previous_links_revoked"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
+		Note:        "The link is printed once on the host and never recorded. organization_id is the organization of the account's role group, absent for a platform administrator without an organization role and when the attempt failed before the account was found; the target type is user for an organization account, platform_admin otherwise. passkey_only is false when the command marked the account (attribute paddock_password_by_link) so that the link may set a password, true for an account connected to an upstream identity source (a source connection or a SCIM source user), whose link sets up only the passkey; absent when the attempt failed before that. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Failure with invalid_state when the account holds no portal role (not a direct member of paddock.platform.admins or of an organization's admins, operators or auditors group, or the group's organization does not exist or was deleted), when the group's organization is being deleted (organization_id present), when its role assignment is ambiguous (role groups of several organizations, or several role groups of one organization, as the portal sign-in denies it too; the fix is to remove the extra group memberships in the identity provider), or when it is deactivated, upstream_unavailable when the identity provider failed. Actor is the system actor paddock-server admin. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

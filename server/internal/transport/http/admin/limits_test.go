@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/debtest"
 )
 
 // padded returns doc as JSON preceded by whitespace to exactly size bytes, so that the decoder reads the whole body.
@@ -120,7 +121,7 @@ func TestUploadDeadlines(t *testing.T) {
 		t.Fatalf("create release: %d %s", r.status, r.body)
 	}
 	bin := []byte("\x7fELF paddockd")
-	deb := []byte("!<arch>\ndebian-binary")
+	deb := debtest.Deb(debtest.Control("paddock-agent", strings.Replace(v, "-", "~", 1), "amd64"))
 	send := func(path string, body []byte, sig []byte) (*deadlineRecorder, *observedBody) {
 		rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 		ob := &observedBody{Reader: bytes.NewReader(body), rec: rec}

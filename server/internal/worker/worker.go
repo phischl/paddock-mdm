@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -49,6 +50,24 @@ const (
 func systemContext(ctx context.Context, org uuid.UUID, messageID string) context.Context {
 	ctx = principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker", OrganizationID: org})
 	return httpx.WithRequestID(ctx, messageID)
+}
+
+var metricDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "paddock_worker_dropped_total",
+	Help: "Ingest messages the worker acknowledged without processing them, by reason.",
+}, []string{"reason"})
+
+// unavailable reports whether err refuses the message's organization because it is deleting or deleted (plan M17
+// amendment 2026-11-14 d). No retry can succeed, so the caller acknowledges the message; it is logged and counted
+// here.
+func unavailable(ctx context.Context, err error) bool {
+	if !errors.Is(err, problem.OrganizationInactive) {
+		return false
+	}
+	p, _ := principal.From(ctx)
+	metricDropped.WithLabelValues("organization_unavailable").Inc()
+	slog.InfoContext(ctx, "message of an organization that is deleting or deleted dropped", "organization_id", p.OrganizationID)
+	return true
 }
 
 // permanent reports whether err is a rejection that a retry cannot change (a 4xx problem).
@@ -129,4 +148,11 @@ func decode(body []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// decodeLenient parses a heartbeat, ignoring fields this release does not know: a newer gateway may add optional
+// fields while this worker still consumes, and the next check-in replaces a heartbeat anyway (ADR 0057, review round 1,
+// L3).
+func decodeLenient(body []byte, v any) error {
+	return json.Unmarshal(body, v)
 }

@@ -37,7 +37,7 @@ func (r *Rollouts) Run(ctx context.Context) error {
 	tick := time.NewTicker(r.interval)
 	defer tick.Stop()
 	for {
-		if err := r.Round(ctx); err != nil {
+		if err := r.Round(ctx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "rollout round failed; retrying next round", "error", err)
 		}
 		select {

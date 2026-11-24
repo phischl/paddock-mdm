@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,6 +68,18 @@ func ValidateVersion(v string) error {
 		return ErrInvalidVersion
 	}
 	return nil
+}
+
+// DebianVersion is release version v as a package of the release carries it in its control file: the SemVer
+// pre-release separator "-" becomes "~", so that 0.1.0~alpha.1 sorts before 0.1.0 (as `make deb` and nfpm write it);
+// a "-" inside the build metadata stays.
+func DebianVersion(v string) string {
+	core, build, hasBuild := strings.Cut(v, "+")
+	core = strings.Replace(core, "-", "~", 1)
+	if hasBuild {
+		return core + "+" + build
+	}
+	return core
 }
 
 // ValidateArch checks an architecture.

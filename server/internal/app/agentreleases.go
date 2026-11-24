@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/debcontrol"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/components"
@@ -254,6 +256,9 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 			if err := checkPackageComment(name, comment, version, arch); err != nil {
 				return err
 			}
+			if err := checkPackageControl(name, packageVersion, version, arch, deb); err != nil {
+				return err
+			}
 			lease, err = takeUploadLease(ctx, q, version, pkg.ObjectKey, a.storeTimeout)
 			return err
 		},
@@ -330,6 +335,34 @@ func checkPackageComment(name, comment, version, arch string) error {
 		return nil
 	}
 	return checkBinaryComment(comment, version, arch)
+}
+
+// checkPackageControl requires the control file of a Debian package to name the package, version and architecture it
+// is stored as (plan M19 D6, ADR 0043 amendment 2026-11-11 b): the trusted comment binds a package to its release and
+// arch but not to its name, so without this check a validly signed paddock-supervisor could be stored as paddock-agent.
+// The version is the release version in Debian form, for fleet-osquery its package_version, which the signature does
+// not cover (amendment 2026-11-11 c).
+func checkPackageControl(name, packageVersion, version, arch string, deb []byte) error {
+	f, err := debcontrol.Read(bytes.NewReader(deb), int64(len(deb)))
+	switch {
+	case errors.Is(err, debcontrol.ErrUnsupportedCompression):
+		return problem.UnsupportedControlCompression.WithDetail(err.Error())
+	case err != nil:
+		return problem.InvalidRequest.WithDetail(err.Error())
+	}
+	wantVersion := agentrelease.DebianVersion(version)
+	if name == agentrelease.PackageFleetd {
+		wantVersion = packageVersion
+	}
+	switch {
+	case f.Package != name:
+		return problem.PackageNameMismatch.WithDetail(fmt.Sprintf("the control file names the package %.64q, not %q", f.Package, name))
+	case f.Version != wantVersion:
+		return problem.PackageVersionMismatch.WithDetail(fmt.Sprintf("the control file names the version %.64q, not %q", f.Version, wantVersion))
+	case f.Architecture != arch:
+		return problem.PackageArchMismatch.WithDetail(fmt.Sprintf("the control file names the architecture %.64q, not %q", f.Architecture, arch))
+	}
+	return nil
 }
 
 // checkFile validates a release file on its own — architecture, size and signature — and returns the signature's
@@ -578,6 +611,9 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			comment, err = checkFile(a.packageVerifier(pkg.Name), pkg.Name, pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
 			if err == nil {
 				err = checkPackageComment(pkg.Name, comment, version, pkg.Arch)
+			}
+			if err == nil {
+				err = checkPackageControl(pkg.Name, pkg.PackageVersion, version, pkg.Arch, pkg.Deb)
 			}
 		}
 		if err != nil {

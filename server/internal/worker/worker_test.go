@@ -240,6 +240,39 @@ func TestCacheSync(t *testing.T) {
 	}
 }
 
+// PDK-1060: a change committed after the initial reconcile but before LISTEN is established raises a notification
+// nobody receives; the cache must still pick it up without waiting for the next interval.
+func TestCacheSyncChangeBeforeListen(t *testing.T) {
+	f := newFixture(t)
+	s := NewCacheSync(f.pool, f.cache)
+	s.interval = time.Hour
+	release := make(chan struct{})
+	s.beforeListen = func(ctx context.Context) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	secret, tokenID := f.token(t, true)
+	hash := enrollment.HashSecret(secret)
+	go func() { _ = s.Run(ctx) }()
+	waitFor(t, "token cached", func() bool {
+		tok, ok, _ := f.cache.Token(ctx, hash)
+		return ok && !tok.Revoked
+	})
+	if _, err := f.super.Exec(ctx, "UPDATE enrollment_token SET revoked_at = now() WHERE id = $1", tokenID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	waitFor(t, "revocation cached", func() bool {
+		tok, _, _ := f.cache.Token(ctx, hash)
+		return tok.Revoked
+	})
+}
+
 // TestReconcileAllContinuesPastFailingOrg (PDK-475): a device whose counter is missing gets 503 until a reconcile
 // restores it, so an organization whose reconcile fails must not stop the organizations after it.
 func TestReconcileAllContinuesPastFailingOrg(t *testing.T) {

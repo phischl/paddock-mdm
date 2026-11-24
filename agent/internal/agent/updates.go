@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -20,6 +22,19 @@ func (a *Agent) reportUpdate() {
 	}
 	if r == nil || (a.st.ReportedUpdateAt != nil && a.st.ReportedUpdateAt.Equal(r.At)) {
 		return
+	}
+	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056). While
+	// it stays unprocessed the slots are not judged, so waiting for the baseline raises no false report (plan M5a R7).
+	unstaged, err := integrity.UpdateResult(a.d.Layout, r.Version, r.Outcome, r.At)
+	if a.integrityRetry("update-result:"+r.At.Format(time.RFC3339Nano), err) {
+		return
+	}
+	// Once per result, like its own event: the baseline is kept, so the next pass reports what the slots hold
+	// (plan M5a R16).
+	if unstaged {
+		slog.Warn("update result without a release this agent staged; the agent slots keep their baseline", "version", r.Version)
+		a.event(protocol.EventTamperProtectedFileChanged, protocol.TamperProtectedFileChanged{
+			File: integrity.UpdateResultFile, Reason: protocol.TamperReasonUpdateResultUnstaged})
 	}
 	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(r.EventType(), map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
@@ -97,6 +112,10 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	pid, err := a.d.Supervisor()
 	if err != nil {
 		slog.WarnContext(ctx, "agent update offered but not installable", "version", offer.Version, "error", err)
+		return
+	}
+	// Without the record the result of this release moves nothing and is reported as unstaged (plan M5a R16).
+	if a.integrityRetry("staged:"+offer.Version, integrity.RecordStaged(a.d.Layout, offer.Version, offer.SHA256)) {
 		return
 	}
 	if err := update.Stage(ctx, a.d.Layout, a.d.Client, *offer); err != nil {

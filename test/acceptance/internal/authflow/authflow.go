@@ -67,6 +67,30 @@ func NewClient(caRoot string) (*http.Client, error) {
 	}, nil
 }
 
+// StageError is a flow that stopped at a stage this client cannot answer, e.g. the WebAuthn setup of a sign-in that
+// enrols a passkey (ADR 0053).
+type StageError struct {
+	Flow, Component string
+	// Raw is the start of the stage's challenge.
+	Raw string
+}
+
+func (e *StageError) Error() string {
+	return fmt.Sprintf("authflow: unsupported stage %q in flow %s: %s", e.Component, e.Flow, e.Raw)
+}
+
+// ExecutorError is an answer of the flow executor API other than 200 or a redirect: Authentik refused the request.
+type ExecutorError struct {
+	Method, Path string
+	Status       int
+	// Body is the start of the answer.
+	Body string
+}
+
+func (e *ExecutorError) Error() string {
+	return fmt.Sprintf("authflow: %s %s: HTTP %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
 // Login signs in username/password at adminURL ("https://admin.paddock.localhost:8443"). On a Paddock denial it
 // returns the result together with ErrDenied.
 func Login(ctx context.Context, client *http.Client, adminURL, username, password string) (*Result, error) {
@@ -238,9 +262,9 @@ func runFlow(ctx context.Context, client *http.Client, page *url.URL, slug, user
 			}
 			answer["component"] = ch.Component
 		case "ak-stage-access-denied":
-			return "", fmt.Errorf("authflow: Authentik denied access in flow %s: %s", slug, ch.Error)
+			return "", fmt.Errorf("%w: Authentik denied access in flow %s: %s", ErrAccessDenied, slug, ch.Error)
 		default:
-			return "", fmt.Errorf("authflow: unsupported stage %q in flow %s: %s", ch.Component, slug, truncate(ch.Raw))
+			return "", &StageError{Flow: slug, Component: ch.Component, Raw: truncate(ch.Raw)}
 		}
 		if ch, err = executor(ctx, client, http.MethodPost, exec, answer); err != nil {
 			return "", err
@@ -288,7 +312,7 @@ func executor(ctx context.Context, client *http.Client, method string, u *url.UR
 		return executor(ctx, client, http.MethodGet, loc, nil)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return challenge{}, fmt.Errorf("authflow: %s %s: HTTP %d: %s", method, u.Path, resp.StatusCode, truncate(data))
+		return challenge{}, &ExecutorError{Method: method, Path: u.Path, Status: resp.StatusCode, Body: truncate(data)}
 	}
 	var ch challenge
 	if err := json.Unmarshal(data, &ch); err != nil {

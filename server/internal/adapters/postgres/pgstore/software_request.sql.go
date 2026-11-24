@@ -72,6 +72,16 @@ func (q *Queries) DecideSoftwareRequest(ctx context.Context, arg DecideSoftwareR
 	return result.RowsAffected(), nil
 }
 
+const deleteSoftwareRequestWithdrawals = `-- name: DeleteSoftwareRequestWithdrawals :exec
+DELETE FROM software_request_withdrawal WHERE device_id = $1
+`
+
+// Forgets the withdrawal numbers of a device whose event numbering restarted (device.event_seq_reset, plan M19 D8.5).
+func (q *Queries) DeleteSoftwareRequestWithdrawals(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSoftwareRequestWithdrawals, deviceID)
+	return err
+}
+
 const expireSoftwareRequest = `-- name: ExpireSoftwareRequest :execrows
 UPDATE software_request r SET state = 'expired', decided_at = $1
 FROM software_catalog_entry e
@@ -231,9 +241,14 @@ func (q *Queries) GetUserIDByUsername(ctx context.Context, username string) (uui
 
 const insertSoftwareRequest = `-- name: InsertSoftwareRequest :execrows
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at, approval_epoch, justification)
-VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7,
-  $8, $9, $10)
+  expires_at, approval_epoch, justification, reported_seq)
+SELECT $1, $2, $3, $4, $5, $6, 'requested', $7,
+  $8, $9, $10, $11::bigint
+WHERE NOT EXISTS (
+  SELECT 1 FROM software_request_withdrawal w
+  WHERE w.device_id = $4 AND w.catalog_entry_id = $3 AND w.username = $6
+    AND w.event_seq > $11::bigint
+)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING
 `
 
@@ -248,9 +263,11 @@ type InsertSoftwareRequestParams struct {
 	ExpiresAt      time.Time
 	ApprovalEpoch  int32
 	Justification  string
+	ReportedSeq    int64
 }
 
-// Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
+// Opens a request; none while one of the device, entry and user is open (software_request_open_idx), and none when a
+// withdrawal the device reported after it (a higher event_seq) was processed first (plan M19 D8).
 func (q *Queries) InsertSoftwareRequest(ctx context.Context, arg InsertSoftwareRequestParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSoftwareRequest,
 		arg.ID,
@@ -263,6 +280,7 @@ func (q *Queries) InsertSoftwareRequest(ctx context.Context, arg InsertSoftwareR
 		arg.ExpiresAt,
 		arg.ApprovalEpoch,
 		arg.Justification,
+		arg.ReportedSeq,
 	)
 	if err != nil {
 		return 0, err
@@ -580,6 +598,17 @@ func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoft
 	return items, nil
 }
 
+const lockSoftwareRequestOrder = `-- name: LockSoftwareRequestOrder :exec
+SELECT pg_advisory_xact_lock(hashtextextended('software_request_order:' || CAST($1::uuid AS text), 0))
+`
+
+// Serializes the requests and withdrawals of a device until the transaction ends (plan M19 D8): without it a request
+// and its withdrawal in two concurrent batches could each miss the other's uncommitted row.
+func (q *Queries) LockSoftwareRequestOrder(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockSoftwareRequestOrder, deviceID)
+	return err
+}
+
 const markDenialLockChecked = `-- name: MarkDenialLockChecked :execrows
 UPDATE device SET denial_lock_checked_at = $1::timestamptz
 WHERE id = $2::uuid AND bundle_seq = $3::bigint
@@ -601,6 +630,60 @@ func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockC
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const recordSoftwareRequestWithdrawal = `-- name: RecordSoftwareRequestWithdrawal :exec
+INSERT INTO software_request_withdrawal (organization_id, device_id, catalog_entry_id, username, event_seq, received_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (organization_id, device_id, catalog_entry_id, username) DO UPDATE
+SET event_seq = EXCLUDED.event_seq, received_at = EXCLUDED.received_at
+WHERE software_request_withdrawal.event_seq < EXCLUDED.event_seq
+`
+
+type RecordSoftwareRequestWithdrawalParams struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+	EventSeq       int64
+	ReceivedAt     time.Time
+}
+
+// Keeps the highest event_seq of a withdrawal of the device, entry and user (plan M19 D8), with when it was received.
+func (q *Queries) RecordSoftwareRequestWithdrawal(ctx context.Context, arg RecordSoftwareRequestWithdrawalParams) error {
+	_, err := q.db.Exec(ctx, recordSoftwareRequestWithdrawal,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.CatalogEntryID,
+		arg.Username,
+		arg.EventSeq,
+		arg.ReceivedAt,
+	)
+	return err
+}
+
+const repeatSoftwareRequest = `-- name: RepeatSoftwareRequest :exec
+UPDATE software_request SET reported_seq = greatest(reported_seq, $1::bigint)
+WHERE device_id = $2 AND catalog_entry_id = $3 AND username = $4 AND state = 'requested'
+`
+
+type RepeatSoftwareRequestParams struct {
+	ReportedSeq    int64
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+}
+
+// A repeat of the open request moves its reported_seq to the repeat's when that is newer, so a withdrawal the device
+// reported between the two closes it no longer: the device shows the repeat as pending (plan M19 D8).
+func (q *Queries) RepeatSoftwareRequest(ctx context.Context, arg RepeatSoftwareRequestParams) error {
+	_, err := q.db.Exec(ctx, repeatSoftwareRequest,
+		arg.ReportedSeq,
+		arg.DeviceID,
+		arg.CatalogEntryID,
+		arg.Username,
+	)
+	return err
 }
 
 const softwareRequestApprovalHolds = `-- name: SoftwareRequestApprovalHolds :one
@@ -654,10 +737,21 @@ func (q *Queries) SoftwareRequestOffered(ctx context.Context, arg SoftwareReques
 	return offered, err
 }
 
+const unorderSoftwareRequests = `-- name: UnorderSoftwareRequests :exec
+UPDATE software_request SET reported_seq = NULL WHERE device_id = $1 AND state = 'requested'
+`
+
+// Drops the number of a device's open requests when its event numbering restarted (plan M19 D8.5): NULL has no order,
+// so any later withdrawal closes the request.
+func (q *Queries) UnorderSoftwareRequests(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, unorderSoftwareRequests, deviceID)
+	return err
+}
+
 const withdrawSoftwareRequest = `-- name: WithdrawSoftwareRequest :execrows
 UPDATE software_request SET state = 'withdrawn', decided_at = $1
 WHERE device_id = $2 AND catalog_entry_id = $3 AND username = $4 AND state = 'requested'
-  AND requested_at <= $1
+  AND (reported_seq IS NULL OR reported_seq < $5::bigint)
 `
 
 type WithdrawSoftwareRequestParams struct {
@@ -665,16 +759,19 @@ type WithdrawSoftwareRequestParams struct {
 	DeviceID       uuid.UUID
 	CatalogEntryID uuid.UUID
 	Username       string
+	EventSeq       int64
 }
 
 // Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
-// index allows one at most. A request opened after the report was received is a newer one and stays.
+// index allows one at most. Only a request the device reported before the withdrawal closes (plan M19 D8); one opened
+// before reported_seq existed (NULL) has no order and closes too.
 func (q *Queries) WithdrawSoftwareRequest(ctx context.Context, arg WithdrawSoftwareRequestParams) (int64, error) {
 	result, err := q.db.Exec(ctx, withdrawSoftwareRequest,
 		arg.DecidedAt,
 		arg.DeviceID,
 		arg.CatalogEntryID,
 		arg.Username,
+		arg.EventSeq,
 	)
 	if err != nil {
 		return 0, err

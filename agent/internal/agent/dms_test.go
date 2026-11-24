@@ -181,3 +181,30 @@ func TestNotifySessionsByUID(t *testing.T) {
 		t.Fatalf("calls %q, want one systemd-run --machine=811622788@.host --user", calls)
 	}
 }
+
+// TestOffboardedDeviceDisarmsBeforeRefusedUninstall (plan M17 amendment n, PDK-1016): a device of a deleted
+// organization receives the disarm first and then the uninstall, and no time ticket ever again. With the switch armed
+// and the uninstall refused (a revocation handed over less than revocationWindow ago), the disarm still removes the
+// self-lock token, so the device keeps working and never locks itself, however long it stays silent.
+func TestOffboardedDeviceDisarmsBeforeRefusedUninstall(t *testing.T) {
+	w := newDMSWorld(t, true)
+	ctx := context.Background()
+	day := 24 * time.Hour
+	w.advance(5 * day)
+	w.a.st.HandedRevocations = map[string]time.Time{"h": w.a.d.Now().Add(-time.Hour)}
+	if status, result := w.a.deleteSelfLock(ctx, &command.Command{Type: command.TypeDeleteSelfLock}); status != protocol.CommandSucceeded ||
+		result["deleted"] != true {
+		t.Fatalf("delete_self_lock: %s %v", status, result)
+	}
+	if status, result := w.a.uninstallCommand(ctx, uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandFailed ||
+		result["reason"] != "revocation_pending" {
+		t.Fatalf("uninstall: %s %v, want refused with revocation_pending", status, result)
+	}
+	w.advance(60 * day)
+	if len(w.elapsed) != 0 {
+		t.Fatalf("the disarmed device locked itself: %v", w.elapsed)
+	}
+	if _, err := os.Stat(w.a.d.Layout.Join(selfLockFile)); !os.IsNotExist(err) {
+		t.Fatalf("self-lock token after the disarm: %v", err)
+	}
+}

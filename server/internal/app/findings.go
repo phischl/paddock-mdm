@@ -43,6 +43,10 @@ var tamperFindingCodes = map[audit.Code]string{
 	audit.CodeDeviceTamperServiceStopped:       "unit",
 	audit.CodeDeviceCloneSuspected:             "",
 	audit.CodeDeviceTamperAgentNotRunning:      "",
+	audit.CodeDeviceTamperAgentBinaryChanged:   "",
+	audit.CodeDeviceTamperFleetHostClaimed:     "",
+	audit.CodeDeviceTamperFleetdSilent:         "",
+	audit.CodeDeviceTamperInventoryRejected:    "",
 }
 
 // UpsertTamperFinding opens the tamper finding of a device, code and subject for the audit event eventID at at, or
@@ -119,6 +123,9 @@ type Findings struct {
 	runner *ActionRunner
 	org    *db.OrgPool
 	now    func() time.Time
+	// beforeWrites, if set, runs in Materialize between the listing and the first write; tests use it to start the
+	// organization's deletion there.
+	beforeWrites func()
 }
 
 // NewFindings creates the use cases.
@@ -371,8 +378,22 @@ func (f *Findings) Materialize(ctx context.Context, now time.Time) error {
 	for _, c := range conditions {
 		open[finding.AttentionKey(c.ID)] = true
 	}
+	if f.beforeWrites != nil {
+		f.beforeWrites()
+	}
 	materialized := make(map[string]bool, len(live))
 	var errs []error
+	// failed records a write that failed and reports whether the round must stop: an organization that started
+	// deleting refuses every further write, so the round ends with that one error instead of a WARN per finding (plan
+	// M17 amendment s point 6.1).
+	failed := func(key string, err error) bool {
+		if db.IsOrganizationUnavailable(err) {
+			errs = append(errs, err)
+			return true
+		}
+		errs = append(errs, f.findingFailed(ctx, key, err))
+		return false
+	}
 	for _, l := range live {
 		materialized[l.Key] = true
 		if open[l.Key] {
@@ -381,8 +402,8 @@ func (f *Findings) Materialize(ctx context.Context, now time.Time) error {
 		if err := f.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 			_, err := q.ClearAttentionFinding(ctx, pgstore.ClearAttentionFindingParams{ID: l.ID, ClearedAt: &now})
 			return err
-		}); err != nil {
-			errs = append(errs, f.findingFailed(ctx, l.Key, err))
+		}); err != nil && failed(l.Key, err) {
+			return errors.Join(errs...)
 		}
 	}
 	for _, c := range conditions {
@@ -396,8 +417,8 @@ func (f *Findings) Materialize(ctx context.Context, now time.Time) error {
 				Subject: c.Detail, OpenedAt: c.Since, LastSeenAt: now,
 			})
 			return err
-		}); err != nil {
-			errs = append(errs, f.findingFailed(ctx, key, err))
+		}); err != nil && failed(key, err) {
+			return errors.Join(errs...)
 		}
 	}
 	return errors.Join(errs...)

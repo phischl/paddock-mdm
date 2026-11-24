@@ -228,9 +228,11 @@ type openedRequest struct {
 // justification as untrusted plain text (maintainer answer Q7). It opens none — and returns nil — for malformed data,
 // a justification that fails software.ValidJustification, an entry that is not the organization's or does not require approval, an
 // entry no available assignment offers to the user on the device (architect decision A10-17), a user who holds an
-// approval of it on the device already, a repeat while the request is open, or a request within
-// software.RerequestAfterDenial of a denial (§3.7).
-func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, data json.RawMessage,
+// approval of it on the device already, a repeat while the request is open, a request within
+// software.RerequestAfterDenial of a denial (§3.7), or a request with event number seq that a withdrawal with a higher
+// number of the same device, entry and user was processed before (plan M19 D8). A repeat while the request is open
+// moves the request's number up to seq.
+func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, seq int64, data json.RawMessage,
 	receivedAt time.Time) (*openedRequest, error) {
 	var ev protocol.SoftwareRequest
 	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) || !software.ValidJustification(ev.Justification) {
@@ -273,15 +275,23 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	if err != nil && !db.IsNoRows(err) {
 		return nil, err
 	}
+	if err := q.LockSoftwareRequestOrder(ctx, deviceID); err != nil {
+		return nil, err
+	}
 	id := uuid.Must(uuid.NewV7())
 	expires := receivedAt.Add(software.RequestValidity)
 	n, err := q.InsertSoftwareRequest(ctx, pgstore.InsertSoftwareRequestParams{
 		ID: id, OrganizationID: org, CatalogEntryID: entry, DeviceID: deviceID,
 		UserID: uuid.NullUUID{UUID: user, Valid: user != uuid.Nil}, Username: ev.User, RequestedAt: receivedAt, ExpiresAt: expires,
-		ApprovalEpoch: approval.ApprovalEpoch, Justification: ev.Justification,
+		ApprovalEpoch: approval.ApprovalEpoch, Justification: ev.Justification, ReportedSeq: seq,
 	})
-	if err != nil || n != 1 {
+	if err != nil {
 		return nil, err
+	}
+	if n != 1 {
+		return nil, q.RepeatSoftwareRequest(ctx, pgstore.RepeatSoftwareRequestParams{
+			ReportedSeq: seq, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User,
+		})
 	}
 	row, err := q.GetSoftwareRequest(ctx, id)
 	if err != nil {
@@ -294,28 +304,67 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	}}, nil
 }
 
-// withdrawSoftwareRequest closes the open request a software.request_withdrawn event of the device reports, received
-// at receivedAt (PDK-811b), in the transaction of its claim. Malformed data, or no open request of that device, entry
-// and user (an administrator decided it or it expired first), changes nothing. No event of its own is recorded: the
+// withdrawSoftwareRequest closes the open request a software.request_withdrawn event of the device with event number
+// seq reports, received at receivedAt (PDK-811b), in the transaction of its claim, and reports whether it closed one.
+// It keeps the withdrawal's number for the device, entry and user, so a request the device reported before it and
+// that is processed later opens nothing (plan M19 D8), and it closes only a request the device reported before it.
+// Malformed data, an entry that is not the organization's, or no such open request (an administrator decided it, it
+// expired first, or the device repeated it after the withdrawal) closes nothing. No event of its own is recorded: the
 // device's device.software_request_withdrawn is the one audit event of the withdrawal.
-func withdrawSoftwareRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, data json.RawMessage, receivedAt time.Time) error {
+func withdrawSoftwareRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, seq int64, data json.RawMessage,
+	receivedAt time.Time) (bool, error) {
 	var ev protocol.SoftwareRequestWithdrawn
 	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) {
-		return nil
+		return false, nil
 	}
 	entry, err := uuid.Parse(ev.EntryID)
 	if err != nil {
-		return nil //nolint:nilerr // a malformed entry ID closes nothing; the event itself is still recorded
+		return false, nil //nolint:nilerr // a malformed entry ID closes nothing; the event itself is still recorded
 	}
-	_, err = q.WithdrawSoftwareRequest(ctx, pgstore.WithdrawSoftwareRequestParams{
-		DecidedAt: &receivedAt, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User,
+	// The withdrawal row references the entry; one the organization does not have has no request to order against.
+	if _, err := q.GetSoftwareCatalogEntryApproval(ctx, entry); db.IsNoRows(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	org, err := orgOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := q.LockSoftwareRequestOrder(ctx, deviceID); err != nil {
+		return false, err
+	}
+	if err := q.RecordSoftwareRequestWithdrawal(ctx, pgstore.RecordSoftwareRequestWithdrawalParams{
+		OrganizationID: org, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User, EventSeq: seq, ReceivedAt: receivedAt,
+	}); err != nil {
+		return false, err
+	}
+	n, err := q.WithdrawSoftwareRequest(ctx, pgstore.WithdrawSoftwareRequestParams{
+		DecidedAt: &receivedAt, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User, EventSeq: seq,
 	})
-	return err
+	return n == 1, err
+}
+
+// softwareRequestOrderLock puts in front of the entries of a batch that holds a software request or withdrawal an
+// unaudited entry that takes the device's order lock (plan M19 D8.5), so the batch takes it before it claims any event
+// number: taken in the middle, after earlier entries claimed numbers, two overlapping redelivered batches of the device
+// could each wait for the other. The claims still take it themselves for the per-entry fallback.
+func softwareRequestOrderLock(entries []OnceEntry, deviceID uuid.UUID, events []protocol.Event) []OnceEntry {
+	if !slices.ContainsFunc(events, func(ev protocol.Event) bool {
+		return ev.Type == protocol.EventSoftwareRequest || ev.Type == protocol.EventSoftwareRequestWithdrawn
+	}) {
+		return entries
+	}
+	lock := OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		return false, q.LockSoftwareRequestOrder(ctx, deviceID)
+	}}
+	return append([]OnceEntry{lock}, entries...)
 }
 
 // softwareRequestEntry adds to the once-entry of a software.request event the opening of its request and, when it
 // opened one, the software_request.opened event in the same transaction; to that of a software.request_withdrawn event
-// the closing of the open request. Every other entry is returned unchanged.
+// the closing of the open request and the param closed, whether it closed one. Every other entry is returned
+// unchanged.
 func (d *DeviceReports) softwareRequestEntry(entry OnceEntry, deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) OnceEntry {
 	code, ok := map[string]audit.Code{
 		protocol.EventSoftwareRequest:          audit.CodeDeviceSoftwareRequested,
@@ -330,13 +379,17 @@ func (d *DeviceReports) softwareRequestEntry(entry OnceEntry, deviceID uuid.UUID
 	maps.DeleteFunc(entry.Spec.Params, func(k string, _ any) bool { return !slices.Contains(def.Params, k) })
 	if ev.Type == protocol.EventSoftwareRequestWithdrawn {
 		claim := entry.Claim
+		var closed bool
 		entry.Claim = func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			closed = false
 			fresh, err := claim(ctx, q)
 			if err != nil || !fresh {
 				return fresh, err
 			}
-			return true, withdrawSoftwareRequest(ctx, q, deviceID, ev.Data, receivedAt)
+			closed, err = withdrawSoftwareRequest(ctx, q, deviceID, ev.EventSeq, ev.Data, receivedAt)
+			return true, err
 		}
+		entry.Annotate = func(rec Recorder) { rec.SetParam("closed", closed) }
 		return entry
 	}
 	claim := entry.Claim
@@ -351,7 +404,7 @@ func (d *DeviceReports) softwareRequestEntry(entry OnceEntry, deviceID uuid.UUID
 		if err != nil {
 			return false, err
 		}
-		opened, err = openSoftwareRequest(ctx, q, org, deviceID, ev.Data, receivedAt)
+		opened, err = openSoftwareRequest(ctx, q, org, deviceID, ev.EventSeq, ev.Data, receivedAt)
 		return true, err
 	}
 	entry.After = func(ctx context.Context, q *pgstore.Queries, _ uuid.UUID) error {

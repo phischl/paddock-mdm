@@ -67,7 +67,11 @@ that has no such comment (422 `release_signature_mismatch`), and store nothing o
 older release cannot be stored under a newer one (ADR 0043 amendments 2026-11-11 b and c). `paddock-revoke` carries the
 same comment, signed with the revocation release key (*Signing in the release workflow*, step 2, has the command);
 signed with the agent release key it is refused even with the right comment (400). Releases stored before this check are
-not verified again. The workflow and the offline fallback both sign with it:
+not verified again. From 0.1.0-alpha.11 on the upload, the host command and the import also read each package's
+`control` file and refuse a package whose `Package`, `Version` or `Architecture` differs from what it is stored as (422
+`package_name_mismatch`, `package_version_mismatch`, `package_arch_mismatch`): `Version` is the release version with `~`
+for the pre-release separator (`0.1.0~alpha.11`, as `make deb` writes it), for `fleet-osquery` its fleetd version. A
+control archive compressed with anything but gzip or zstd is refused with 415 `unsupported_control_compression`. The workflow and the offline fallback both sign with it:
 
 ```sh
 minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"
@@ -495,6 +499,114 @@ The way back is on the device:
 Once the rollback is made, the device reports `device.agent_rolled_back` and the attention entry disappears. It also
 disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
 reported `rollback_failed`, `rolled_back` or both.
+
+### An update that waits for the active agent
+
+Before it installs a release, the supervisor asks the active agent for its version (`paddockd version`, at most
+10 seconds) so that it can refuse a release that is not newer. If that call times out, for example while a slow disk
+stalls, the supervisor decides nothing: it keeps the update request, writes no result and tries again later. The
+first retry is 10 seconds later, then the wait doubles up to every 5 minutes. A restart of the supervisor retries at
+once. Every deferred attempt logs one warning with the requested version and the next wait:
+
+```sh
+journalctl -u paddock-supervisor | grep 'update request deferred'
+```
+
+The warning is also in the diagnostics bundle (`journal/paddock-supervisor.log`). A short stall resolves itself on the
+next attempt. The portal shows that the update does not arrive, not why: the device keeps checking in with its old
+agent version, the fleet overview counts it as outdated against the current release, and an *Update agent now*
+request ends after 24 hours without a report.
+
+If every attempt is deferred, the active agent binary hangs or its file system does not answer. While the request
+waits, the agent stages no other release and installs no supervisor package. A supervisor restart, *Update agent now*
+and `apt install --reinstall paddock-agent` do not help: the package never touches an existing `current` or the
+slots. Make the active slot answer again, as root on the device:
+
+1. Remove the waiting request and its release first. Otherwise the supervisor would compare the waiting release with
+   the agent you put in place in the next step, which can be older than the stalled one, and the release could pass
+   the downgrade refusal. The agent stages the release that the server offers again on its own:
+
+   ```sh
+   cat /var/lib/paddock/staging/request.json            # {"version":"<version>"}
+   rm -f /var/lib/paddock/staging/request.json && rm -rf /var/lib/paddock/staging/<version>
+   ```
+
+2. If the other slot holds a working agent, point `current` at it. The other slot is the one `current` does not point
+   at, here A:
+
+   ```sh
+   readlink /opt/paddock/agent/current                  # the active slot, here B
+   timeout 15 /opt/paddock/agent/A/paddockd version     # prints a version: A works
+   ln -sfn A /opt/paddock/agent/.current.new && mv -T /opt/paddock/agent/.current.new /opt/paddock/agent/current
+   ```
+
+3. Otherwise copy the packaged agent into the active slot, here B:
+
+   ```sh
+   install -m 0755 /usr/lib/paddock/paddockd /opt/paddock/agent/B/paddockd.new
+   mv -f /opt/paddock/agent/B/paddockd.new /opt/paddock/agent/B/paddockd
+   ```
+
+4. Restart the supervisor:
+
+   ```sh
+   systemctl restart paddock-supervisor
+   ```
+
+The agent then stages the current release again, and the supervisor processes it as usual: signature check, downgrade
+refusal against the version that the active slot now reports, self-test and probation. The agent's integrity check
+(ADR 0056) reports step 3 once as `device.tamper_protected_file_changed` with `file`
+`/opt/paddock/agent/<slot>/paddockd`. Step 2 is usually not reported, because the agent stages the release again and
+the supervisor's result moves the baseline; it is reported with `file` `/opt/paddock/agent/current` only when the
+re-staged release is refused. That event is expected after this
+repair: resolve the tamper finding with a note on the intervention, and record it in your own change log as an
+intended intervention.
+The device then reports the agent version of the slot it runs.
+
+### When the integrity check is suspended
+
+The agent's integrity check of Paddock's own components (ADR 0056) skips an object or a whole pass while something
+blocks it: a running update, a held dpkg lock, a state file it cannot read. The bound holds per blocked object (the
+baseline, the agent slots, each package, each agent-written file, each unit): 15 minutes for the baseline itself,
+6 hours for everything else, in observed time while the agent runs. A gap between two passes counts at most twice the
+check's interval, and that interval is at most 1 hour; a pass also runs at every agent start. The bound survives
+agent restarts and an unwritable or locked baseline, because the agent keeps it in its state; root who edits the
+agent state resets it. An object blocked longer is reported once as `device.tamper_protected_file_changed` with
+`reason` `check_suspended`, and `file` names the path that blocks it. While the check is suspended, changes behind it
+are not reported individually. A suspension of a path the check also judges (a slot, `current`, an agent-written file)
+counts on the same tamper finding as a change of that path; the audit event's `reason` tells them apart. Investigate
+every such event:
+
+| `file` | Likely cause | What to check as root |
+| --- | --- | --- |
+| `/var/lib/paddock/state/integrity.lock` | another process holds the lock | `fuser -v /var/lib/paddock/state/integrity.lock` |
+| `/var/lib/paddock/state/integrity.json` | the baseline cannot be read or written (not a regular file, too large, full or read-only disk), or it keeps changing while a pass observes | `ls -l /var/lib/paddock/state/`, `df -h /var/lib/paddock`, `journalctl -u paddock-supervisor -g integrity` |
+| `/var/lib/paddock/staging/request.json` | an agent update that never finishes (see "An update that waits for the active agent") | `cat /var/lib/paddock/staging/request.json`, `journalctl -u paddock-supervisor` |
+| `/var/lib/paddock/state/probation.json` | a probation or a pending rollback that does not end | `cat /var/lib/paddock/state/probation.json`, `systemctl status paddock-supervisor` |
+| `/var/lib/paddock/state/update-result.json` | an update result the agent cannot read or does not process | `cat /var/lib/paddock/state/update-result.json` |
+| `/var/lib/paddock/state/supervisor-upgrade.json` | a supervisor upgrade marker that stays | `cat /var/lib/paddock/state/supervisor-upgrade.json`, `systemctl status paddock-supervisor-upgrade` |
+| `/var/lib/paddock/state/supervisor-upgrade-result.json` | a supervisor upgrade result the agent cannot read or does not process | `cat /var/lib/paddock/state/supervisor-upgrade-result.json` |
+| `/opt/paddock/agent/A/paddockd`, `/opt/paddock/agent/B/paddockd` or `/opt/paddock/agent/current` | the slot holds the release the agent staged, and its result never came | `ls -l /opt/paddock/agent/`, `journalctl -u paddock-supervisor` |
+| `/etc/paddock/disk-setup.json` | the in-place encryption's preparation or cleanup does not return | `journalctl -u paddock-supervisor`, the conversion state in the portal |
+| `/var/lib/dpkg/lock-frontend` and `/var/lib/dpkg/lock` | Likely an apt or dpkg prompt left open in a terminal (users have administrator rights), or a long package run; finish or cancel it. | `fuser -v /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock`, `ps -ef \| grep -E 'apt\|dpkg'` |
+| `/var/lib/dpkg/info/<package>.md5sums` | dpkg's checksums of a Paddock package cannot be read, `dpkg-query` fails, or dpkg rewrites the package in every pass | `ls -l /var/lib/dpkg/info/<package>.md5sums`, `dpkg-query -W <package>`, `dpkg --audit` |
+| `/etc/systemd/system/<unit>.d` | systemd cannot be asked for the unit's files, or a drop-in path does not parse | `systemctl show -p FragmentPath -p DropInPaths <unit>` |
+| any other path | a checked file cannot be read | `ls -l <file>` |
+
+The check never changes anything on the device. Close the tamper finding by hand once the cause is removed and an
+integrity pass ran without a new report.
+
+A baseline that was corrupt or missing is reported the same way with `reason` `baseline_reset` and `file`
+`/var/lib/paddock/state/integrity.json`: the agent recorded its baseline anew, so whatever was on the device at that
+moment became the baseline. Check the agent slots against the published release hashes (PDK-1122b) and the packages
+with `dpkg --verify paddock-agent paddock-supervisor paddock-revoke paddock-self-service fleet-osquery`.
+
+An update result that does not settle a release the agent staged itself (none was staged, or it settled already) is
+reported with `reason` `update_result_unstaged` and `file` `/var/lib/paddock/state/update-result.json`: the agent kept
+its baseline of the slots, so the next integrity pass reports any change of the slots or of `current`. Check the slots
+as above and `journalctl -u paddock-supervisor`.
+A genuine `rollback_failed` followed by `rolled_back`, with a new release staged in between, also raises one
+`update_result_unstaged` event and one report of `current`: verify the device's slot state as above.
 
 ## Update policy
 

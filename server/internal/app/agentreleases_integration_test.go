@@ -33,6 +33,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/debtest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -148,6 +149,21 @@ func (h releaseHarness) signPackage(deb []byte, version, arch string) string {
 	return h.signBinary(deb, version, arch)
 }
 
+// releaseDeb is a Debian package of a release as `make deb` builds it: its control file names name, version in Debian
+// form (the release version, or fleet-osquery's package version) and arch (plan M19 D6); data tells packages apart.
+func releaseDeb(name, version, arch, data string) []byte {
+	control := debtest.Control(name, agentrelease.DebianVersion(version), arch)
+	return debtest.Ar(debtest.DebianBinary(),
+		debtest.Member{Name: "control.tar.gz", Data: debtest.Gzip(debtest.Tar(map[string]string{"./control": control}))},
+		debtest.Member{Name: "data.tar.gz", Data: debtest.Gzip(debtest.Tar(map[string]string{"./payload": data}))})
+}
+
+// xzControlDeb is a Debian package whose control archive is compressed with xz, which the server does not read.
+func xzControlDeb() []byte {
+	return debtest.Ar(debtest.DebianBinary(), debtest.Member{Name: "control.tar.xz", Data: []byte("\xfd7zXZ\x00")},
+		debtest.Member{Name: "data.tar.xz", Data: []byte("\xfd7zXZ\x00")})
+}
+
 // signRevoke signs a paddock-revoke package as its holders do offline: with the revocation release key and the trusted
 // comment of the release and the package's arch (ADR 0043 amendment 2026-11-11 c, PDK-1004).
 func (h releaseHarness) signRevoke(deb []byte, version, arch string) string {
@@ -219,7 +235,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	if err != nil || art.Size != 6 || art.ObjectKey != agentrelease.ObjectKey(v, "amd64") || string(h.store.puts[art.ObjectKey]) != "binary" {
 		t.Fatalf("upload: %+v, %v", art, err)
 	}
-	deb := []byte("debian package")
+	deb := releaseDeb("paddock-agent", v, "amd64", "debian package")
 	debSig := h.signPackage(deb, v, "amd64")
 	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "", "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
 	expectProblem(t, err, problem.InvalidRequest)
@@ -228,7 +244,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "", "386", deb, debSig)
 	expectProblem(t, err, problem.InvalidRequest)
 	pkg, err := h.releases.UploadPackage(ctx, v, "paddock-agent", "", "amd64", deb, debSig)
-	if err != nil || pkg.ObjectKey != agentrelease.PackageObjectKey(v, "paddock-agent", "", "amd64") || string(h.store.puts[pkg.ObjectKey]) != "debian package" {
+	if err != nil || pkg.ObjectKey != agentrelease.PackageObjectKey(v, "paddock-agent", "", "amd64") || string(h.store.puts[pkg.ObjectKey]) != string(deb) {
 		t.Fatalf("package upload: %+v, %v", pkg, err)
 	}
 	if r, err := h.releases.Publish(ctx, v); err != nil || r.Status != agentrelease.StatusPublished {
@@ -308,7 +324,11 @@ func TestPackageTrustedComment(t *testing.T) {
 		{agentrelease.PackageFleetd, "1.48.0", "amd64", "arm64", h.priv},
 		{agentrelease.PackageRevoke, "", "arm64", "amd64", h.revokePriv},
 	} {
-		deb := []byte(c.name + " " + c.arch + " " + v)
+		controlVersion := v
+		if c.packageVersion != "" {
+			controlVersion = c.packageVersion
+		}
+		deb := releaseDeb(c.name, controlVersion, c.arch, c.name+" "+c.arch+" "+v)
 		wrong := map[string][]byte{
 			"older release": minisign.SignWithComments(c.key, deb, releasesig.Comment("0.0.1", c.arch), ""),
 			"other arch":    minisign.SignWithComments(c.key, deb, releasesig.Comment(v, c.otherArch), ""),
@@ -346,6 +366,54 @@ func TestPackageTrustedComment(t *testing.T) {
 	}
 }
 
+// TestPackageControlFields holds plan M19 D6 for the upload: a correctly signed package is stored only when its control
+// file names the package, the release version in Debian form (fleet-osquery: its package_version) and the
+// architecture it is uploaded as; every refusal is audited with its code and stores nothing.
+func TestPackageControlFields(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		label, name, packageVersion, arch string
+		deb                               []byte
+		want                              *problem.Error
+	}{
+		{"supervisor as agent", agentrelease.PackageAgent, "", "amd64", releaseDeb(agentrelease.PackageSupervisor, v, "amd64", "s"), problem.PackageNameMismatch},
+		{"agent as fleetd", agentrelease.PackageFleetd, "1.48.0", "amd64", releaseDeb(agentrelease.PackageAgent, "1.48.0", "amd64", "a"), problem.PackageNameMismatch},
+		{"agent as self-service", agentrelease.PackageSelfService, "", agentrelease.ArchAll, releaseDeb(agentrelease.PackageAgent, v, agentrelease.ArchAll, "a"), problem.PackageNameMismatch},
+		{"older release", agentrelease.PackageAgent, "", "amd64", releaseDeb(agentrelease.PackageAgent, "0.0.1", "amd64", "a"), problem.PackageVersionMismatch},
+		{"semver separator", agentrelease.PackageSupervisor, "", "amd64", debtest.Deb(debtest.Control(agentrelease.PackageSupervisor, v, "amd64")), problem.PackageVersionMismatch},
+		{"fleetd under another package_version", agentrelease.PackageFleetd, "1.49.0", "amd64", releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "f"), problem.PackageVersionMismatch},
+		{"fleetd carrying the release version", agentrelease.PackageFleetd, "1.48.0", "amd64", releaseDeb(agentrelease.PackageFleetd, v, "amd64", "f"), problem.PackageVersionMismatch},
+		{"arm64 build as amd64", agentrelease.PackageAgent, "", "amd64", releaseDeb(agentrelease.PackageAgent, v, "arm64", "a"), problem.PackageArchMismatch},
+		{"amd64 build as all", agentrelease.PackageSelfService, "", agentrelease.ArchAll, releaseDeb(agentrelease.PackageSelfService, v, "amd64", "s"), problem.PackageArchMismatch},
+		{"xz control archive", agentrelease.PackageAgent, "", "amd64", xzControlDeb(), problem.UnsupportedControlCompression},
+		{"no package", agentrelease.PackageAgent, "", "amd64", []byte("debian package"), problem.InvalidRequest},
+	} {
+		_, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, c.deb, h.signPackage(c.deb, v, c.arch))
+		if problem.From(err).Code != c.want.Code {
+			t.Errorf("%s: err = %v, want %s", c.label, err, c.want.Code)
+		}
+	}
+	revoke := releaseDeb(agentrelease.PackageAgent, v, "amd64", "agent signed with the revocation key")
+	_, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, h.signRevoke(revoke, v, "amd64"))
+	expectProblem(t, err, problem.PackageNameMismatch)
+	if len(h.store.puts) != 0 {
+		t.Fatal("a package with wrong control fields was stored")
+	}
+	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE code = 'agent_release.artifact_uploaded'
+		AND outcome = 'failure' AND params->>'version' = $1 AND error_code LIKE 'package\__%\_mismatch'`, v); n != 10 {
+		t.Errorf("audited control mismatches = %d, want 10", n)
+	}
+	deb := releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "fleetd")
+	if _, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageFleetd, "1.48.0", "amd64", deb, h.signPackage(deb, v, "amd64")); err != nil {
+		t.Fatalf("fleetd with matching control fields: %v", err)
+	}
+}
+
 // TestRevokePackageKeys holds plan M4c decision 4 and ADR 0043 amendment 2026-11-11 c point 5: paddock-revoke verifies
 // only with the revocation release key, even when the agent release key signed it with the right release comment, and
 // no other package verifies with the revocation release key. Neither is stored, and neither counts as a comment
@@ -357,19 +425,19 @@ func TestRevokePackageKeys(t *testing.T) {
 	if _, err := h.releases.Create(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	revoke := []byte(agentrelease.PackageRevoke + " " + v)
+	revoke := releaseDeb(agentrelease.PackageRevoke, v, "amd64", agentrelease.PackageRevoke+" "+v)
 	_, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, h.signPackage(revoke, v, "amd64"))
 	expectProblem(t, err, problem.InvalidRequest)
 	for _, name := range []string{agentrelease.PackageAgent, agentrelease.PackageSupervisor, agentrelease.PackageFleetd} {
-		packageVersion := ""
+		packageVersion, controlVersion := "", v
 		if name == agentrelease.PackageFleetd {
-			packageVersion = "1.48.0"
+			packageVersion, controlVersion = "1.48.0", "1.48.0"
 		}
-		deb := []byte(name + " " + v)
+		deb := releaseDeb(name, controlVersion, "amd64", name+" "+v)
 		_, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, h.signRevoke(deb, v, "amd64"))
 		expectProblem(t, err, problem.InvalidRequest)
 	}
-	deb := []byte(agentrelease.PackageSelfService + " " + v)
+	deb := releaseDeb(agentrelease.PackageSelfService, v, agentrelease.ArchAll, agentrelease.PackageSelfService+" "+v)
 	_, err = h.releases.UploadPackage(ctx, v, agentrelease.PackageSelfService, "", agentrelease.ArchAll, deb, h.signRevoke(deb, v, agentrelease.ArchAll))
 	expectProblem(t, err, problem.InvalidRequest)
 	if len(h.store.puts) != 0 {
@@ -390,7 +458,7 @@ func TestSelfServicePackage(t *testing.T) {
 	if _, err := h.releases.Create(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	deb := []byte("self-service package")
+	deb := releaseDeb(agentrelease.PackageSelfService, v, agentrelease.ArchAll, "self-service package")
 	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, deb, "paddock-agent version="+v+" arch=all", ""))
 	for _, c := range []struct{ name, arch string }{
 		{agentrelease.PackageSelfService, "amd64"}, {agentrelease.PackageSelfService, "arm64"},
@@ -1023,7 +1091,7 @@ func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deb := []byte("supervisor " + v)
+	deb := releaseDeb("paddock-supervisor", v, "amd64", "supervisor "+v)
 	firstPkg, err := h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb, h.signPackage(deb, v, "amd64"))
 	if err != nil {
 		t.Fatal(err)
@@ -1052,7 +1120,7 @@ func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
 	if _, err := h.super.Exec(context.Background(), "UPDATE agent_release SET status = 'draft' WHERE version = $1", v); err != nil {
 		t.Fatal(err)
 	}
-	otherDeb := []byte("supervisor rebuilt " + v)
+	otherDeb := releaseDeb("paddock-supervisor", v, "amd64", "supervisor rebuilt "+v)
 	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", otherDeb, h.signPackage(otherDeb, v, "amd64"))
 	expectProblem(t, err, problem.InvalidState)
 

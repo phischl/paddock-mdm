@@ -256,7 +256,7 @@ func TestOrganizationListContract(t *testing.T) {
 			t.Errorf("%s: %v, want %v", tc.query.Encode(), got, tc.want)
 		}
 	}
-	e.expectRejected(root, "/api/platform/v1/organizations?status=deleted", "invalid_request")
+	e.expectRejected(root, "/api/platform/v1/organizations?status=gone", "invalid_request")
 	e.expectRejected(root, "/api/platform/v1/organizations?sort=id", "invalid_request")
 	e.expectRejected(root, "/api/platform/v1/organizations?page_size=1000", "invalid_request")
 }

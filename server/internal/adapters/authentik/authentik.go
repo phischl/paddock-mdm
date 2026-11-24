@@ -83,6 +83,12 @@ type group struct {
 	Parents []string `json:"parents"`
 }
 
+// EnsureRevision identifies what EnsureOrganization creates or corrects (plan M17 decision 20): the identity rounds
+// skip an organization whose objects this revision ensured within the last hours, so a new revision makes every
+// organization's next round ensure in full. It is the start of a hash of the requests EnsureOrganization sends, which
+// TestEnsureRevision recomputes: a change of those requests fails that test until this value is updated.
+const EnsureRevision = "c2e5e996180cc6bf"
+
 // EnsureOrganization creates paddock.<slug> with its .admins, .operators, .auditors and .locked children and the
 // device login application if missing, and corrects the device login objects (architecture §9.2). Independent steps
 // run concurrently, so the request takes about ten Authentik round trips instead of about thirty (PDK-351).

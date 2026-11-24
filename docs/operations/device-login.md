@@ -13,7 +13,7 @@ At the first bundle with login management (agents report bundle schema 2), the a
    configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. No
    Himmelblau package ships the file. It is removed again if the installation fails, but kept after a timeout, which
    may leave the packages half configured. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
-   `paddock-compiler`, default `4.0.8`) from the official repository
+   `paddock-compiler`, default `4.0.9`) from the official repository
    `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
    into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
    `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
@@ -88,8 +88,11 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
   TOTP factor at every prompt, but only while the user's TOTP authenticator is still registered in Authentik: a user who
   lost the phone with the authenticator signs in with two recovery codes when not signed in on the second device (one
   when already signed in), one per prompt, without enrolling a passkey. Recovery codes do not help a user with passkeys
-  only, and a user whose TOTP authenticator was deleted is asked to enrol a new authenticator. Each code works once; the
-  user regenerates the recovery codes in Authentik's user settings afterwards (RR-62). An account with TOTP but no
+  only, and a user whose TOTP authenticator was deleted is asked to enrol a new authenticator. An administrator without
+  a second factor is refused instead and needs a one-time sign-in setup link, which another administrator creates:
+  administrators set up their second factor only through that link, in every sign-in flow (ADR 0053 amendment e). Each
+  code works once; the user regenerates the recovery codes in Authentik's user settings afterwards (RR-62). An account
+  with TOTP but no
   passkey is asked to enrol one only if it is in one of Paddock's administrator groups.
 
 ### Checking the device login factor (lab)

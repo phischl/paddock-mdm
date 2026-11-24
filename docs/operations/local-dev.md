@@ -103,6 +103,11 @@ device key caches (`et:`, `dk:`) and restores sequence numbers (`seq:`) from Pos
 rewrites the bundle pointers (`bp:`) every 60 s. Until then devices get 401 `invalid_signature` and retry. Lost
 nonces only reopen the ±300 s replay window for that time.
 
+A development stack that kept the offboarded devices of a load-seeded organization's deletion needs more memory than
+the default of 1 GiB: size `PADDOCK_VALKEY_MEM_LIMIT` by the rule in `docs/operations/capacity.md` (section "Memory
+limits"). Set it in `deploy/compose/.env`, e.g. `PADDOCK_VALKEY_MEM_LIMIT=2g`, and apply it with
+`docker compose up -d --force-recreate valkey`. A shell export is lost at the next `make up`.
+
 ## Trying the device API
 
 There is no agent yet (M2b). The reference client of the acceptance gates enrolls a simulated device: create an
@@ -150,9 +155,20 @@ export is built within seconds.
 
 ## Acceptance gates on a long-lived stack
 
-The acceptance gates (`make acceptance`) run against this stack and leave their data behind: every run creates new
-`gate-*` organizations, enrolled devices, tokens and audit events, and none of it is removed. Organizations cannot be
-deleted (the admin API has no delete operation for organizations), so there is no cleanup after a gate. A gate must
+The acceptance gates (`make acceptance`) run against this stack and leave some data behind: every run creates new
+`gate-*` organizations, enrolled devices, tokens and audit events. Each gate requests the deletion of the organizations it created when its case ends (the platform deletion with
+`grace_days` 0, which a development stack allows; a failed request is only logged). The worker then removes them in the
+background, one deletion step per minute, so an organization is gone about ten minutes later. What an aborted run left,
+or a request that failed, is removed with
+
+```sh
+make dev-prune-gate-orgs   # deletes every organization named "Gate gate-…" through the admin API
+```
+
+The target refuses to run unless the api reports `PADDOCK_ENV=development`. It requests all deletions first and then
+waits up to 12 minutes for them; it exits non-zero only for an organization it could not delete or that is still not
+deleted at the limit. Do not run it while a gate run is in progress: it also deletes that run's organizations, after
+cancelling their pending deletions. The devices, tokens and audit events of other gates are not removed. A gate must
 therefore not depend on the number of organizations, devices or any other state that accumulates across runs: it asserts
 on the objects it created itself, scopes its lists and audit queries to them, and does not size a timeout on how fast
 the stack works through all organizations or devices. A gate that passes on a fresh stack and fails on a long-used one

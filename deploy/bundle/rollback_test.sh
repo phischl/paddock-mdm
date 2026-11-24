@@ -137,7 +137,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old/scripts" "$work/t/old/.secrets"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh valkey-headroom.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   printf '%s\n' "$schema" >"$work/t/new/RELEASE-NOTES"
   echo "FLEET_IMAGE=fleetdm/fleet:v4.94.0" >>"$work/t/new/versions.env"
@@ -212,6 +212,55 @@ if [[ -f "$work/t/old/.secrets/backup_encryption_key" ]]; then pass "the legacy 
 if grep -qx "rolled-back=$ATTEMPT" "$work/t/new/.upgrade-state" && ! grep -q '^done=' "$work/t/new/.upgrade-state"; then
   pass "a later upgrade starts again at the check and copies .env and .secrets/ again"
 else fail ".upgrade-state: $(cat "$work/t/new/.upgrade-state" 2>&1)"; fi
+
+# PDK-1054d: the four offboarding key files of the new release's .secrets/ reach the old directory, so that a later
+# upgrade (which copies .secrets/ again) reuses the users instead of creating two more.
+offboard_files=(rustfs_bundles_offboard_access_key rustfs_bundles_offboard_secret_key rustfs_escrow_offboard_access_key
+  rustfs_escrow_offboard_secret_key)
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/new/.secrets"
+for f in "${offboard_files[@]}" rustfs_root_user; do printf 'new-%s' "$f" >"$work/t/new/.secrets/$f"; done
+# The mode gen-prod-secrets.sh gives secret files, so that the services' uid 65532 reads them (PDK-1084).
+chmod 644 "$work/t/new/.secrets/"*
+run 0 "rollback with the new release's offboarding key files" "$work/t/old" --yes
+carried=1
+for f in "${offboard_files[@]}"; do
+  [[ "$(cat "$work/t/old/.secrets/$f" 2>/dev/null)" == "new-$f" ]] || carried=""
+done
+if [[ -n "$carried" ]]; then pass "the four offboarding key files are carried into the old directory"; else fail "the offboarding key files did not reach the old directory"; fi
+modes=""
+for f in "${offboard_files[@]}"; do modes+="$(stat -c %a "$work/t/old/.secrets/$f" 2>/dev/null) "; done
+if [[ "$modes" == "644 644 644 644 " ]]; then pass "the carried key files keep the source mode 0644"
+else fail "the carried key files do not keep the source mode 0644: $modes"; fi
+if ! compgen -G "$work/t/old/.secrets/.*.tmp" >/dev/null; then pass "no temporary copy is left behind"; else fail "a temporary copy is left in the old .secrets/"; fi
+if [[ ! -e "$work/t/old/.secrets/rustfs_root_user" ]]; then pass "no other key file is carried"; else fail "the rollback carried a file that is no offboarding key"; fi
+# Upgrade again (PDK-1084): its migrate-from step copies .secrets/ from the old directory into a fresh one, and the
+# production check needs every offboarding key readable by the services' uid 65532, which is neither the owner nor in
+# the operator's group: the copy the upgrade ends up with must be world-readable inside the 0700 .secrets/.
+mkdir -p "$work/t/again/scripts"
+cp "$work/t/new/paddock" "$work/t/again/paddock"
+cp "$work/t/new/scripts/"* "$work/t/again/scripts/"
+cp "$work/t/new/VERSION" "$work/t/new/versions.env" "$work/t/again/"
+again_rc=0
+again_out="$(cd "$work/t/again" && ./paddock migrate-from "$work/t/old" 2>&1)" || again_rc=$?
+if [[ "$again_rc" == 0 ]]; then pass "upgrade again: migrate-from copies .secrets/ from the old directory"
+else fail "upgrade again: migrate-from exit $again_rc: $again_out"; fi
+unreadable=""
+for f in "${offboard_files[@]}"; do
+  [[ "$(stat -c %A "$work/t/again/.secrets/$f" 2>/dev/null)" == ???????r?? ]] || unreadable+="$f "
+done
+if [[ -z "$unreadable" ]]; then pass "upgrade again: the offboarding keys are readable by the services' uid 65532"
+else fail "upgrade again: not readable by uid 65532 (no read bit for others): $unreadable"; fi
+# A key the old directory holds already is kept, and a new release without the files is no failure.
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/new/.secrets"
+for f in "${offboard_files[@]}"; do printf 'new-%s' "$f" >"$work/t/new/.secrets/$f"; done
+printf 'old-held' >"$work/t/old/.secrets/${offboard_files[0]}"
+run 0 "rollback with an offboarding key the old directory holds" "$work/t/old" --yes
+if [[ "$(cat "$work/t/old/.secrets/${offboard_files[0]}")" == old-held ]]; then pass "a key the old directory holds is not replaced"; else fail "the old directory's key was replaced"; fi
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+run 0 "rollback of a release without offboarding key files" "$work/t/old" --yes
+if compgen -G "$work/t/old/.secrets/rustfs_*" >/dev/null; then fail "key files appeared from nothing"; else pass "nothing is carried when the new release has no offboarding key files"; fi
 
 # Across a schema change (decisions-alpha10 item 62): the manifest names the new release's schema, the restored point
 # has the one the upgrade recorded before its `up`. The old restore.sh sees the recorded schema in both of its reads.
@@ -684,6 +733,39 @@ not_called "no second initialization" '^openbao_restore_sealed'
 # A repeated rollback after that failure finds the stack down and restores again.
 FIXTURE_RUNNING="" run 0 "the repeated rollback to alpha.8" "$work/t/old" --yes
 called "the repeated rollback restores OpenBao" '^openbao_restore_sealed'
+
+# PDK-1032 (plan M19 D1.3): above 100 connections, a rollback to a release that starts PostgreSQL with 100 whatever
+# .env says (its compose.yaml does not know PADDOCK_PG_MAX_CONNECTIONS) is refused before anything stops.
+FIXTURE_RUNNING="Paddock|0.1.0-alpha.10"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+run 1 "a rollback to a release without the setting at 150 is refused" "$work/t/old" --yes
+has "the refusal names the setting and the way out (M19 amendment c)" \
+  "^rollback: PADDOCK_PG_MAX_CONNECTIONS is above 100, which the previous release does not support\. Set it to 100 \(or remove it\) in \.env and run \./paddock rollback again; nothing was changed$"
+not_called "nothing stops after the refusal" "$DOWN"
+not_called "nothing is restored after the refusal" '^restore_'
+if [[ ! -e "$work/t/new/.upgrade-state" ]] || ! grep -q '^rolled-back=' "$work/t/new/.upgrade-state"; then
+  pass "the refusal leaves the rollback record usable"
+else fail ".upgrade-state after the refusal: $(cat "$work/t/new/.upgrade-state")"; fi
+setup controlplane "Schema: unchanged"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+run 1 "a rollback without a restore is refused at 150 too" "$work/t/old" --yes
+not_called "nothing stops after that refusal" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=100" >>"$work/t/new/.env"
+run 0 "a rollback at 100 runs" "$work/t/old" --yes
+setup controlplane "Schema: migrations 00113–00125"
+echo 'PADDOCK_PG_MAX_CONNECTIONS="150"' >>"$work/t/new/.env"
+run 1 "a quoted value is refused instead of read as not above 100" "$work/t/old" --yes
+has "the refusal asks for a plain number" "PADDOCK_PG_MAX_CONNECTIONS is '.*', not a whole number"
+not_called "nothing stops after the quoted-value refusal" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+# shellcheck disable=SC2016 # the literal Compose interpolation
+printf 'services:\n  postgres:\n    command: ["postgres", "-c", "max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}"]\n' \
+  >"$work/t/old/compose.yaml"
+run 0 "a rollback at 150 to a release that knows the setting runs" "$work/t/old" --yes
+called "that rollback restores" "^restore_run fresh repo --at $AT "
 
 # The old release's restore.sh is an interface between releases: the real one defines every function rollback.sh
 # calls and reads every variable it sets.

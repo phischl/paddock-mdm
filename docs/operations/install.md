@@ -312,14 +312,36 @@ saves a policy: `docs/operations/mcp.md`.
 ## 9. First platform administrator, first organization, first device
 
 1. Sign in to `https://auth.<domain>/if/admin/` as `akadmin` with the password of
-   `.secrets/authentik_bootstrap_password`. Create the platform administrator's user, enroll a WebAuthn
-   authenticator for it (step-up requires one) and add it to the group `paddock.platform.admins`. Then deactivate
+   `.secrets/authentik_bootstrap_password`. Create the platform administrator's user without a password and without
+   an authenticator, add it to the group `paddock.platform.admins`, then run
+   `./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>` and hand the printed
+   link over: with it the administrator sets the password and the passkey (step-up requires one). Then deactivate
    `akadmin` or give it a new password held by the custodians.
-2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor and
-   enrols one when missing) and create the first organization (*Platform* → *Organizations*) **with the domains of its
-   users** (the create dialog takes them; *Domains* in the list changes them). Without a domain the organization's
-   devices get no login management and no managed local administrator. Connect its identity source
-   (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
+2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor) and
+   create the first organization (*Platform* → *Organizations*) **with the domains of its users** (the create dialog
+   takes them; *Domains* in the list changes them). Without a domain the organization's devices get no login
+   management and no managed local administrator. Connect its identity source (`docs/operations/identity-sources.md`)
+   and make its first administrator a member of `paddock.<slug>.admins`. An organization's administrators, operators
+   and auditors come from one of two places: the organization's identity source, or Paddock itself (an organization
+   administrator creates the account in the portal under *Users*, then adds it to a role group). An account created
+   by hand in Authentik is not one of them; the only exception is the host command below. The sign-in never sets up a
+   second factor for an administrator (a member of `paddock.platform.admins` or of an organization's `.admins`,
+   `.operators` or `.auditors` group) and denies one without a passkey (ADR 0053): give the new administrator a
+   one-time sign-in setup link, valid 24 hours, with which they enrol a passkey and, for an account Paddock created,
+   set their password if they have none (an account from the identity source never gets a password in Paddock's
+   identity provider). An organization administrator creates it on the user's page in the portal (*Users* → the user
+   → *Create sign-in setup link*, with a step-up; the link is shown once). The operator creates it on the
+   control-plane host: `./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>`
+   prints the link once for a direct member of `paddock.platform.admins` or of exactly one organization's `.admins`,
+   `.operators` or `.auditors` group, refuses every other account, and is audited as
+   `platform.enrolment_link_created`. An account in role groups of several organizations, or in several role groups
+   of one organization, is refused like at the portal sign-in: remove the extra group memberships first. Its link also sets the password of an account created by hand in Authentik that
+   has none, but not of an account connected to an upstream identity source (SCIM included), and the command says so.
+   Use it for an organization's first administrator, before anyone of the organization can create links in the
+   portal, and for any administrator account that was created by hand in Authentik. Do not use Authentik's own
+   *Create recovery link* for administrators: its link never sets a password for an account created by hand. A new
+   link ends every older one: after giving a user a portal role, create a fresh link and hand only that one over,
+   unless they have already used theirs. Device users still set up their second factor at their first device sign-in.
 3. One identity may be a member of `paddock.platform.admins` and of one organization's role group: it signs in to
    the organization and switches to platform administration from the user menu (a new sign-in that ends the
    current session; privileged actions then need a new step-up). An identity with role groups of several
@@ -462,7 +484,8 @@ authenticator (RR-62).
 ## Appendix: installing from source
 
 Without a published release (for example to test a branch), build the images and a local bundle on a machine with
-the repository, Docker and Go, then copy the bundle to the hosts:
+the repository, Docker and Go, then copy the bundle to the hosts. Once any agent release is published, a device that
+runs such a locally built `paddockd` raises `device.tamper_agent_binary_changed`.
 
 ```sh
 make image image-compiler image-pgbackrest      # paddock-server:dev, paddock-compiler:dev, paddock-pgbackrest:dev

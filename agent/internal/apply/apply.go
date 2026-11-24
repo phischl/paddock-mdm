@@ -101,6 +101,31 @@ func (a *Applier) WithNSSShield(s *reconcile.NSSShield) *Applier {
 	return a
 }
 
+// WithFileGuard lets the integrity check see the login reconciler's writes of its identity files (plan M5a amendment
+// 2026-11-17 f).
+func (a *Applier) WithFileGuard(g reconcile.FileGuard) *Applier {
+	a.login.Guard = g
+	return a
+}
+
+// SetPrevious tells the login reconciler the bundle the agent enforced before this start; a report-only bundle wrote
+// nothing (plan M5a amendment 2026-11-17 f).
+func (a *Applier) SetPrevious(b *bundle.Bundle) {
+	if b == nil || b.Mode == bundle.ModeReportOnly {
+		a.login.SetPrevious(nil, false)
+		return
+	}
+	var login *bundle.Resource
+	if i := slices.IndexFunc(b.Resources, func(r bundle.Resource) bool { return r.Type == bundle.TypeLogin }); i >= 0 {
+		login = &b.Resources[i]
+	}
+	a.login.SetPrevious(login, true)
+}
+
+// ConfirmPrevious lets the login reconciler confirm the files that hold the previously enforced renders; the agent
+// calls it when it starts to run, after SetPrevious and before the first integrity pass.
+func (a *Applier) ConfirmPrevious() { a.login.ConfirmPrevious() }
+
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
 // of the reconcilers.
 func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Events) *Applier {

@@ -354,6 +354,9 @@ command sets — **decided 2026-11-08 by the architect lead's guidelines (A10-2)
 
 ## 13. Outline M12h-2 (alpha.11; no tickets)
 
+> **Note 2026-11-14:** alpha.11 plans only Renovate, OpenSSF Scorecard and the second-factor enrolment link of this
+> outline: `docs/plans/M12h-2-supply-chain-and-mfa-enrolment.md` (ADR 0053, ADR 0054). The other items stay outline.
+
 - **Authentik controls (AU-3, AU-4, AU-6):** reputation policy with `failed_attempts_before_cancel` plus the
   reputation scoring in the portal and device flows (blueprint change, `TestIdentityLockAuthentik`), MFA enrolment
   by invitation (`not_configured_action: deny` plus an invitation stage, maintainer: changes the first-login

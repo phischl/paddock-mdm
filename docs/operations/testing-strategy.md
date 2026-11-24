@@ -75,7 +75,8 @@ One full regression on a local development stack (`docs/operations/local-dev.md`
    (`make acceptance SHARD=i/4` for i = 1 … 4 against the same stack);
 2. the disruptive gates and `make e2e`, as in the CI job above;
 3. the agent system tests on the VirtualBox VMs: `make system-test VM=all` (both VMs in parallel; the VMs are set up
-   with the scripts in `test/vms/`).
+   with the scripts in `test/vms/`); the log streams per test, and `SUITE=<name|all>` runs one of the suites of
+   `test/system/suites.txt` or all of them with per-suite timeouts (`test/system/README.md`).
 
 Run these **one after another, never in parallel**: system gate S3 takes the stack down for ten minutes to prove
 that devices keep working while the server is unreachable, which would fail every acceptance gate running at the

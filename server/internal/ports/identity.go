@@ -4,6 +4,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // OrgIdentityRefs are the Authentik primary keys of an organization's groups.
@@ -14,6 +15,20 @@ type IdentityProvider interface {
 	// EnsureOrganization creates the organization's groups (root, roles, locked) and its device login provider,
 	// application, groups claim mapping and access policy if missing, and corrects them if they drifted; idempotent.
 	EnsureOrganization(ctx context.Context, slug string) (OrgIdentityRefs, error)
+	// DeleteOrganization deletes what EnsureOrganization and the user directory created for the organization (plan M17
+	// decision 10): the device login application, its provider, groups mapping, access policy and binding, every group
+	// paddock.<slug> and paddock.<slug>.*, and every user Paddock created there. Users synced from upstream stay.
+	// Missing objects count as deleted; idempotent.
+	DeleteOrganization(ctx context.Context, slug string) (OrgIdentityDeletion, error)
+}
+
+// OrgIdentityDeletion counts the identity provider objects DeleteOrganization deleted; objects that were already gone
+// are not counted.
+type OrgIdentityDeletion struct{ Groups, Users, Applications, Providers, Policies, Mappings int }
+
+// Total is the number of objects deleted.
+func (d OrgIdentityDeletion) Total() int {
+	return d.Groups + d.Users + d.Applications + d.Providers + d.Policies + d.Mappings
 }
 
 // ErrUsernameTaken means the identity provider already has a user with this username (possibly of another
@@ -36,7 +51,28 @@ type IdentityUser struct {
 	// UID is the user's stable identifier, the subject of the portal's and the step-up's ID tokens (Authentik's uid
 	// under the providers' sub_mode hashed_user_id) and so admin_account.authentik_sub.
 	UID string
+	// MFAEnrolAtLogin is true for a user marked to enrol a second factor at the next portal sign-in (attribute
+	// paddock_mfa_enrol_at_login, ADR 0053 decision 4).
+	MFAEnrolAtLogin bool
+	// Joined is when the identity provider created the user; zero when it did not say.
+	Joined time.Time
 }
+
+// AttrMFAEnrolAtLogin is the identity provider's user attribute that lets the portal sign-in enrol a second factor once
+// (ADR 0053 decision 3); the sign-in denies an administrator without one otherwise.
+const AttrMFAEnrolAtLogin = "paddock_mfa_enrol_at_login"
+
+// AttrPasswordByLink is the identity provider's user attribute with which paddock-server admin enrolment-link lets
+// the sign-in setup link of an account Paddock did not create set a password (plan M12h-2 amendment f addendum): true
+// lets the link ask for one while the account has none; the link flow overwrites it once the password is set.
+const AttrPasswordByLink = "paddock_password_by_link"
+
+// RecoveryLinkValidity is how long a link of UserDirectory.RecoveryLink stays usable (plan M3a decision 18, ADR 0053
+// decision 1); the identity provider adapter requests exactly this duration.
+const RecoveryLinkValidity = 24 * time.Hour
+
+// Authenticators are the kinds of second factor a user has registered in the identity provider.
+type Authenticators struct{ WebAuthn, TOTP bool }
 
 // NewIdentityUser is a local user to create.
 type NewIdentityUser struct{ Username, Name, Email string }
@@ -58,8 +94,13 @@ type UserDirectory interface {
 	UpdateUser(ctx context.Context, pk, name, email string) error
 	// DeleteUser deletes a user; a missing user is not an error.
 	DeleteUser(ctx context.Context, pk string) error
-	// RecoveryLink creates a one-time link (valid 24 h) with which the user sets a password.
+	// RecoveryLink creates a one-time link (valid RecoveryLinkValidity) with which the user sets up a passkey if it has
+	// none, and a password only if it has none and Paddock created the account or AttrPasswordByLink is true (ADR 0053
+	// decision 2, plan M12h-2 amendment f and its addendum).
 	RecoveryLink(ctx context.Context, pk string) (string, error)
+	// RevokeRecoveryLinks ends every unexpired one-time link of the user pk and returns how many it ended; callers
+	// run it before RecoveryLink, so only the newest link of an account works (plan M12h-2 amendment f).
+	RevokeRecoveryLinks(ctx context.Context, pk string) (int, error)
 	// UserActive reports whether the user is active (not deactivated) in the identity provider.
 	UserActive(ctx context.Context, pk string) (bool, error)
 	// LockUser adds the user to the organization's locked group and deletes the user's refresh tokens, access tokens

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -19,7 +20,79 @@ const (
 	StatusActive             = "active"
 	StatusProvisioningFailed = "provisioning_failed"
 	StatusSuspended          = "suspended"
+	// StatusDeleting and StatusDeleted are the offboarding states (ADR 0052 decision 1): the worker deletes the
+	// organization's data, then leaves a tombstone.
+	StatusDeleting = "deleting"
+	StatusDeleted  = "deleted"
 )
+
+// ListedByDefault are the statuses an organization list shows without a status filter: every status but deleted,
+// so tombstones do not crowd the list (plan M17 §6).
+func ListedByDefault() []string {
+	return []string{StatusProvisioning, StatusActive, StatusProvisioningFailed, StatusSuspended, StatusDeleting}
+}
+
+// Deletable reports whether a deletion can be requested for an organization in status (plan M17 decision 1).
+func Deletable(status string) bool {
+	return status == StatusActive || status == StatusProvisioningFailed
+}
+
+// DeletionPending reports whether an organization's deletion is requested and not yet running (ADR 0052 decision 1).
+func DeletionPending(status string, deleteAfter *time.Time) bool {
+	return Deletable(status) && deleteAfter != nil
+}
+
+// Offboarding reports whether an organization in status is being deleted or was deleted, so no platform action may
+// write into it any more (PDK-1053).
+func Offboarding(status string) bool {
+	return status == StatusDeleting || status == StatusDeleted
+}
+
+// Grace period bounds of a deletion request in days (plan M17 decision 2): development stacks may delete at once.
+const (
+	MinGraceDays            = 7
+	MinGraceDaysDevelopment = 0
+	MaxGraceDays            = 90
+)
+
+// OffboardedDeviceRetention is how long a device keeps receiving the offboarding uninstall after its organization
+// was deleted (ADR 0052 decision 2); the command expires delete_after plus this retention.
+const OffboardedDeviceRetention = 365 * 24 * time.Hour
+
+// Deletion reasons are bounded like the database column.
+const (
+	minDeletionReason = 2
+	maxDeletionReason = 500
+)
+
+// ErrInvalidDeletionReason and ErrInvalidGraceDays are validation errors of a deletion request.
+var (
+	ErrInvalidDeletionReason = fmt.Errorf("reason must have %d to %d characters", minDeletionReason, maxDeletionReason)
+	ErrInvalidGraceDays      = fmt.Errorf("grace_days must be %d to %d", MinGraceDays, MaxGraceDays)
+	ErrInvalidGraceDaysDev   = fmt.Errorf("grace_days must be %d to %d", MinGraceDaysDevelopment, MaxGraceDays)
+)
+
+// ValidateDeletionReason checks the length of a deletion reason in characters.
+func ValidateDeletionReason(reason string) error {
+	if n := utf8.RuneCountInString(reason); n < minDeletionReason || n > maxDeletionReason {
+		return ErrInvalidDeletionReason
+	}
+	return nil
+}
+
+// ValidateGraceDays checks the grace period of a deletion request; development allows 0.
+func ValidateGraceDays(days int, development bool) error {
+	if development {
+		if days < MinGraceDaysDevelopment || days > MaxGraceDays {
+			return ErrInvalidGraceDaysDev
+		}
+		return nil
+	}
+	if days < MinGraceDays || days > MaxGraceDays {
+		return ErrInvalidGraceDays
+	}
+	return nil
+}
 
 var slugPattern = regexp.MustCompile(`^` + policy.OrgSlugPattern + `$`)
 
@@ -78,6 +151,16 @@ func ParseRoleGroup(name string) (slug string, role GroupRole, ok bool) {
 		return "", "", false
 	}
 	return m[1], GroupRole(m[2]), true
+}
+
+// IsAdministratorGroup reports whether a direct membership of the group name grants a portal role by its name alone:
+// paddock.<x>.admins, .operators or .auditors for any x, the platform group included. It is the predicate of the
+// sign-in policy paddock-admin-login-webauthn-administrator (deploy/compose/authentik/blueprints/paddock-portal.yaml),
+// which denies such an account without a passkey (ADR 0053); the two MUST stay equal.
+func IsAdministratorGroup(name string) bool {
+	p := strings.Split(name, ".")
+	return len(p) == 3 && p[0] == "paddock" && (p[2] == string(GroupAdmins) || p[2] == string(GroupOperators) ||
+		p[2] == string(GroupAuditors))
 }
 
 // LockedGroup returns the group whose members are locked: paddock.<slug>.locked (architecture §9.2).

@@ -116,7 +116,8 @@ type LeaderLocker interface {
 }
 
 // leaderCheckEvery is how often the leader asks its lock connection whether it still answers: the longest a process
-// that lost the lock can go on writing beside the next leader (decisions-alpha10 §50).
+// that lost the lock can go on writing to the object stores beside the next leader (decisions-alpha10 §50); its
+// database writes end with the next leader's epoch (Store.Fence, plan M19 D5).
 const leaderCheckEvery = 5 * time.Second
 
 // Snapshotter takes OpenBao's Raft snapshot (bao.Client with the AppRole paddock-backup).
@@ -151,6 +152,9 @@ type Engine struct {
 	fleetFailed map[string]time.Time
 	stall       time.Duration
 	budget      time.Duration
+	// watch is the monotonic clock of the mirror watchdog (stall deadline and copy budget); tests step it instead of
+	// racing the wall clock under host load.
+	watch func() time.Time
 	// minRate is the throughput a target must reach on the file it copies when the budget ends (bytes per second).
 	minRate int64
 	// busy holds the targets whose mirror outlived its round: a blocked file system call cannot be interrupted, so
@@ -204,7 +208,7 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 	return &Engine{cfg: cfg, lock: lock, store: store, keys: keys, snap: snap, escrow: escrow, targets: targets,
 		metrics: metrics, now: now, hashes: map[string]hashEntry{}, mirrored: map[string]map[string]time.Time{},
 		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
-		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
+		budget: mirrorBudget, watch: time.Now, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
 		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{},
 		waiting: map[uuid.UUID][]*mirrorPass{}, longLane: map[uuid.UUID]bool{}}
 }
@@ -214,7 +218,8 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 // rounds, so lanes and rounds only ever run under the lock. A process that does not get the lock stands by and tries
 // again every RoundInterval. When the lock's connection stops answering, the rounds and lanes stop before any further
 // write, the loss is logged and counted (paddock_backup_leader_lost_total; the audit registry has no code for it), and
-// Run tries to lead again. The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
+// Run tries to lead again; the same happens when a database write finds that another process took a newer leader epoch
+// (db.ErrFenced, plan M19 D5). The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
 // records nothing, and the next leader mirrors its runs.
 func (e *Engine) Run(ctx context.Context) error {
 	for {
@@ -226,8 +231,12 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.metrics.leaderLost.Inc()
 			slog.ErrorContext(ctx, "backup role lost its leader lock; rounds and mirror lanes stopped, leading again when the lock is free",
 				"error", err)
+		case errors.Is(err, db.ErrFenced):
+			e.metrics.leaderLost.Inc()
+			slog.ErrorContext(ctx, "backup role was fenced: another process took the leadership; rounds and mirror lanes stopped, leading again when the lock is free",
+				"error", err)
 		case err != nil:
-			slog.WarnContext(ctx, "backup role could not take its leader lock; retrying", "error", err, "led", led)
+			slog.WarnContext(ctx, "backup role could not take its leader lock or epoch; retrying", "error", err, "led", led)
 		}
 		select {
 		case <-ctx.Done():
@@ -237,9 +246,15 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// lead runs the rounds while this process holds the leader lock; it returns once ctx ended and every lane returned,
-// and forgets the open passes, whose runs the next leadership covers.
+// lead takes a new leader epoch and runs the rounds while this process holds the leader lock; it returns once ctx
+// ended and every lane returned, and forgets the open passes, whose runs the next leadership covers. A write that
+// found the epoch moved on ends ctx, and lead returns db.ErrFenced.
 func (e *Engine) lead(ctx context.Context) error {
+	ctx, stop, err := e.store.Fence(ctx)
+	if err != nil {
+		return fmt.Errorf("take leader epoch: %w", err)
+	}
+	defer stop()
 	e.metrics.leader.Set(1)
 	defer e.metrics.leader.Set(0)
 	defer e.forgetPasses()
@@ -252,6 +267,9 @@ func (e *Engine) lead(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(context.Cause(ctx), db.ErrFenced) {
+				return db.ErrFenced
+			}
 			return nil
 		case <-tick.C:
 		}
@@ -1077,7 +1095,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	var phase atomic.Pointer[string]
 	inCopy := func() time.Duration {
 		if s := copyStart.Load(); s != 0 {
-			return time.Since(time.Unix(0, s))
+			return e.watch().Sub(time.Unix(0, s))
 		}
 		return 0
 	}
@@ -1095,7 +1113,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 				tick:  func() { progress.Add(1) },
 				phase: func(name string) { phase.Store(&name) },
 				begin: func(size int64) {
-					copyStart.CompareAndSwap(0, time.Now().UnixNano())
+					copyStart.CompareAndSwap(0, e.watch().UnixNano())
 					copying.Store(size)
 				},
 				end:  func() { copying.Store(-1) },
@@ -1108,7 +1126,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	}()
 	check := time.NewTicker(e.stall / 4)
 	defer check.Stop()
-	last, since := int64(0), time.Now()
+	last, since := int64(0), e.watch()
 	for {
 		select {
 		case r := <-done:
@@ -1118,8 +1136,8 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 			return 0, ctx.Err()
 		case <-check.C:
 			if n := progress.Load(); n != last {
-				last, since = n, time.Now()
-			} else if time.Since(since) >= e.stall {
+				last, since = n, e.watch()
+			} else if e.watch().Sub(since) >= e.stall {
 				name := "opening the target"
 				if p := phase.Load(); p != nil {
 					name = *p

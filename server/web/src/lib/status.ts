@@ -102,6 +102,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'event_gap':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
+    case 'patch_sla_breached':
       return { status: 'warn', label }
     case 'revocation_pending':
     case 'report_only':
@@ -253,6 +254,10 @@ export function organizationStatus(s: OrganizationStatus): StatusView {
       return { status: 'critical', label }
     case 'suspended':
       return { status: 'warn', label }
+    case 'deleting':
+      return { status: 'warn', label }
+    case 'deleted':
+      return { status: 'neutral', label }
   }
 }
 

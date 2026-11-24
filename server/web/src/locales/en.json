@@ -15,6 +15,21 @@
     "readOnly": "Only organization administrators can change the privacy settings.",
     "saved": "The privacy settings were saved."
   },
+  "patchSla": {
+    "title": "Patch SLA",
+    "intro": "How many days a vulnerability with an available fix may stay open on a device, per severity. The patch compliance report and the attention list count a finding as breached once it is open longer; a daily summary event names the breaches.",
+    "legend": "Days per severity",
+    "fields": {
+      "critical_days": "Critical",
+      "high_days": "High",
+      "medium_days": "Medium",
+      "low_days": "Low"
+    },
+    "hint": "0 means the severity has no SLA.",
+    "range": "Enter a whole number of days from {min} to {max}.",
+    "readOnly": "Only organization administrators can change the patch SLA.",
+    "saved": "The patch SLA was saved."
+  },
   "rolloutSettings": {
     "title": "Rollout settings",
     "intro": "Staged rollouts apply a configuration change to a share of the devices first, wave by wave, and stop automatically when too many devices fail. They are off by default. A running rollout keeps the values it started with.",
@@ -102,6 +117,8 @@
     "switchRoleConfirm": "Switch",
     "switchRoleFailed": "The role could not be switched. Please try again.",
     "roleFallbackOrganizationInactive": "Your organization is not active; you are signed in as platform administrator.",
+    "mfaEnrolmentNotice": "{pending, plural, =0 {Every administrator now signs in with a passkey.} one {# administrator has not set up a passkey yet and is asked to set one up at the next sign-in.} other {# administrators have not set up a passkey yet and are asked to set one up at the next sign-in.}} New administrator accounts set up their passkey only through a one-time sign-in setup link: an organization administrator creates it on the user's page, the operator creates it for platform administrators. This notice is shown until {until}.",
+    "mfaEnrolmentNoticeDismiss": "Dismiss",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
@@ -131,12 +148,14 @@
     "dms": "Dead man's switch",
     "software": "Software",
     "vulnerabilities": "Vulnerabilities",
+    "patchCompliance": "Patch compliance",
     "attention": "Attention",
     "findings": "Findings",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
     "privacySettings": "Privacy",
+    "patchSlaSettings": "Patch SLA",
     "rolloutSettings": "Rollouts",
     "apiTokens": "API tokens",
     "changeSets": "Change sets",
@@ -280,6 +299,7 @@
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
     "invalid_state": "This action is not possible in the current state.",
+    "enrolment_link_platform_administrator": "This account is also a platform administrator. Platform administrators receive their sign-in setup link from the host operator.",
     "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
     "unsupported_compression": "The package's control archive uses a compression Paddock does not read. Build it with dpkg-deb -Zgzip or -Zzstd.",
@@ -314,6 +334,10 @@
     "release_not_newer": "This version is not newer than the newest published release.",
     "release_incomplete": "The release on the source lacks a required file or signature.",
     "release_signature_mismatch": "A file of the release does not match the release public key; nothing was stored.",
+    "package_name_mismatch": "A package of the release names another package in its control file than the one it is uploaded as; nothing was stored.",
+    "package_version_mismatch": "A package of the release names another version in its control file than the release (for fleet-osquery its fleetd version); nothing was stored.",
+    "package_arch_mismatch": "A package of the release names another architecture in its control file than the one it is uploaded for; nothing was stored.",
+    "unsupported_control_compression": "The control archive of a release package uses a compression Paddock does not read. Build it with gzip or zstd.",
     "mcp_disabled": "The MCP is disabled for this scope.",
     "mcp_tool_not_allowed": "This operation is not allowed through the MCP.",
     "mcp_write_not_enabled": "Changes through the MCP are not enabled.",
@@ -326,14 +350,17 @@
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
     "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
+    "organization_inactive": "This organization is being deleted. Its data can no longer be read or changed.",
     "backup_key_mismatch": "The characters do not match the key.",
     "backup_target_state_unchanged": "The target is already in this state.",
-    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
+    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key.",
+    "export_limit": "The recovery export was taken five times during this grace period already."
   },
   "audit": {
     "vulnerability": {
       "critical_summary": "{new_critical, plural, one {# new critical vulnerability} other {# new critical vulnerabilities}} on {devices, plural, one {# device} other {# devices}}",
-      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})"
+      "devices_viewed": "{actor} viewed the devices affected by {cve} ({device_count, plural, one {# device} other {# devices}})",
+      "sla_breached": "Patch SLA breached on {devices, plural, one {# device} other {# devices}}: {critical, number} critical, {high, number} high, {medium, number} medium, {low, number} low"
     },
     "retention": {
       "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
@@ -375,14 +402,23 @@
       "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}",
       "searched": "{actor} searched the audit log{q_used, select, true { with a search term} other {}}",
       "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)",
-      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)"
+      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)",
+      "event_after_retirement": "An event {original_code} arrived after the organization's audit log was closed"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
       "recompile_requested": "{actor} requested a new bundle for every device (restore)",
       "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths",
-      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
+      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}",
+      "deletion_requested": "{actor} requested the deletion of the organization {slug} ({grace_days, plural, one {# day} other {# days}} grace period)",
+      "deletion_cancelled": "{actor} cancelled the deletion of the organization {slug}",
+      "deletion_step_completed": "Deletion of {slug}: step {step} completed",
+      "deletion_step_failed": "Deletion of {slug}: step {step} failed",
+      "deleted": "The organization {slug} was deleted",
+      "recovery_exported": "{actor} exported the recovery keys and local administrator passwords of {devices, plural, one {# device} other {# devices}}, encrypted to a {recipient, select, public_key {public key} other {passphrase}}",
+      "audit_retirement_requested": "Deletion of {slug}: the final verification of the audit log was requested",
+      "inactive_denied": "{actor} was refused: organization {organization_id} is {status, select, deleted {deleted} other {being deleted}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -431,6 +467,7 @@
       "inventory_purged": "Inventory purge of the retired device {hostname}: {software, plural, one {# package} other {# packages}}, {findings, plural, one {# finding} other {# findings}}",
       "inventory_viewed": "{actor} viewed the {view, select, vulnerabilities {vulnerabilities} other {software}} of {hostname}",
       "inventory_host_kept": "The retired device {hostname} still keeps its Fleet host after {rounds, number} unchanged rounds ({fleet_host_kept})",
+      "inventory_host_removed": "Fleet host {fleet_host}, which {hostname} no longer speaks from, was removed from Fleet",
       "logins_resumed": "{actor} resumed logins on {hostname}",
       "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",
       "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",
@@ -450,6 +487,10 @@
       "header_escrow_refused": "A LUKS header of {target} was not escrowed: the device already escrows 32 volumes",
       "tamper_service_stopped": "The device {target} found the service {unit} stopped",
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
+      "tamper_agent_binary_changed": "fleetd reports an agent binary on {target} that matches no published release",
+      "tamper_fleet_host_claimed": "Another inventory enrollment claims {target}",
+      "tamper_fleetd_silent": "fleetd on {target} no longer works with the inventory system while the device keeps checking in",
+      "tamper_inventory_rejected": "Paddock could not store the inventory of {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
       "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",
@@ -520,6 +561,7 @@
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
       "bundle_seq_raised": "{actor} raised the bundle sequence of {devices} devices to at least {at_least} (restore)",
+      "bundle_versions_pruned": "{actor} deleted {deleted} superseded bundle versions, keeping the newest {keep} per device",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
@@ -548,7 +590,12 @@
       "restore_started": "Restore started on the host (from {source})",
       "restore_completed": "Restore completed on the host",
       "restore_failed": "Restore failed on the host ({detail})",
-      "restore_abandoned": "Running restore plan abandoned"
+      "restore_abandoned": "Running restore plan abandoned",
+      "offboarded_device_uninstalled": "A device of a deleted organization removed Paddock",
+      "deleted_organization_audit_read": "{actor} read the audit log of the deleted organization {slug}",
+      "mfa_enrol_marks_seeded": "{marked, plural, one {# administrator without a passkey was} other {# administrators without a passkey were}} marked to set one up at the next sign-in ({totp_only, number} with only an authenticator app, {organizations, number} organizations)",
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {The sign-in setup mark of # administrator with a passkey was} other {The sign-in setup marks of # administrators with a passkey were}} removed",
+      "enrolment_link_created": "{actor} created a sign-in setup link for the account {username} on the host"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -581,6 +628,7 @@
       "deleted": "{actor} deleted the user {username}",
       "locked": "{actor} locked the user {username}",
       "unlocked": "{actor} unlocked the user {username}",
+      "enrolment_link_created": "{actor} created a sign-in setup link for the user {username}",
       "synced_added": "The synced user {username} was added",
       "synced_removed": "The synced user {username} was removed"
     },
@@ -598,7 +646,8 @@
       "managed_files_changed": "{actor} changed the operator roots of the managed files",
       "watched_units_changed": "{actor} changed the watched units of the presence policy",
       "privacy_changed": "{actor} changed the privacy settings: inventory of retired devices kept {retired_inventory_days, number} days, audit searches {audit_search_recorded, select, true {recorded} other {not recorded}}, inventory views {inventory_view_recorded, select, true {recorded} other {not recorded}}",
-      "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}"
+      "rollout_changed": "{actor} changed the rollout settings: staged rollouts {enabled, select, true {on} other {off}}",
+      "patch_sla_changed": "{actor} changed the patch SLA: critical {critical_days, number} days, high {high_days, number} days, medium {medium_days, number} days, low {low_days, number} days (0 = no SLA)"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -693,6 +742,10 @@
     "access_review": {
       "viewed": "{actor} opened the access review",
       "exported": "{actor} exported the access review of {from} to {to} as {format}"
+    },
+    "patch_compliance": {
+      "viewed": "{actor} opened the patch compliance report",
+      "exported": "{actor} exported the patch compliance report of {from} to {to} as {format}"
     }
   },
   "organizations": {
@@ -711,11 +764,61 @@
       "provisioning": "Provisioning",
       "active": "Active",
       "provisioning_failed": "Provisioning failed",
-      "suspended": "Suspended"
+      "suspended": "Suspended",
+      "deleting": "Deletion running",
+      "deleted": "Deleted"
     },
     "empty": {
       "title": "No organizations yet",
       "description": "Create the first organization to onboard its administrators."
+    },
+    "delete": {
+      "action": "Delete",
+      "title": "Delete {name}?",
+      "message": "All data of {name} is deleted for good after the grace period. Until then the organization stays usable; every device receives the order to remove Paddock.",
+      "confirm": "Delete organization",
+      "reason": "Reason",
+      "reasonHint": "2 to 500 characters; kept in the audit trail.",
+      "grace": "Grace period (days)",
+      "graceHint": "The organization stays usable for this long, then its data is deleted.",
+      "graceInvalid": "Enter a whole number of days from {min} to {max}."
+    },
+    "deletion": {
+      "pending": "Deletion on {date}",
+      "cancel": "Cancel deletion",
+      "cancelTitle": "Cancel the deletion of {name}?",
+      "cancelMessage": "The organization stays as it is. Devices that already received the order to remove Paddock still do so.",
+      "cancelConfirm": "Cancel deletion",
+      "step": "Step: {step}",
+      "lastError": "Last error: {error}",
+      "steps": {
+        "sessions": "sessions",
+        "devices": "devices",
+        "outbox": "outbox",
+        "authentik": "identity provider",
+        "fleet": "fleet",
+        "objects": "stored objects",
+        "valkey": "cache",
+        "audit_final": "final audit export",
+        "database": "database",
+        "tombstone": "tombstone"
+      }
+    },
+    "banner": {
+      "message": "The organization is scheduled for deletion on {date}. All its data is deleted for good then.",
+      "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators.",
+      "pending": "{count, plural, one {# device is} other {# devices are}} still pending approval and cannot receive an uninstall: they keep the inert Paddock packages. Approve and delete them, or remove the packages by hand with apt purge paddock-agent paddock-supervisor."
+    },
+    "audit": {
+      "open": "Retained audit",
+      "title": "Retained audit of {name}",
+      "back": "Back to organizations",
+      "intro": "The audit log of the deleted organization {slug} stays readable here. Every read is recorded in the platform audit log.",
+      "logTitle": "Audit log",
+      "finalVerified": "The audit chain of the organization was verified before its deletion, on {date}.",
+      "finalFailed": "The final verification of the audit chain on {date} failed: the retained audit evidence did not verify. Do not rely on it as evidence before the cause is clear.",
+      "finalNone": "The audit chain has not been verified at deletion yet.",
+      "finalFailedChip": "Audit verification failed"
     }
   },
   "agentReleases": {
@@ -810,6 +913,7 @@
     "login_failed": "The sign-in could not be completed.",
     "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
     "passkey_required": "Your sign-in did not use a passkey, and every Paddock portal role requires one (a security key or the authenticator built into your device). Sign out of the identity provider, then sign in again and confirm with your passkey. If you have no passkey yet, the sign-in asks you to set one up.",
+    "mfa_enrolment_required": "Your account has no passkey yet. A new administrator account sets one up only through a one-time sign-in setup link: ask an administrator of your organization (or, for a platform administrator, the operator) for a link, open it, and then sign in again.",
     "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
     "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
     "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
@@ -1375,7 +1479,8 @@
         "skipped_in_use": "not cleared (the disk unlocks with it)",
         "not_requested": "not requested",
         "failed": "clearing failed"
-      }
+      },
+      "offboarding": "Removal for the organization's deletion: the device removes Paddock because its organization is being deleted. Only cancelling the deletion of the organization withdraws it."
     },
     "components": {
       "title": "Components",
@@ -2126,6 +2231,15 @@
     "groups": "Groups",
     "recoveryLink": "Password link",
     "linkShownOnce": "Give this one-time link to {username}: it sets the password and is valid for 24 hours. It is shown only now.",
+    "enrolmentLink": {
+      "create": "Create sign-in setup link",
+      "title": "Sign-in setup link",
+      "confirm": "Create a one-time sign-in setup link for {username}? With it, the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. A new link ends every older one. The link is valid for 24 hours and is shown only once.",
+      "link": "Sign-in setup link",
+      "copyFailed": "The link could not be copied. Select it in the field and copy it by hand.",
+      "shownOnce": "Give this one-time link to {username} on a trusted channel. It is valid until {at} and is shown only now.",
+      "help": "A sign-in setup link lets the account set up a passkey once within 24 hours; an account Paddock created that has no password also sets one. A new link ends every older one: after giving the user a portal role, create a fresh link and hand only that one over, unless they have already used theirs."
+    },
     "syncedHint": "This user is synced from an upstream directory: name, email and password are managed there. Lock, groups and permissions are managed here.",
     "lock": "Lock",
     "lockTitle": "Lock user",
@@ -2584,7 +2698,8 @@
       "clock_drift": "Clock drift",
       "event_gap": "Event gap",
       "report_only": "Report-only, waiting for enforcement",
-      "software_requests_open": "Software requests waiting"
+      "software_requests_open": "Software requests waiting",
+      "patch_sla_breached": "Patch SLA breached"
     },
     "action": {
       "stale_warning": "Open device",
@@ -2605,7 +2720,8 @@
       "clock_drift": "Open device",
       "event_gap": "Open device",
       "report_only": "Open device",
-      "software_requests_open": "Open device"
+      "software_requests_open": "Open device",
+      "patch_sla_breached": "Open device"
     },
     "more": "+{count}",
     "empty": {
@@ -3053,6 +3169,61 @@
       "reason": "Reason",
       "target": "Target",
       "slug": "Slug"
+    }
+  },
+  "patchCompliance": {
+    "title": "Patch compliance",
+    "intro": "The state of the organization's devices now: how long vulnerabilities with an available fix have been open, measured against the patch SLA. Every open finding counts; its days open run from when the inventory system first reported it. For evidence over time use the exports and the daily summary events.",
+    "group": "Device group",
+    "allGroups": "All devices",
+    "capNotice": "Showing the breaches of {shown, number} of {total, number} devices. The export holds every device.",
+    "forbidden": {
+      "title": "No access to the patch compliance report",
+      "description": "Only administrators, operators and auditors of the organization can see the report."
+    },
+    "empty": {
+      "title": "No inventory yet",
+      "description": "No active device of this scope has reported its inventory, so there is nothing to measure against the SLA."
+    },
+    "cards": {
+      "devices": "Devices",
+      "devicesNote": "Active, with inventory",
+      "compliant": "Within the SLA",
+      "compliantNote": "No finding open too long",
+      "breached": "SLA breached",
+      "breachedNote": "{findings, plural, one {# finding} other {# findings}} open too long",
+      "sla": "SLA in days",
+      "slaNote": "Critical / high / medium / low"
+    },
+    "sections": {
+      "severity": "By severity",
+      "groups": "By device group",
+      "breaches": "Findings open longer than the SLA",
+      "catalog": "Pinned required software"
+    },
+    "columns": {
+      "severity": "Severity",
+      "findingsOpen": "Open",
+      "findingsBreached": "Breached",
+      "medianDaysOpen": "Median days open",
+      "p90DaysOpen": "90th percentile",
+      "deviceGroup": "Device group",
+      "devices": "Devices",
+      "breachedDevices": "Devices breached",
+      "hostname": "Device",
+      "cve": "CVE",
+      "package": "Package",
+      "daysOpen": "Days open",
+      "slaDays": "SLA days",
+      "fixedVersion": "Fixed in",
+      "entry": "Application",
+      "requiredVersion": "Required version",
+      "devicesBehind": "Devices behind"
+    },
+    "stateAt": "State at",
+    "emptySection": {
+      "title": "Nothing to show",
+      "description": "No rows match the device group or the search."
     }
   },
   "mcp": {
@@ -3715,5 +3886,34 @@
     "startInvalid": "Enter a time as HH:MM.",
     "durationInvalid": "Enter 30 to 1440 minutes.",
     "timezoneInvalid": "Enter a timezone name of at most 64 characters."
+  },
+  "recoveryExport": {
+    "button": "Export recovery keys",
+    "title": "Export recovery keys and passwords",
+    "intro": "Downloads every disk recovery key and the newest local administrator password of every device of {slug} as one encrypted file. Open it later with gpg --decrypt.",
+    "lastCopy": "After the deletion this file is the only remaining copy. Paddock keeps no copy. Store it safely; without the key or passphrase nobody can open it.",
+    "recipient": "Encrypt to",
+    "recipientPublicKey": "My OpenPGP public key (recommended)",
+    "recipientPassphrase": "A passphrase (generated, at least 20 characters)",
+    "publicKey": "OpenPGP public key (ASCII-armoured)",
+    "passphrase": "Passphrase",
+    "passphraseRepeat": "Repeat the passphrase",
+    "strength": {
+      "short": "Too short: at least 20 characters.",
+      "fair": "Acceptable. Longer, with mixed characters, is stronger.",
+      "strong": "Strong."
+    },
+    "submit": "Download encrypted file",
+    "done": "The encrypted file was downloaded.",
+    "limit": "At most five exports per grace period.",
+    "errors": {
+      "publicKey": "Paste an ASCII-armoured OpenPGP public key (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
+      "length": "The passphrase needs 20 to 1024 characters.",
+      "mismatch": "The passphrases do not match."
+    },
+    "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then.",
+    "passphraseNote": "Use a generated passphrase of at least 20 characters, for example from a password manager. A public key is safer.",
+    "until": "Recovery export available until {time}.",
+    "closed": "The recovery export closed 20 minutes before the deletion."
   }
 }

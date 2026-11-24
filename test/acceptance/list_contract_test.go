@@ -112,6 +112,11 @@ func TestListContract(t *testing.T) {
 	rolloutAdmin, rollout := listContractRollout(t)
 	parents["/api/v1/config-rollouts/{id}/devices"] = rollout
 	parentSessions := map[string]*env.Portal{"/api/v1/config-rollouts/{id}/devices": rolloutAdmin}
+	// The retained audit log of a deleted organization is listed for a tombstone only (plan M17 §8.7, ADR 0052), read
+	// with the platform session.
+	tombstone := deletedGateOrganization(t).String()
+	parents["/api/platform/v1/organizations/{id}/audit-events"] = tombstone
+	parents["/api/platform/v1/organizations/{id}/audit-exports"] = tombstone
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {

@@ -129,7 +129,7 @@ func (q *Queries) DeviceContact(ctx context.Context, id uuid.UUID) (string, erro
 
 const enforceDevice = `-- name: EnforceDevice :one
 UPDATE device SET config_mode = 'enforce', config_mode_changed_at = now()
-WHERE id = $1 AND config_mode = 'report_only' RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+WHERE id = $1 AND config_mode = 'report_only' RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 // Ends report-only mode (plan M11 decision 42): the device's next bundle is enforced.
@@ -165,6 +165,7 @@ func (q *Queries) EnforceDevice(ctx context.Context, id uuid.UUID) (Device, erro
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }
@@ -183,7 +184,7 @@ func (q *Queries) ExpireAgentUpdateRequests(ctx context.Context, before time.Tim
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at FROM device WHERE id = $1
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason FROM device WHERE id = $1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -218,6 +219,7 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }
@@ -301,7 +303,7 @@ INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine
                     enrollment_method, config_mode)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10)
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 type InsertDeviceParams struct {
@@ -360,6 +362,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }
@@ -436,14 +439,16 @@ func (q *Queries) ListAgentUpdateRequests(ctx context.Context) ([]ListAgentUpdat
 	return items, nil
 }
 
-const listCachedDeviceKeys = `-- name: ListCachedDeviceKeys :many
-SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.state, coalesce(s.last_seq, 0)::bigint AS last_seq
-FROM device_identity_key k JOIN device d ON d.id = k.device_id LEFT JOIN device_status s ON s.device_id = d.id
-WHERE d.state <> 'pending' AND ($1::uuid IS NULL OR d.id = $1::uuid)
+const listCachedDeviceKeysOfDevice = `-- name: ListCachedDeviceKeysOfDevice :many
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE k.device_id = $1
 ORDER BY k.key_id
 `
 
-type ListCachedDeviceKeysRow struct {
+type ListCachedDeviceKeysOfDeviceRow struct {
 	KeyID     string
 	PublicKey []byte
 	KeyStatus string
@@ -452,18 +457,74 @@ type ListCachedDeviceKeysRow struct {
 	LastSeq   int64
 }
 
-// Worker cache sync: identity keys with the state of their device; pending devices are not cached (plan M2a
-// decision 10).
-// last_seq restores the device's check-in counter together with its key (0 = never checked in).
-func (q *Queries) ListCachedDeviceKeys(ctx context.Context, deviceID uuid.NullUUID) ([]ListCachedDeviceKeysRow, error) {
-	rows, err := q.db.Query(ctx, listCachedDeviceKeys, deviceID)
+// The identity keys of one device, as ListCachedDeviceKeysPage (a change notification).
+func (q *Queries) ListCachedDeviceKeysOfDevice(ctx context.Context, deviceID uuid.UUID) ([]ListCachedDeviceKeysOfDeviceRow, error) {
+	rows, err := q.db.Query(ctx, listCachedDeviceKeysOfDevice, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListCachedDeviceKeysRow{}
+	items := []ListCachedDeviceKeysOfDeviceRow{}
 	for rows.Next() {
-		var i ListCachedDeviceKeysRow
+		var i ListCachedDeviceKeysOfDeviceRow
+		if err := rows.Scan(
+			&i.KeyID,
+			&i.PublicKey,
+			&i.KeyStatus,
+			&i.DeviceID,
+			&i.State,
+			&i.LastSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCachedDeviceKeysPage = `-- name: ListCachedDeviceKeysPage :many
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE (k.device_id, k.key_id) > ($1::uuid, $2::text)
+ORDER BY k.device_id, k.key_id
+LIMIT $3
+`
+
+type ListCachedDeviceKeysPageParams struct {
+	AfterDevice uuid.UUID
+	AfterKey    string
+	PageSize    int32
+}
+
+type ListCachedDeviceKeysPageRow struct {
+	KeyID     string
+	PublicKey []byte
+	KeyStatus string
+	DeviceID  uuid.UUID
+	State     string
+	LastSeq   int64
+}
+
+// Worker cache sync: identity keys with the state of their device; the caller skips pending devices (plan M2a
+// decision 10). One page of at most @page_size keys after (@after_device, @after_key), keyset-paged by device ID (plan
+// M17 amendment r point 6). The device and its status are scalar subqueries on their primary keys, so no cached
+// generic plan can join them by the organization's rows: a plan built while the worker reconciled a small
+// organization and reused for one of 70 000 devices joined every key with every device (7.5 minutes, PDK-1071).
+// last_seq restores the device's check-in counter together with its key (0 = never checked in).
+func (q *Queries) ListCachedDeviceKeysPage(ctx context.Context, arg ListCachedDeviceKeysPageParams) ([]ListCachedDeviceKeysPageRow, error) {
+	rows, err := q.db.Query(ctx, listCachedDeviceKeysPage, arg.AfterDevice, arg.AfterKey, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCachedDeviceKeysPageRow{}
+	for rows.Next() {
+		var i ListCachedDeviceKeysPageRow
 		if err := rows.Scan(
 			&i.KeyID,
 			&i.PublicKey,
@@ -601,7 +662,7 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 
 const listDevices = `-- name: ListDevices :many
 
-SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device.name, device.enrollment_method, device.config_mode, device.config_mode_changed_at, device.compiled_arch, device.compiled_os_id, device.compiled_os_version_id, device.compiled_agent_version, device.denial_lock_checked_at, device_status.last_contact_at, device_status.applied_bundle_version,
+SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device.name, device.enrollment_method, device.config_mode, device.config_mode_changed_at, device.compiled_arch, device.compiled_os_id, device.compiled_os_version_id, device.compiled_agent_version, device.denial_lock_checked_at, device.uninstall_reason, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
        paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
@@ -741,6 +802,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.Device.CompiledOsVersionID,
 			&i.Device.CompiledAgentVersion,
 			&i.Device.DenialLockCheckedAt,
+			&i.Device.UninstallReason,
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
@@ -767,7 +829,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 }
 
 const lockDevice = `-- name: LockDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at FROM device WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason FROM device WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -802,8 +864,50 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
+}
+
+const recordFleetDeviceToken = `-- name: RecordFleetDeviceToken :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, pending_token, token_reported_at)
+SELECT d.id, d.organization_id, $1::text, $2::timestamptz FROM device d
+WHERE d.id = $3 AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE
+  SET pending_token = EXCLUDED.pending_token, token_reported_at = EXCLUDED.token_reported_at
+  WHERE device_fleet_binding.token_reported_at IS NULL
+     OR device_fleet_binding.token_reported_at < EXCLUDED.token_reported_at
+`
+
+type RecordFleetDeviceTokenParams struct {
+	Token      string
+	ReportedAt time.Time
+	DeviceID   uuid.UUID
+}
+
+// The device token and the announced enrollment reset the agent reported (ADR 0057), for active devices only; an older
+// report never overwrites a newer one.
+func (q *Queries) RecordFleetDeviceToken(ctx context.Context, arg RecordFleetDeviceTokenParams) error {
+	_, err := q.db.Exec(ctx, recordFleetDeviceToken, arg.Token, arg.ReportedAt, arg.DeviceID)
+	return err
+}
+
+const recordFleetEnrollmentReset = `-- name: RecordFleetEnrollmentReset :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+SELECT d.id, d.organization_id, $1::timestamptz FROM device d WHERE d.id = $2 AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE SET reset_announced_at = EXCLUDED.reset_announced_at
+  WHERE device_fleet_binding.reset_announced_at IS NULL
+     OR device_fleet_binding.reset_announced_at < EXCLUDED.reset_announced_at
+`
+
+type RecordFleetEnrollmentResetParams struct {
+	ResetAt  time.Time
+	DeviceID uuid.UUID
+}
+
+func (q *Queries) RecordFleetEnrollmentReset(ctx context.Context, arg RecordFleetEnrollmentResetParams) error {
+	_, err := q.db.Exec(ctx, recordFleetEnrollmentReset, arg.ResetAt, arg.DeviceID)
+	return err
 }
 
 const revokeDeviceIdentityKeys = `-- name: RevokeDeviceIdentityKeys :exec
@@ -832,7 +936,7 @@ func (q *Queries) SetAgentUpdateRequest(ctx context.Context, arg SetAgentUpdateR
 }
 
 const setDeviceName = `-- name: SetDeviceName :one
-UPDATE device SET name = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+UPDATE device SET name = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 type SetDeviceNameParams struct {
@@ -873,6 +977,7 @@ func (q *Queries) SetDeviceName(ctx context.Context, arg SetDeviceNameParams) (D
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }
@@ -880,7 +985,7 @@ func (q *Queries) SetDeviceName(ctx context.Context, arg SetDeviceNameParams) (D
 const setDeviceState = `-- name: SetDeviceState :one
 UPDATE device SET state = $1, state_changed_at = now()
 WHERE id = $2 AND state = $3
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 type SetDeviceStateParams struct {
@@ -921,6 +1026,7 @@ func (q *Queries) SetDeviceState(ctx context.Context, arg SetDeviceStateParams) 
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }

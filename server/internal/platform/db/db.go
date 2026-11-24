@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
@@ -24,6 +27,9 @@ var (
 	ErrNoOrganization = errors.New("db: no organization in context")
 	// ErrForbiddenScope is returned by InPlatform for principals other than platform admins and system.
 	ErrForbiddenScope = errors.New("db: principal may not use the platform scope")
+	// ErrNotPendingDeletion is returned by InPendingDeletionOrg when the organization is unknown, or no deletion of it
+	// is pending and it is neither deleting nor deleted (those get OrganizationUnavailable).
+	ErrNotPendingDeletion = errors.New("db: no deletion of the organization is pending")
 )
 
 // Options tunes a pool.
@@ -37,6 +43,16 @@ type Options struct {
 	// rounds that hold a lock connection for their whole duration cannot take the connections their own queries need
 	// (PDK-1010). Zero keeps the locks in the query pool.
 	LockConns int32
+	// TransactionTimeout, when positive, is the transaction_timeout of every connection of the query pool, set as a
+	// connection runtime parameter so it costs no statement per transaction (plan M17 amendment r point 2). The
+	// organization pools pass OrgTransactionTimeout; a transaction may lower it with SET LOCAL, never raise it.
+	TransactionTimeout time.Duration
+	// organizationPool, set by the organization pool constructors only, runs every statement as an unnamed one with a
+	// cached description (pgx.QueryExecModeCacheDescribe), so PostgreSQL plans each execution for the organization of
+	// the transaction instead of reusing a plan built for another one, and switches JIT compilation off, which cost
+	// seconds per execution of the attention view at 70 000 devices (ADR 0055 decisions 1 and 6). The other pools
+	// keep pgx's statement cache and the server's JIT setting.
+	organizationPool bool
 }
 
 // newPool opens the query pool and, with o.HealthConn, the health pool of one connection.
@@ -63,6 +79,9 @@ func suffixed(name, suffix string) string {
 	return name + "-" + suffix
 }
 
+// runtimeJIT is the connection runtime parameter the organization pools set to off (ADR 0055 decision 6).
+const runtimeJIT = "jit"
+
 func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -73,6 +92,13 @@ func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error)
 	}
 	if o.ApplicationName != "" {
 		cfg.ConnConfig.RuntimeParams["application_name"] = o.ApplicationName
+	}
+	if o.TransactionTimeout > 0 {
+		cfg.ConnConfig.RuntimeParams[runtimeTransactionTimeout] = transactionTimeoutParam(o.TransactionTimeout)
+	}
+	if o.organizationPool {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+		cfg.ConnConfig.RuntimeParams[runtimeJIT] = "off"
 	}
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	return pgxpool.NewWithConfig(ctx, cfg)
@@ -97,13 +123,16 @@ func (p pool) Close() {
 	}
 }
 
-// inTx runs setup and fn in one transaction. fn's error is returned unchanged; the transaction is rolled back.
+// inTx runs setup and fn in one transaction. fn's error is returned unchanged, except that a transaction PostgreSQL
+// ended for exceeding transaction_timeout returns an error matching ErrTransactionTimeout that still wraps it; the
+// transaction is rolled back.
 func inTx(ctx context.Context, p *pgxpool.Pool, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
 	return inTxWith(ctx, p, pgx.TxOptions{}, setup, fn)
 }
 
 // inTxWith is inTx with transaction options.
 func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
+	start := time.Now()
 	tx, err := p.BeginTx(ctx, opts)
 	if err != nil {
 		return err
@@ -111,19 +140,89 @@ func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup fu
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if setup != nil {
 		if err := setup(tx); err != nil {
-			return err
+			return timedOut(ctx, tx.Conn(), start, err)
 		}
 	}
 	if err := fn(tx); err != nil {
-		return err
+		return timedOut(ctx, tx.Conn(), start, err)
 	}
-	return tx.Commit(ctx)
+	return timedOut(ctx, tx.Conn(), start, tx.Commit(ctx))
 }
 
+// setOrgSQL sets paddock.org_id for the transaction.
+const setOrgSQL = "SELECT set_config('paddock.org_id', $1, true)"
+
 func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
-	_, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String())
+	_, err := tx.Exec(ctx, setOrgSQL, org.String())
 	return err
 }
+
+// setOrg is setOrg in p's mode: a statement-cache view runs it as a named, cached statement (ADR 0055 amendment 2
+// decision 8).
+func (p *OrgPool) setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	if !p.statementCache {
+		return setOrg(ctx, tx, org)
+	}
+	_, err := tx.Exec(ctx, setOrgSQL, pgx.QueryExecModeCacheStatement, org.String())
+	return err
+}
+
+// enterOrg sets the organization context and passes the offboarding gate (plan M17 amendment 2026-11-15 j points 2
+// and 3): an organization that is deleting or deleted is refused with OrganizationUnavailable before fn runs. With a
+// fresh status cache the gate is a map lookup and the transaction runs no SQL beyond set_config. A cache older than
+// gateMaxAge fails closed: the status is read in the transaction, in the same batch as set_config, so the fallback
+// costs no extra round trip. No row (the organization does not exist) passes: RLS still applies, and there is
+// nothing to protect.
+func (p *OrgPool) enterOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	if p.beforeGate != nil {
+		p.beforeGate(org)
+	}
+	status, fresh := p.gate.lookup(org)
+	if fresh {
+		if status != "" {
+			return OrganizationUnavailable(org, status)
+		}
+		return p.setOrg(ctx, tx, org)
+	}
+	b := &pgx.Batch{}
+	b.Queue("SELECT set_config('paddock.org_id', $1, true)", org.String())
+	b.Queue("SELECT status FROM organization WHERE id = $1::uuid", org)
+	br := tx.SendBatch(ctx, b)
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
+		return err
+	}
+	err := br.QueryRow().Scan(&status)
+	if cerr := br.Close(); err == nil || errors.Is(err, pgx.ErrNoRows) {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if status == "deleting" || status == "deleted" {
+		return OrganizationUnavailable(org, status)
+	}
+	return nil
+}
+
+// OrganizationUnavailableError is the gate's refusal of an organization that is deleting or deleted. It matches
+// problem.OrganizationInactive (api and MCP 403, worker drop, audit organization.inactive_denied).
+type OrganizationUnavailableError struct {
+	Organization uuid.UUID
+	Status       string
+}
+
+// OrganizationUnavailable returns the gate's refusal of org in status.
+func OrganizationUnavailable(org uuid.UUID, status string) error {
+	return &OrganizationUnavailableError{Organization: org, Status: status}
+}
+
+func (e *OrganizationUnavailableError) Error() string {
+	return fmt.Sprintf("db: organization %s is %s", e.Organization, e.Status)
+}
+
+// Unwrap makes the refusal match problem.OrganizationInactive.
+func (e *OrganizationUnavailableError) Unwrap() error { return problem.OrganizationInactive }
 
 func orgFromContext(ctx context.Context) (uuid.UUID, error) {
 	p, ok := principal.From(ctx)
@@ -133,29 +232,84 @@ func orgFromContext(ctx context.Context) (uuid.UUID, error) {
 	return p.OrganizationID, nil
 }
 
-// OrgPool is the pool of role paddock_api (organization data, RLS enforced).
-type OrgPool struct{ pool }
+// OrgPool is the pool of role paddock_api (organization data, RLS enforced). It keeps the offboarding gate's status
+// cache, polled every second on the pool itself until Close.
+type OrgPool struct {
+	pool
+	gate *orgGate
+	// beforeGate, set only by tests (export_test.go), runs at the start of every gate pass, so a test can commit a
+	// status change between a caller's earlier check and the gate.
+	beforeGate func(org uuid.UUID)
+	// statementCache marks a view made by WithStatementCache: its transactions run the listed statements cached, and
+	// its Close does nothing.
+	statementCache bool
+}
 
-// NewOrgPool opens the paddock_api pool.
+// NewOrgPool opens the paddock_api pool. Its statements are planned per execution, without JIT (ADR 0055).
 func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
+	return newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
+}
+
+func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration, log *slog.Logger) (*OrgPool, error) {
+	o.organizationPool = true
 	p, err := newPool(ctx, dsn, o)
 	if err != nil {
 		return nil, err
 	}
-	return &OrgPool{p}, nil
+	return &OrgPool{pool: p, gate: newOrgGate(ctx, p.p, since, log)}, nil
+}
+
+// Close stops the status cache's poller and closes all connections. On a view made by WithStatementCache it does
+// nothing: the connections and the gate belong to the pool it was made from.
+func (p *OrgPool) Close() {
+	if p.statementCache {
+		return
+	}
+	p.gate.close()
+	p.pool.Close()
+}
+
+// RefreshOrganizationStatus re-reads the offboarding gate's status cache now instead of at the next poll, for a
+// caller that has just changed an organization's status and must see the gate apply it at once (tests).
+func (p *OrgPool) RefreshOrganizationStatus(ctx context.Context) error {
+	return p.gate.refresh(ctx)
 }
 
 // InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
-// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization. It commits if fn
-// returns nil, otherwise it rolls back and returns fn's error unchanged.
+// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization, and an error matching
+// problem.OrganizationInactive (IsOrganizationUnavailable) if the organization is deleting or deleted (the offboarding
+// gate, plan M17 amendments 2026-11-14 d and 2026-11-15 j). It commits if fn returns nil, otherwise it rolls back and
+// returns fn's error unchanged.
 func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	org, err := orgFromContext(ctx)
 	if err != nil {
 		return err
 	}
 	return inTx(ctx, p.p,
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
+}
+
+// queries returns the pgstore.Queries of a transaction of p; on a statement-cache view they run the listed statements
+// cached (cachedTx).
+func (p *OrgPool) queries(tx pgx.Tx) *pgstore.Queries {
+	if p.statementCache {
+		return pgstore.New(cachedTx{tx: tx})
+	}
+	return pgstore.New(tx)
+}
+
+// InOrgOffboarding is InOrg without the gate, for the offboarding job only (app.Offboarding; enforced by
+// TestInOrgOffboardingCallers): it reaches an organization that is deleting, to delete its rows and finalize it. The
+// organization comes from the principal, as for InOrg.
+func (p *OrgPool) InOrgOffboarding(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return p.setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
 }
 
 // InOrgSnapshot is InOrg in a REPEATABLE READ transaction: every query of fn sees the snapshot taken at its first
@@ -167,8 +321,44 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 		return err
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
+}
+
+// InPendingDeletionOrg is InOrg for an organization named by its argument instead of the principal: the second narrow
+// exception to architecture §5 rule 4 (ADR 0052 amendment b decision 8), used only by the platform administrator's
+// encrypted recovery export (app.RecoveryExports). It returns ErrForbiddenScope unless the principal is a platform
+// administrator, OrganizationUnavailable when platform finds the organization deleting or deleted (plan M17 amendment
+// h point 2), and ErrNotPendingDeletion unless platform confirms that the organization's deletion is pending (status
+// active or provisioning_failed with delete_after set); otherwise it runs fn in the organization's context
+// exactly like InOrg, through enterOrg and never its bypass (plan M17 amendments g point 6, i point 3): a deleting
+// committed after the platform check refuses with OrganizationUnavailable before fn runs.
+func (p *OrgPool) InPendingDeletionOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	pr, ok := principal.From(ctx)
+	if !ok || pr.Kind != principal.KindPlatformAdmin || org == uuid.Nil {
+		return ErrForbiddenScope
+	}
+	var o pgstore.Organization
+	err := platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		o, err = q.GetOrganization(ctx, org)
+		return err
+	})
+	switch {
+	case IsNoRows(err):
+		return ErrNotPendingDeletion
+	case err != nil:
+		return fmt.Errorf("db: check the pending deletion: %w", err)
+	case o.Status == "deleting" || o.Status == "deleted":
+		// Never ErrNotPendingDeletion: its caller would fall back to the ungated platform pool (amendment h point 2).
+		return OrganizationUnavailable(org, o.Status)
+	case (o.Status != "active" && o.Status != "provisioning_failed") || o.DeleteAfter == nil:
+		return ErrNotPendingDeletion
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
 }
 
 // ResolveSlug maps an organization slug to its ID before an organization context exists (login). It runs only the
@@ -213,12 +403,13 @@ func (p *OrgPool) OrganizationIDs(ctx context.Context) ([]uuid.UUID, error) {
 }
 
 // Listen holds a dedicated connection with LISTEN channel and calls fn with the payload of every notification. It
-// returns when ctx ends or the connection fails; notifications sent meanwhile are lost, so callers reconcile.
-func (p *OrgPool) Listen(ctx context.Context, channel string, fn func(payload string)) error {
-	return listen(ctx, p.p, channel, fn)
+// calls listening (if not nil) once LISTEN is established: notifications sent before that, and after Listen returns
+// when ctx ends or the connection fails, are lost, so callers reconcile after listening.
+func (p *OrgPool) Listen(ctx context.Context, channel string, listening func(), fn func(payload string)) error {
+	return listen(ctx, p.p, channel, listening, fn)
 }
 
-func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payload string)) error {
+func listen(ctx context.Context, p *pgxpool.Pool, channel string, listening func(), fn func(payload string)) error {
 	conn, err := p.Acquire(ctx)
 	if err != nil {
 		return err
@@ -226,6 +417,9 @@ func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payloa
 	defer conn.Release()
 	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
 		return err
+	}
+	if listening != nil {
+		listening()
 	}
 	for {
 		n, err := conn.Conn().WaitForNotification(ctx)
@@ -318,6 +512,26 @@ func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UU
 	return "", fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
 }
 
+// FleetHostInUseOutside is FleetHostInUse for the deletion of a whole organization (plan M17 amendment l point 1): it
+// ignores every device of org, so two of its devices on one host do not keep each other's host alive, and answers
+// FleetHostUsedByRef or FleetHostUsedByHardware only for a device of another organization.
+func (p *PlatformPool) FleetHostInUseOutside(ctx context.Context, org uuid.UUID, host string) (string, error) {
+	var use string
+	err := p.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		use, err = q.FleetHostInUseOutside(ctx, pgstore.FleetHostInUseOutsideParams{Org: org, Host: host})
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check the Fleet host's devices outside the organization: %w", err)
+	}
+	switch use {
+	case FleetHostUsedByRef, FleetHostUsedByHardware, FleetHostUnused:
+		return use, nil
+	}
+	return "", fmt.Errorf("check the Fleet host's devices outside the organization: unexpected answer %q", use)
+}
+
 // WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection (from the lock pool if
 // the pool has one, Options.LockConns), so that only one replica of a role runs a periodic job at a time. It reports
 // false (and does not call fn) when another session holds the lock.
@@ -358,7 +572,8 @@ func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn fun
 var ErrLeadershipLost = errors.New("db: leader lock lost with its connection")
 
 // Lead holds the advisory lock key on one dedicated connection for as long as fn runs, for a role that leads for its
-// whole process life rather than per round (the backup role, decisions-alpha10 §50). Every check it asks that
+// whole process life (the backup role, decisions-alpha10 §50) or for a round that must stop when leadership is lost
+// (the deletion round, plan M17 amendment p). Every check it asks that
 // connection whether it still answers; when it does not, fn's context ends with the cause ErrLeadershipLost, Lead
 // waits for fn, discards the connection and returns ErrLeadershipLost. It reports false without calling fn when
 // another session holds the key.
@@ -422,11 +637,11 @@ type NotifierPool struct{ OrgPool }
 
 // NewNotifierPool opens the paddock_notifier pool.
 func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool, error) {
-	p, err := newPool(ctx, dsn, o)
+	p, err := newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 	if err != nil {
 		return nil, err
 	}
-	return &NotifierPool{OrgPool{p}}, nil
+	return &NotifierPool{*p}, nil
 }
 
 // InPlatformScope runs fn in a transaction scoped to the platform pseudo-organization (audit.PlatformOrganizationID),
@@ -491,10 +706,72 @@ func NewBackupPool(ctx context.Context, dsn string, o Options) (*BackupPool, err
 // InBackup runs fn in a transaction of role paddock_backup scoped to the platform pseudo-organization
 // (audit.PlatformOrganizationID): the role's audit policies accept no other organization, and without the setting the
 // policy fails closed.
+// Under a context from TakeLeaderEpoch, the transaction first checks the leader epoch and fails with ErrFenced once
+// another process took a newer one.
 func (p *BackupPool) InBackup(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	return inTx(ctx, p.p,
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, audit.PlatformOrganizationID) },
+		func(tx pgx.Tx) error {
+			if err := checkLeaderEpoch(ctx, tx); err != nil {
+				return err
+			}
+			return setOrg(ctx, tx, audit.PlatformOrganizationID)
+		},
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// ErrFenced is the error of an InBackup transaction whose leader epoch is no longer the newest (plan M19 D5, RR-134):
+// another process took the backup leadership after this one, so this one must write nothing further. The transaction
+// also ends the leadership's context with this cause.
+var ErrFenced = errors.New("db: backup leader epoch moved on; another process leads")
+
+// leaderFence is the epoch a leadership took and the cancel that ends its context once a transaction finds the epoch
+// moved on.
+type leaderFence struct {
+	epoch  int64
+	cancel context.CancelCauseFunc
+}
+
+type leaderFenceKey struct{}
+
+// TakeLeaderEpoch increments the backup leader epoch for holder and returns a context that carries it (plan M19 D5):
+// every InBackup transaction under that context first reads the epoch under FOR SHARE and, once another process took
+// a newer one, fails with ErrFenced and ends the context with that cause. The caller MUST hold the backup leader lock
+// (PlatformPool.Lead) and call stop when its leadership ends.
+func (p *BackupPool) TakeLeaderEpoch(ctx context.Context, holder string) (fenced context.Context, stop context.CancelFunc, err error) {
+	var epoch int64
+	if err := p.p.QueryRow(ctx,
+		"UPDATE backup_leader SET epoch = epoch + 1, holder = $1, acquired_at = now() RETURNING epoch",
+		holder).Scan(&epoch); err != nil {
+		return nil, nil, fmt.Errorf("take the backup leader epoch: %w", err)
+	}
+	fenced, cancel := context.WithCancelCause(ctx)
+	return context.WithValue(fenced, leaderFenceKey{}, leaderFence{epoch: epoch, cancel: cancel}),
+		func() { cancel(nil) }, nil
+}
+
+// LeaderEpoch returns the backup leader epoch ctx carries (TakeLeaderEpoch).
+func LeaderEpoch(ctx context.Context) (int64, bool) {
+	f, ok := ctx.Value(leaderFenceKey{}).(leaderFence)
+	return f.epoch, ok
+}
+
+// checkLeaderEpoch fails with ErrFenced when ctx carries a leader epoch that is no longer the stored one. FOR SHARE
+// holds the next leader's increment until this transaction ended, so a write that passed the check commits before
+// the next leader's first write.
+func checkLeaderEpoch(ctx context.Context, tx pgx.Tx) error {
+	f, ok := ctx.Value(leaderFenceKey{}).(leaderFence)
+	if !ok {
+		return nil
+	}
+	var epoch int64
+	if err := tx.QueryRow(ctx, "SELECT epoch FROM backup_leader FOR SHARE").Scan(&epoch); err != nil {
+		return fmt.Errorf("check the backup leader epoch: %w", err)
+	}
+	if epoch != f.epoch {
+		f.cancel(ErrFenced)
+		return ErrFenced
+	}
+	return nil
 }
 
 // SystemIdentifier returns the PostgreSQL cluster's system identifier: it is fixed at initdb and kept by a physical
@@ -516,7 +793,7 @@ func (p *BackupPool) BundleSeqHighWater(ctx context.Context) (int64, error) {
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {
-	return listen(ctx, p.p, channel, func(string) {
+	return listen(ctx, p.p, channel, nil, func(string) {
 		select {
 		case notify <- struct{}{}:
 		default:
@@ -577,6 +854,60 @@ func (r *AuditReader) InOrgWrite(ctx context.Context, fn func(ctx context.Contex
 	}
 	return inTx(ctx, r.p,
 		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
+// ErrNotDeleted refuses InDeletedOrg: the organization is not deleted (or does not exist), or the caller is no
+// platform administrator. Callers answer it as not found.
+var ErrNotDeleted = errors.New("db: organization is not deleted")
+
+// InDeletedOrg runs fn in a read-only transaction scoped to org, a deleted organization, for a platform administrator
+// who reads its retained audit evidence (ADR 0052 decision 7, plan M17 decision 18). It is the only place where an
+// organization ID taken from a request, not from the principal, opens an organization context, so it refuses with
+// ErrNotDeleted unless the principal is a platform administrator and platform confirms organization.status = 'deleted'.
+// Its only caller is app.DeletedOrgAudit (deletedorgaudit_lint_test.go).
+func (r *AuditReader) InDeletedOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return r.inDeletedOrg(ctx, platform, org, true, fn)
+}
+
+// InDeletedOrgWrite is InDeletedOrg in a read-write transaction, for the one write the reader role has: the insert of
+// an evidence export request (as InOrgWrite).
+func (r *AuditReader) InDeletedOrgWrite(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return r.inDeletedOrg(ctx, platform, org, false, fn)
+}
+
+func (r *AuditReader) inDeletedOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID, readOnly bool,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindPlatformAdmin || org == uuid.Nil || org == audit.PlatformOrganizationID {
+		return ErrNotDeleted
+	}
+	var status string
+	err := platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		row, err := q.GetOrganization(ctx, org)
+		status = row.Status
+		return err
+	})
+	if IsNoRows(err) {
+		return ErrNotDeleted
+	}
+	if err != nil {
+		return fmt.Errorf("db: status of organization %s: %w", org, err)
+	}
+	if status != "deleted" {
+		return ErrNotDeleted
+	}
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error {
+			if readOnly {
+				if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
+					return err
+				}
+			}
+			return setOrg(ctx, tx, org)
+		},
 		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }
 
@@ -648,6 +979,15 @@ func IsForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+// IsDataError reports whether PostgreSQL refused the data of a statement: a data exception (SQLSTATE class 22, such
+// as a NUL byte in text), an integrity constraint violation (class 23) or a value over a limit (54000, such as a key
+// too long for its btree index). Another failure, such as a lost connection, is not one.
+func IsDataError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		(strings.HasPrefix(pgErr.Code, "22") || strings.HasPrefix(pgErr.Code, "23") || pgErr.Code == "54000")
+}
+
 // IsAuditDaySealed reports whether err is the audit_object trigger's refusal of an object for an already sealed day
 // (SQLSTATE PA422, audit migration 00005).
 func IsAuditDaySealed(err error) bool {
@@ -661,11 +1001,41 @@ func IsLockTimeout(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
+// IsSerializationFailure reports whether err is SQLSTATE 40001, e.g. paddock_offboard_finalize finding rows of the
+// organization that a straggling transaction wrote after the delete loop.
+func IsSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+// IsNotInPrerequisiteState reports whether err is SQLSTATE 55000, e.g. paddock_offboard_finalize called while
+// paddock_offboard_quiesce still waits.
+func IsNotInPrerequisiteState(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55000"
+}
+
 // IsNoPartition reports whether err is an insert into a partitioned table without a partition for the row (SQLSTATE
 // 23514 without a constraint name), e.g. an audit_event month the index purge dropped concurrently.
 func IsNoPartition(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
+}
+
+// IsOrganizationUnavailable reports whether err is the gate's refusal: the organization is deleting or deleted.
+func IsOrganizationUnavailable(err error) bool {
+	var u *OrganizationUnavailableError
+	return errors.As(err, &u)
+}
+
+// OrganizationUnavailableStatus is the status (deleting or deleted) of the organization the gate refused in err, and ""
+// when err is no such refusal.
+func OrganizationUnavailableStatus(err error) string {
+	var u *OrganizationUnavailableError
+	if !errors.As(err, &u) {
+		return ""
+	}
+	return u.Status
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.

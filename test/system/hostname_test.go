@@ -181,7 +181,7 @@ func gateHN1(t *testing.T, d *Device) {
 	}
 	local := "local-" + d.run
 	d.Must("sudo hostnamectl hostname " + local)
-	time.Sleep(90 * time.Second) // three drift intervals of the development build (30 s)
+	WaitLogged(t, "three drift intervals must pass without correcting an unmanaged name", 90*time.Second) // three drift intervals of the development build (30 s)
 	if got := d.Must("hostnamectl --static"); got != local {
 		t.Errorf("%s: a local rename of an unmanaged name was changed to %q", d.Name, got)
 	}
@@ -198,7 +198,7 @@ func hn1Converged(t *testing.T, d *Device, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(70 * time.Second) // two drift passes of the development build (30 s)
+	WaitLogged(t, "two drift passes must run", 70*time.Second) // two drift passes of the development build (30 s)
 	if n := hostnameDriftPasses(d, since); n != "0" {
 		t.Errorf("%s: %s drift passes corrected the hostname again after it converged", d.Name, n)
 	}

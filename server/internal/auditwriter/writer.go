@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -33,15 +32,15 @@ const MinRetentionDays = 400
 var latencyBuckets = prometheus.ExponentialBuckets(0.005, 2, 14)
 
 var (
-	metricWritten = promauto.NewCounter(prometheus.CounterOpts{
+	metricWritten = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_audit_events_written_total", Help: "Audit events written to the index and the WORM store.",
 	})
-	metricTransaction = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	metricTransaction = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "paddock_audit_writer_transaction_seconds",
 		Help:    "Duration of one audit writer transaction (one organization of a batch), WORM put included, by result.",
 		Buckets: latencyBuckets,
 	}, []string{"result"})
-	metricPut = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	metricPut = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "paddock_audit_worm_put_seconds",
 		Help:    "Duration of a WORM put (PutLocked) to the audit bucket, by object kind and result.",
 		Buckets: latencyBuckets,
@@ -72,6 +71,23 @@ type Writer struct {
 	rowInserted   func(day time.Time)  // nil; tests seal here to race the sealer's audit-day lock
 	beforeInsert  func(ev audit.Event) // nil; tests index ev from another connection to race the insert
 	ensured       func()               // nil; tests drop a partition here to race the index purge
+	afterRetired  prometheus.Counter   // nil until CountAfterRetirement
+}
+
+// CountAfterRetirement registers paddock_audit_events_after_retirement_total with reg: the events of a retired
+// organization the writer recorded as audit.event_after_retirement. A closure requested for an organization that is
+// still live shows up as these, and PaddockAuditEventAfterRetirement alerts on them
+// (main §46). Only the audit-writer role registers it.
+func (w *Writer) CountAfterRetirement(reg prometheus.Registerer) error {
+	c := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "paddock_audit_events_after_retirement_total",
+		Help: "Events of a retired organization recorded as audit.event_after_retirement in the platform log (a redelivered event counts again).",
+	})
+	if err := reg.Register(c); err != nil {
+		return fmt.Errorf("auditwriter: register the after-retirement counter: %w", err)
+	}
+	w.afterRetired = c
+	return nil
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -114,7 +130,8 @@ func Validate(ev audit.Event) error {
 // and retention follow the recording day, or the first unsealed day when the recording day is already sealed (ADR
 // 0010 amendment 2026-10-25), so a late event is covered by the manifest of a day that is still open and a sealed
 // day never changes. It returns the number of newly written events. Duplicates (redelivery, relay restarts) are
-// skipped.
+// skipped. A new event of a retired organization is written to the platform pseudo-organization as
+// audit.event_after_retirement instead (plan M17 decision 16).
 func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, error) {
 	groups := map[uuid.UUID][]audit.Event{}
 	for _, ev := range events {
@@ -128,7 +145,15 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 	sort.Slice(orgs, func(i, j int) bool { return orgs[i].String() < orgs[j].String() })
 	written := 0
 	for _, org := range orgs {
-		n, err := w.writeGroup(ctx, org, groups[org])
+		n, err := w.writeGroup(ctx, org, groups[org], false)
+		var closed *retiredError
+		if errors.As(err, &closed) {
+			after := afterRetirement(org, closed.events)
+			n, err = w.writeGroup(ctx, audit.PlatformOrganizationID, after, false)
+			if err == nil && w.afterRetired != nil {
+				w.afterRetired.Add(float64(countCode(after, audit.CodeAuditEventAfterRetirement)))
+			}
+		}
 		if err != nil {
 			return written, err
 		}
@@ -137,17 +162,88 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 	return written, nil
 }
 
+// exporterEvidence reports whether ev is the audit writer's own record of an evidence export: audit.export_completed
+// (with the package's checksum and verification result) or the retention.purged of an expired export. Platform
+// administrators produce such exports for a deleted organization's auditors (ADR 0052 decision 7), so these keep their
+// code and params in the platform pseudo-organization, with organization_id added, instead of becoming
+// audit.event_after_retirement (review 1 m2).
+func exporterEvidence(ev audit.Event) bool {
+	if ev.Actor.Type != audit.ActorSystem || ev.Actor.ID != selfActorID {
+		return false
+	}
+	switch ev.Code {
+	case audit.CodeAuditExportCompleted:
+		return true
+	case audit.CodeRetentionPurged:
+		store, _ := ev.Params["store"].(string)
+		return store == storeAuditExports
+	}
+	return false
+}
+
+// countCode is the number of events with code.
+func countCode(events []audit.Event, code audit.Code) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Code == code {
+			n++
+		}
+	}
+	return n
+}
+
+// retiredError refuses the new events of a retired organization; events holds them.
+type retiredError struct{ events []audit.Event }
+
+func (e *retiredError) Error() string {
+	return fmt.Sprintf("auditwriter: %d events of a retired organization", len(e.events))
+}
+
+// afterRetirement turns the events of the retired organization org into audit.event_after_retirement events of the
+// platform pseudo-organization, never dropping one (plan M17 decision 16). The event's own params are not copied: the
+// organization's data is deleted, and its log is closed. Each ID is derived from the original's, so a redelivered
+// event is recorded once.
+func afterRetirement(org uuid.UUID, events []audit.Event) []audit.Event {
+	out := make([]audit.Event, len(events))
+	for i, ev := range events {
+		if exporterEvidence(ev) {
+			out[i] = ev
+			out[i].OrganizationID = audit.PlatformOrganizationID
+			out[i].Params = cloneWith(ev.Params, "organization_id", org.String())
+			continue
+		}
+		out[i] = audit.Event{
+			Schema:         audit.Schema,
+			EventID:        uuid.NewSHA1(uuid.NameSpaceURL, []byte("urn:paddock:audit:after-retirement:"+ev.EventID.String())),
+			OrganizationID: audit.PlatformOrganizationID,
+			OccurredAt:     ev.OccurredAt,
+			Code:           audit.CodeAuditEventAfterRetirement,
+			Outcome:        audit.OutcomeSuccess,
+			Actor:          audit.Actor{Type: audit.ActorSystem, ID: verifierActorID, Display: verifierActorID},
+			Target:         &audit.Target{Type: "organization", ID: org.String()},
+			Source:         audit.SourceSystem,
+			Params: map[string]any{
+				"organization_id": org.String(), "original_code": string(ev.Code), "original_event_id": ev.EventID.String(),
+			},
+			CorrelationID: ev.CorrelationID,
+		}
+	}
+	return out
+}
+
 // sealedDayAttempts bounds the transactions of one organization's group when the audit_object trigger refuses a day
 // that was sealed after the writer chose it. Each retry reads the newest manifest again, so a second attempt only
 // fails if another day is sealed in between. It also bounds the retries after the index purge dropped an event's
 // partition between ensurePartitions and the insert; the next attempt creates the partition again.
 const sealedDayAttempts = 3
 
-func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
+// writeGroup writes one organization's events. Only the final verification of a retired organization passes final:
+// every other new event of a retired organization is refused with a *retiredError.
+func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.Event, final bool) (int, error) {
 	sortEvents(events)
 	events = dedupe(events)
 	for attempt := 1; ; attempt++ {
-		n, err := w.writeGroupOnce(ctx, org, events)
+		n, err := w.writeGroupOnce(ctx, org, events, final)
 		if db.IsNoPartition(err) && attempt < sealedDayAttempts {
 			slog.InfoContext(ctx, "audit index partition purged during the write; retrying", "organization_id", org,
 				"attempt", attempt)
@@ -161,7 +257,7 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 }
 
 // writeGroupOnce writes one organization's events in one transaction.
-func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
+func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []audit.Event, final bool) (int, error) {
 	written := 0
 	var recordedAt time.Time
 	start := time.Now()
@@ -190,6 +286,17 @@ func (w *Writer) writeGroupOnce(ctx context.Context, org uuid.UUID, events []aud
 		}
 		if len(fresh) == 0 {
 			return nil
+		}
+		// Checked under the commit-sequence lock that Retirement also takes to close the log, so no event of the
+		// organization commits after its retirement.
+		if !final && org != audit.PlatformOrganizationID {
+			retired, err := q.IsAuditOrgRetired(ctx, org)
+			if err != nil {
+				return err
+			}
+			if retired {
+				return &retiredError{events: fresh}
+			}
 		}
 		key := ObjectKey(org, recordedAt.Truncate(time.Hour), fresh[0].EventID)
 		inserted := make([]audit.Event, 0, len(fresh))

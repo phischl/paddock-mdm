@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,8 +162,14 @@ func signPackage(t *testing.T, deb []byte, v string) []byte {
 	return minisign.SignWithComments(releaseKey(t), deb, releasesig.Comment(v, "amd64"), "")
 }
 
+// releaseDeb is the Debian package name of release v for arch as `make deb` builds it: its control file names the
+// package, the release version in Debian form and the arch, which the server checks (plan M19 D6).
+func releaseDeb(name, v, arch string) []byte {
+	return gateDeb(name, strings.Replace(v, "-", "~", 1), arch, "control.tar.gz")
+}
+
 func signedPackage(t *testing.T, p *env.Portal, v string) env.Response {
-	deb := []byte("gate package " + v)
+	deb := releaseDeb("paddock-agent", v, "amd64")
 	return uploadPackage(t, p, v, "paddock-agent", deb, signPackage(t, deb, v))
 }
 

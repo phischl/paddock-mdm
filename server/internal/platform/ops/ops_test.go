@@ -2,7 +2,10 @@ package ops
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -79,5 +82,30 @@ func TestServeFailsClosedOnUnresolvable(t *testing.T) {
 	err := Serve(canceled(), "worker-ops:9090", func(context.Context) error { return nil })
 	if err == nil {
 		t.Fatal("Serve with an unresolvable host: want error, not a listener")
+	}
+}
+
+// TestReadyAnswerCarriesDetail: a ready /readyz names the detail, for example the worker's mode (plan M19 D1.1); a role
+// without one keeps the plain answer, and a role that is not ready answers 503 either way.
+func TestReadyAnswerCarriesDetail(t *testing.T) {
+	cases := []struct {
+		name, detail string
+		ready        error
+		wantCode     int
+		wantBody     string
+	}{
+		{name: "plain", wantCode: http.StatusOK, wantBody: "ready\n"},
+		{name: "detail", detail: "mode=ingest", wantCode: http.StatusOK, wantBody: "ready mode=ingest\n"},
+		{name: "not ready", detail: "mode=ingest", ready: errors.New("db down"), wantCode: http.StatusServiceUnavailable, wantBody: "not ready: db down\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := newMux(tc.detail, func(context.Context) error { return tc.ready })
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != tc.wantCode || rec.Body.String() != tc.wantBody {
+				t.Fatalf("/readyz = %d %q; want %d %q", rec.Code, rec.Body.String(), tc.wantCode, tc.wantBody)
+			}
+		})
 	}
 }

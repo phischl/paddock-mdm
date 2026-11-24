@@ -21,6 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/client"
 	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -108,7 +109,12 @@ func Run(ctx context.Context, o Options) (int, error) {
 		// with what it stored instead of failing on the missing file.
 		slog.InfoContext(ctx, "resuming the enrollment started meanwhile", "enrollment_id", st.EnrollmentID)
 	case o.ConfigPath != "":
-		if token, err = storeConfig(o); err != nil {
+		token, err = storeConfig(o)
+		// Also after a partial write: what this enrollment wrote is Paddock's own (ADR 0056).
+		if serr := integrity.SyncFiles(l, l.AgentConfig(), l.Trust(), l.RevokeTrust()); serr != nil {
+			slog.WarnContext(ctx, "recording the enrollment configuration in the integrity baseline failed", "error", serr)
+		}
+		if err != nil {
 			return ExitError, err
 		}
 	case st.EnrollmentID == "":

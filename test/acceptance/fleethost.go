@@ -1,13 +1,17 @@
 package acceptance
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,14 +120,19 @@ const fleetRetrigger = 2 * time.Minute
 // download, not a rate limit.
 const fleetDataTimeout = 20 * time.Minute
 
-// waitFleetVulnerabilityData waits until Fleet has the vulnerability data that matches the given CVEs, triggering its
-// vulnerability job again every fleetRetrigger. That data is a precondition of plan M5a AC1, not part of a device's
-// 10 minutes. The development stack passes Fleet direct URLs for the CPE dictionary, its translations and the NVD
-// feeds (compose.dev.yaml, ADR 0009 amendment 2026-10-12), so their download makes no anonymous GitHub API call and
-// does not hit GitHub's hourly rate limit on shared CI runners (PDK-053, PDK-054); a failed download is retried by
-// every run.
-func waitFleetVulnerabilityData(t *testing.T, cves ...string) {
+// waitFleetVulnerabilityData seeds Fleet's Ubuntu 24.04 OSV artifact with the given findings and waits until Fleet
+// has the vulnerability data that matches the given CVEs, triggering its vulnerability job again every
+// fleetRetrigger. That data is a precondition of plan M5a AC1, not part of a device's 10 minutes. The development
+// stack passes Fleet direct URLs for the CPE dictionary, its translations and the NVD feeds (compose.dev.yaml, ADR
+// 0009 amendment 2026-10-12), so their download makes no anonymous GitHub API call and does not hit GitHub's hourly
+// rate limit on shared CI runners (PDK-053, PDK-054); a failed download is retried by every run.
+func waitFleetVulnerabilityData(t *testing.T, findings ...fleetOSVFinding) {
 	t.Helper()
+	seedFleetOSVArtifact(t, findings)
+	cves := make([]string, len(findings))
+	for i, f := range findings {
+		cves[i] = f.CVE
+	}
 	begin := time.Now()
 	var triggered time.Time
 	for {
@@ -148,10 +157,69 @@ func waitFleetVulnerabilityData(t *testing.T, cves ...string) {
 	}
 }
 
+// fleetOSVFinding is a deb package version of Ubuntu 24.04 that Ubuntu's OSV data lists as affected by a CVE.
+type fleetOSVFinding struct {
+	Package, Version, CVE string
+	Published             time.Time
+}
+
+// fleetOSVSeedName is the file name of the seeded artifact. Fleet reads the artifact named for the current day and
+// falls back to the newest one on disk (server/vulnerabilities/osv/artifact.go, readArtifact, v4.96.0); the old date
+// keeps every artifact Fleet downloads itself ahead of the seed, and Fleet removes the seed after such a download.
+const fleetOSVSeedName = "osv-ubuntu-2404-2000-01-01.json.gz"
+
+// seedFleetOSVArtifact writes an Ubuntu 24.04 OSV artifact in Fleet's format with the findings into Fleet's
+// vulnerability path. Fleet v4.96.0 matches deb packages only through OSV (or OVAL), never through the CPE dictionary
+// (server/vulnerabilities/nvd/cpe.go, TranslateSoftwareToCPE), and finds its OSV artifacts only through GitHub's API
+// (server/vulnerabilities/vulnrepo, LatestRelease), which shared CI runners exhaust anonymously; without an artifact
+// on disk no host gets an Ubuntu finding (PDK-1093). The records are copied from Fleet's artifact of 2026-11-24.
+// The seed is never removed: on a stack that never reaches GitHub it stays the only Ubuntu 24.04 artifact, which
+// covers just these findings (ADR 0009 amendment 2026-11-24 (c)).
+func seedFleetOSVArtifact(t *testing.T, findings []fleetOSVFinding) {
+	t.Helper()
+	artifact, err := fleetOSVArtifact(findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `cd "$FLEET_VULNERABILITIES_DATABASES_PATH" && cat >` + fleetOSVSeedName + `.tmp && mv ` +
+		fleetOSVSeedName + `.tmp ` + fleetOSVSeedName
+	if out, err := stack.ComposeInput(testContext(t, time.Minute), bytes.NewReader(artifact), "exec", "-T", "fleet", "sh",
+		"-c", script); err != nil {
+		t.Fatalf("seed Fleet's OSV artifact: %v: %s", err, out)
+	}
+}
+
+// fleetOSVArtifact encodes the findings as a gzipped Ubuntu 24.04 OSV artifact in Fleet's format (OSVArtifact in
+// server/vulnerabilities/osv/analyzer.go, v4.96.0); Fleet matches a deb package whose version is in a record's
+// versions exactly.
+func fleetOSVArtifact(findings []fleetOSVFinding) ([]byte, error) {
+	type vulnerability struct {
+		CVE        string    `json:"cve"`
+		Published  time.Time `json:"published"`
+		Modified   time.Time `json:"modified"`
+		Introduced string    `json:"introduced"`
+		Versions   []string  `json:"versions"`
+	}
+	vulns := map[string][]vulnerability{}
+	for _, f := range findings {
+		vulns[f.Package] = append(vulns[f.Package], vulnerability{CVE: f.CVE, Published: f.Published,
+			Modified: f.Published, Introduced: "0", Versions: []string{f.Version}})
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if err := json.NewEncoder(zw).Encode(map[string]any{"schema_version": "1.0", "ubuntu_version": "24.04",
+		"generated": time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), "total_cves": len(findings),
+		"total_packages": len(vulns), "vulnerabilities": vulns}); err != nil {
+		return nil, fmt.Errorf("encode OSV artifact: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("compress OSV artifact: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // fleetVulnerabilityDataMissing lists the files of Fleet's vulnerability data that findings of the CVEs need and Fleet
-// has not downloaded yet: the CPE dictionary and the NVD feeds of the CVEs' years. Fleet matches the gates' deb
-// packages through them; its OSV path needs the OS versions that Fleet aggregates only hourly, which a
-// fresh stack (CI) has not done yet when the gate runs.
+// has not downloaded yet: the CPE dictionary and the NVD feeds of the CVEs' years.
 func fleetVulnerabilityDataMissing(t *testing.T, cves []string) []string {
 	t.Helper()
 	files := []string{"cpe.sqlite"}
@@ -223,3 +291,97 @@ func storeInventory(t *testing.T, device string, packages [][2]string, findings 
 
 // uniqueCVE is a random CVE ID no feed knows (year 2099).
 func uniqueCVE() string { return fmt.Sprintf("CVE-2099-%012d", rand.Int64N(1_000_000_000_000)) }
+
+// fleetSecret returns the HTTP client and the enroll secret for simulated hosts.
+func fleetSecret(t *testing.T) (*http.Client, string) {
+	t.Helper()
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := stack.Secret("fleet_enroll_secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, strings.TrimSpace(secret)
+}
+
+// enrollFleetHostAs enrolls a simulated osquery host under identifier whose hardware UUID is uuid.
+func enrollFleetHostAs(t *testing.T, identifier, uuid, hostname string) *devicesim.FleetHost {
+	t.Helper()
+	client, secret := fleetSecret(t)
+	h, err := devicesim.EnrollFleetAs(testContext(t, time.Minute), client, stack.FleetURL(), secret, identifier, uuid, hostname, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// enrollFleetHostBound enrolls a simulated host the way fleetd does under its instance identifier, with a device token
+// the device reports (ADR 0057).
+func enrollFleetHostBound(t *testing.T, uuid, hostname string) *devicesim.FleetHost {
+	t.Helper()
+	client, secret := fleetSecret(t)
+	h, err := devicesim.EnrollFleetBound(testContext(t, time.Minute), client, stack.FleetURL(), secret, uuid, hostname, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// fleetAdmin sends a request to Fleet's admin API on the development host as Paddock's API-only user; the caller closes
+// the response.
+func fleetAdmin(t *testing.T, method, path string) *http.Response {
+	t.Helper()
+	dir, err := stack.SecretsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := os.ReadFile(filepath.Join(dir, "fleet_api_token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(testContext(t, time.Minute), method, stack.FleetAdminURL()+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// fleetHostIDs returns Fleet's host ID of each identifier (0 when Fleet knows none).
+func fleetHostIDs(t *testing.T, identifiers ...string) []int {
+	t.Helper()
+	ids := make([]int, len(identifiers))
+	for n, identifier := range identifiers {
+		resp := fleetAdmin(t, http.MethodGet, "/api/latest/fleet/hosts/identifier/"+url.PathEscape(identifier))
+		var out struct {
+			Host struct {
+				ID int `json:"id"`
+			} `json:"host"`
+		}
+		if resp.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(resp.Body).Decode(&out)
+		}
+		_ = resp.Body.Close()
+		ids[n] = out.Host.ID
+	}
+	return ids
+}
+
+// deleteFleetHost removes a host the gate enrolled.
+func deleteFleetHost(t *testing.T, id int) {
+	t.Helper()
+	if id == 0 {
+		return
+	}
+	resp := fleetAdmin(t, http.MethodDelete, "/api/latest/fleet/hosts/"+strconv.Itoa(id))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		t.Errorf("delete Fleet host %d: HTTP %d", id, resp.StatusCode)
+	}
+}

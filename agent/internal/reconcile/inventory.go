@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +39,14 @@ const (
 	fleetdMaxPackage = 128 << 20
 	// fleetdCACertificates is the system trust store; fleetd and osquery trust the same CAs as the agent.
 	fleetdCACertificates = "/etc/ssl/certs/ca-certificates.crt"
+	// FleetdDeviceTokenFile holds fleetd's device token, which the agent reports so that the server binds the
+	// device's inventory host (ADR 0057).
+	FleetdDeviceTokenFile = "/opt/orbit/identifier" //nolint:gosec // a file path, not a credential
+	// fleetdOrbitNodeKey and fleetdOsqueryDB keep fleetd's enrollment; the one-time reset removes them.
+	fleetdOrbitNodeKey = "/opt/orbit/secret-orbit-node-key.txt"
+	fleetdOsqueryDB    = "/opt/orbit/osquery.db"
+	// fleetdHostIdentifierLine makes fleetd enroll under osquery's per-installation instance ID (ADR 0057).
+	fleetdHostIdentifierLine = "ORBIT_HOST_IDENTIFIER=instance"
 )
 
 var (
@@ -60,6 +70,9 @@ type Inventory struct {
 	// is automatic, or an administrator requested an update since the last check-in. nil allows. A missing fleetd is
 	// installed regardless; the policy only holds back upgrades.
 	UpdatesAllowed func() bool
+	// AnnounceReset persists the time of fleetd's one-time enrollment reset before the reset removes anything, so that
+	// the agent announces it over its check-in (ADR 0057, H14); nil announces nothing.
+	AnnounceReset func(time.Time) error
 
 	// applied is the spec of the last successful Apply: a file that differs from the same spec was changed
 	// outside Paddock. stopped is set while a service stop is reported.
@@ -103,7 +116,8 @@ func fleetdFiles(s bundle.Inventory) []struct {
 		"ORBIT_FLEET_URL=" + s.FleetURL + "\n" +
 		"ORBIT_ENROLL_SECRET_PATH=" + FleetdEnrollFile + "\n" +
 		"ORBIT_FLEET_CERTIFICATE=" + fleetdCACertificates + "\n" +
-		"ORBIT_DISABLE_UPDATES=true\nORBIT_ENABLE_SCRIPTS=false\nORBIT_FLEET_DESKTOP=false\n"
+		"ORBIT_DISABLE_UPDATES=true\nORBIT_ENABLE_SCRIPTS=false\nORBIT_FLEET_DESKTOP=false\n" +
+		fleetdHostIdentifierLine + "\n"
 	dropIn := "# Managed by Paddock. Do not edit: local changes are reverted.\n[Service]\nEnvironmentFile=" + FleetdEnv + "\n"
 	return []struct {
 		path string
@@ -190,6 +204,9 @@ func (i *Inventory) wantsPackage(p bundle.InventoryPackage) bool {
 // writeFiles writes fleetd's files that differ and restarts fleetd if it is installed. A file that differs from the
 // spec applied before was changed outside Paddock.
 func (i *Inventory) writeFiles(ctx context.Context, s bundle.Inventory, raw []byte) (bool, error) {
+	if err := i.resetEnrollment(ctx); err != nil {
+		return false, err
+	}
 	changed := false
 	for _, f := range fleetdFiles(s) {
 		if fileHas(i.Sys, f.path, f.data, f.mode) {
@@ -207,6 +224,35 @@ func (i *Inventory) writeFiles(ctx context.Context, s bundle.Inventory, raw []by
 		return changed, nil
 	}
 	return true, run(ctx, i.Sys, []string{"systemctl daemon-reload", "systemctl restart " + FleetdUnit})
+}
+
+// resetEnrollment resets fleetd's enrollment once, when an installed fleetd was configured without
+// fleetdHostIdentifierLine: orbit and osquery keep their node keys across a configuration change, so the host would
+// keep its previous identity (ADR 0057, H2). orbit itself resets the same files when it detects a hardware change.
+// writeFiles then writes the new configuration and restarts fleetd, which enrolls under its instance ID.
+func (i *Inventory) resetEnrollment(ctx context.Context) error {
+	if !i.Sys.PackageInstalled(FleetdPackage) {
+		return nil
+	}
+	data, _, err := i.Sys.ReadFile(FleetdEnv)
+	if err != nil || data == nil || slices.Contains(strings.Split(string(data), "\n"), fleetdHostIdentifierLine) {
+		return nil
+	}
+	if i.AnnounceReset != nil {
+		if err := i.AnnounceReset(i.now()); err != nil {
+			return fmt.Errorf("announce the fleetd enrollment reset: %w", err)
+		}
+	}
+	if err := run(ctx, i.Sys, []string{"systemctl stop " + FleetdUnit}); err != nil {
+		return err
+	}
+	for _, p := range []string{fleetdOrbitNodeKey, FleetdDeviceTokenFile, fleetdOsqueryDB} {
+		if err := i.Sys.RemoveAll(p); err != nil {
+			return fmt.Errorf("reset the fleetd enrollment: %w", err)
+		}
+	}
+	slog.InfoContext(ctx, "fleetd enrollment reset to enroll under its instance identifier")
+	return nil
 }
 
 // installPackage downloads the package, checks its SHA-256 and installs it with dpkg. A run killed at its timeout is

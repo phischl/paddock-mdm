@@ -3,9 +3,13 @@ import styles from '../styles.css?raw'
 
 // jsdom does not paint, so this checks the cascade only: which focus ring the stylesheet gives an element. Whether
 // the Vuetify outline is visibly thicker on focus and that no ring crosses the label is checked in the browser.
+// jsdom 31 resolves var() in computed styles, so the ring token needs a value; a sentinel keeps the check independent of
+// the real palette.
+const ring = 'rgb(1, 2, 3)'
+
 function render(html: string): HTMLElement {
   const style = document.createElement('style')
-  style.textContent = styles
+  style.textContent = `:root { --pd-focus-ring: 0 0 0 4px ${ring}; }\n${styles}`
   document.head.appendChild(style)
   document.body.innerHTML = html
   return document.body
@@ -42,7 +46,7 @@ describe('focus ring inside a Vuetify field', () => {
       <input id="plain" type="number">
       <button id="button" type="button">Save</button>`)
     for (const id of ['reveal', 'plain', 'button']) {
-      expect(ringOf(root.querySelector(`#${id}`)), id).toContain('var(--pd-focus-ring)')
+      expect(ringOf(root.querySelector(`#${id}`)), id).toContain(ring)
     }
   })
 })

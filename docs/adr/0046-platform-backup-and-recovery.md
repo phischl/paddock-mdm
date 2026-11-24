@@ -235,3 +235,12 @@ raise:
   `./paddock up`. The legacy rollback writes only H: alpha.8's `postgres` has no such mount, and alpha.8 never reads
   the file.
 - Step 10.2 of the CI upgrade job stays strict.
+
+## Amendment 2026-11-14 — schema history in the manifest (PDK-1011, plan M19 D2)
+
+The manifest gains the additive field `schema_history` (`since`, `versions`), appended by the backup role when the
+schema changes, with `since` taken from `goose_db_version.tstamp`; `backup manifest --at` reports the schema in force
+at that point and `schema.exact=false` when the point precedes the history, which the restore preflight refuses. The
+manifest schema stays `paddock.backup-set.v1` (older readers ignore the field). The rollback record-and-override of
+0.1.0-alpha.10 stays for rollbacks to alpha.10 and is removed in alpha.12. Every restore starts PostgreSQL with at least
+the restored backup's `max_connections` (plan M19 D1).

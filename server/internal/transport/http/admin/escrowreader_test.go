@@ -14,6 +14,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 )
@@ -41,6 +42,16 @@ func (p *stepUpProofs) issue(sub string, at time.Time) string {
 	p.tokens[jti] = raw
 	p.claims[raw] = stepupproof.Claims{Subject: sub, JTI: jti, AuthTime: at, Expiry: at.Add(5 * time.Minute)}
 	return jti
+}
+
+// withGroups gives the token of jti the signed groups of a step-up (a platform administrator's, ADR 0045).
+func (p *stepUpProofs) withGroups(jti string, groups []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	raw := p.tokens[jti]
+	c := p.claims[raw]
+	c.Groups = groups
+	p.claims[raw] = c
 }
 
 func (p *stepUpProofs) Put(_ context.Context, jti, raw string, _ time.Duration) error {
@@ -89,9 +100,24 @@ func (k escrowKeys) Decrypt(_ context.Context, version int, ciphertext string) (
 	return []byte("pw-" + string(raw)), nil
 }
 
-// newEscrowAccess runs the escrow-reader service with role paddock_escrow_reader behind its client, as the api uses
-// it.
-func newEscrowAccess(t *testing.T, dsn string, proofs *stepUpProofs, disk *diskEscrow) *app.EscrowAccess {
+func (k escrowKeys) DecryptBatch(ctx context.Context, items []bao.VersionedCiphertext) ([][]byte, error) {
+	if k.disk.onBatch != nil {
+		k.disk.onBatch()
+	}
+	out := make([][]byte, len(items))
+	for i, it := range items {
+		b, err := k.Decrypt(ctx, it.Version, it.Ciphertext)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = b
+	}
+	return out, nil
+}
+
+// newEscrowReader runs the escrow-reader service with role paddock_escrow_reader and returns its client, as the api
+// uses it.
+func newEscrowReader(t *testing.T, dsn string, proofs *stepUpProofs, disk *diskEscrow) *escrowreader.Client {
 	t.Helper()
 	pool, err := db.NewOrgPool(context.Background(), dsn, db.Options{})
 	if err != nil {
@@ -101,5 +127,5 @@ func newEscrowAccess(t *testing.T, dsn string, proofs *stepUpProofs, disk *diskE
 	const secret = "escrow-reader-test-secret"
 	srv := httptest.NewServer(escrowreader.NewService(secret, pool, proofs, proofs, escrowKeys{disk: disk}).Handler())
 	t.Cleanup(srv.Close)
-	return app.NewEscrowAccess(escrowreader.NewClient(srv.URL, secret), proofs)
+	return escrowreader.NewClient(srv.URL, secret)
 }

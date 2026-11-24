@@ -130,6 +130,34 @@ func TestAdminRaiseBundleSeq(t *testing.T) {
 	}
 }
 
+// TestAdminRecordBundlePrune: a clean run is one success event of the system actor in the platform pseudo-organization
+// with the six counts; a run with failed keys is one failure event with the same counts and ErrBundlePruneIncomplete.
+func TestAdminRecordBundlePrune(t *testing.T) {
+	admin, super, _ := adminHarness(t)
+	ctx := context.Background()
+	corr := "corr-" + t.Name()
+	const q = `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.bundle_versions_pruned'
+		AND outcome = $2 AND organization_id = $3 AND actor->>'type' = 'system' AND actor->>'display' = 'paddock-server admin'
+		AND (params->>'keep')::int = 2 AND (params->>'listed')::int = 10 AND (params->>'devices')::int = 3
+		AND (params->>'selected')::int = 6 AND (params->>'deleted')::int = $4 AND (params->>'failed')::int = $5`
+	if err := admin.RecordBundlePrune(ctx, app.BundlePrune{Keep: 2, Listed: 10, Devices: 3, Selected: 6, Deleted: 6}); err != nil {
+		t.Fatalf("RecordBundlePrune = %v", err)
+	}
+	if n := countRows(t, super, q, corr, "success", uuid.Nil, 6, 0); n != 1 {
+		t.Fatalf("%d success events", n)
+	}
+	err := admin.RecordBundlePrune(ctx, app.BundlePrune{Keep: 2, Listed: 10, Devices: 3, Selected: 6, Deleted: 3, Failed: 3})
+	if !errors.Is(err, app.ErrBundlePruneIncomplete) {
+		t.Fatalf("RecordBundlePrune with failures = %v", err)
+	}
+	if n := countRows(t, super, q, corr, "failure", uuid.Nil, 3, 3); n != 1 {
+		t.Fatalf("%d failure events", n)
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.bundle_versions_pruned'`, corr); n != 2 {
+		t.Fatalf("%d events in total, want one per call", n)
+	}
+}
+
 // TestAdminRaiseFunctionIsPlatformOnly: only paddock_platform may execute paddock_admin_raise_bundle_seq.
 func TestAdminRaiseFunctionIsPlatformOnly(t *testing.T) {
 	env := pgtest.SharedPaddock(t)

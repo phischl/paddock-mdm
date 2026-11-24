@@ -21,9 +21,15 @@ type lateFirstPageS3 struct {
 	*slowListS3
 	firstPage time.Duration
 	answering bool
+	// clock, when set with answering, measures firstPage on the watchdog's clock like slowNewestS3 does.
+	clock *stepClock
+	step  time.Duration
 }
 
 func (l *lateFirstPageS3) Ping(ctx context.Context) error {
+	if l.clock != nil {
+		return answeringPing(l.clock, l.step)(ctx)
+	}
 	if l.answering {
 		return nil
 	}
@@ -32,6 +38,12 @@ func (l *lateFirstPageS3) Ping(ctx context.Context) error {
 }
 
 func (l *lateFirstPageS3) ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error) {
+	if l.clock != nil {
+		if err := l.clock.waitElapsed(ctx, l.firstPage); err != nil {
+			return nil, err
+		}
+		return l.slowListS3.ListSizesPaged(ctx, prefix, page)
+	}
 	wait := make(<-chan time.Time)
 	if l.firstPage >= 0 {
 		wait = time.After(l.firstPage)
@@ -57,17 +69,18 @@ func lateTarget(l *lateFirstPageS3, probeEvery, pageLimit time.Duration) *s3Targ
 // every mirror to the development target holding 55 000 objects (PDK-972).
 func TestSlowFirstPageFromAnsweringEndpointIsNoStall(t *testing.T) {
 	f := newFixture(t)
+	clock := newStepClock()
+	f.engine.watch = clock.Now
 	f.engine.stall = 400 * time.Millisecond
 	repo, idx := openSet(t, map[string]string{backupset.ManifestPath: string(testManifest(t, InstallationID(42), nil)),
 		"openbao/20261105T060000Z.snap.enc": "a"})
 	s3 := &lateFirstPageS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1},
-		firstPage: 4 * f.engine.stall, answering: true}
+		firstPage: 4 * f.engine.stall, answering: true, clock: clock, step: f.engine.stall / 4}
 	rec := f.addTarget(t, backupset.TypeS3, lateTarget(s3, 50*time.Millisecond, time.Minute))
-	start := time.Now()
 	if _, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now())); err != nil {
 		t.Fatalf("mirror: %v", err)
 	}
-	if took := time.Since(start); took < 2*f.engine.stall {
+	if took := clock.Elapsed(); took < 2*f.engine.stall {
 		t.Fatalf("the mirror took %s; the first page must outlast the stall deadline for this test to mean anything", took)
 	}
 	s3.mu.Lock()
@@ -203,9 +216,16 @@ type slowNewestS3 struct {
 	*slowListS3
 	newest    time.Duration
 	answering bool
+	// clock, when set with answering, measures newest on the watchdog's clock: every probe steps it by step, so the
+	// walk outlasts the stall deadline in probes answered, not in wall time.
+	clock *stepClock
+	step  time.Duration
 }
 
 func (s *slowNewestS3) Ping(ctx context.Context) error {
+	if s.clock != nil {
+		return answeringPing(s.clock, s.step)(ctx)
+	}
 	if s.answering {
 		return nil
 	}
@@ -214,6 +234,13 @@ func (s *slowNewestS3) Ping(ctx context.Context) error {
 }
 
 func (s *slowNewestS3) NewestPaged(ctx context.Context, _ string, page func()) (time.Time, bool, error) {
+	if s.clock != nil {
+		if err := s.clock.waitElapsed(ctx, s.newest); err != nil {
+			return time.Time{}, false, err
+		}
+		page()
+		return time.Time{}, false, nil
+	}
 	wait := make(<-chan time.Time)
 	if s.newest >= 0 {
 		wait = time.After(s.newest)
@@ -234,6 +261,9 @@ func retiredOnSlowNewest(t *testing.T, s *slowNewestS3) (error, bool) {
 	t.Helper()
 	f := newFixture(t)
 	f.engine.stall = 400 * time.Millisecond
+	if s.clock != nil {
+		f.engine.watch = s.clock.Now
+	}
 	set := "site/" + backupset.SetRoot + "/"
 	for p, body := range oldRepo() {
 		s.objects[set+p] = body
@@ -259,8 +289,12 @@ func retiredOnSlowNewest(t *testing.T, s *slowNewestS3) (error, bool) {
 // takes longer than the stall deadline while the endpoint answers; the mirror goes on and prunes the repository.
 // Before, that walk reported no progress, so a large retired repository stalled every mirror before step 6 (PDK-972).
 func TestSlowRetiredNewestFromAnsweringEndpointIsNoStall(t *testing.T) {
+	clock := newStepClock()
 	err, pruned := retiredOnSlowNewest(t, &slowNewestS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1},
-		newest: 1600 * time.Millisecond, answering: true})
+		newest: 1600 * time.Millisecond, answering: true, clock: clock, step: 100 * time.Millisecond})
+	if clock.Elapsed() < 4*100*time.Millisecond {
+		t.Fatalf("the walk took %s; it must outlast the stall deadline for this test to mean anything", clock.Elapsed())
+	}
 	if err != nil {
 		t.Fatalf("mirror: %v", err)
 	}

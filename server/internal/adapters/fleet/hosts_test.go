@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,9 @@ func TestHostInventory(t *testing.T) {
 	if inv.OSVersion != "Ubuntu 24.04.5 LTS" || inv.AgentVersion != "5.23.1" || inv.LastSeenAt == nil || len(inv.Software) != 3 {
 		t.Fatalf("inventory %+v", inv)
 	}
+	if want := time.Date(2026, 10, 7, 13, 18, 21, 0, time.UTC); inv.PolicyUpdatedAt == nil || !inv.PolicyUpdatedAt.Equal(want) {
+		t.Fatalf("policy evaluation time %v, want %v", inv.PolicyUpdatedAt, want)
+	}
 	apport := inv.Software[2]
 	if apport.Name != "apport" || apport.Source != "deb_packages" ||
 		!slices.Equal(apport.Vulnerabilities, []ports.Vulnerability{{CVE: "CVE-2022-28653"}}) {
@@ -63,6 +67,112 @@ func TestHostInventory(t *testing.T) {
 	}
 	if _, err := client(srv.URL).HostInventory(context.Background(), "../config"); err == nil {
 		t.Fatal("invalid host reference accepted")
+	}
+}
+
+// TestHostInventoryUnansweredPolicies (plan M5a amendment 2026-11-16, review round 1, A7): a policy Fleet lists
+// without a pass or fail answer, as after a query change, is reported as unanswered and not as a result.
+func TestHostInventoryUnansweredPolicies(t *testing.T) {
+	_, srv := newFake(t)
+	inv, err := client(srv.URL).HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(inv.UnansweredPolicies, []string{"paddock_agent_binary_known"}) {
+		t.Fatalf("unanswered policies %q", inv.UnansweredPolicies)
+	}
+	if !slices.Equal(inv.Policies, []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}, {Key: "paddock_agent_running"}}) {
+		t.Fatalf("policies %+v", inv.Policies)
+	}
+}
+
+// TestHostInventoryNULBytes (PDK-1122k): NUL bytes in the strings a host reports never leave the adapter, since
+// PostgreSQL refuses them in text; the hardware UUID of the host list is cleaned as well.
+func TestHostInventoryNULBytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest/fleet/hosts" {
+			_, _ = w.Write([]byte(`{"hosts":[{"id":1,"uuid":"ab\u0000cd"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"host":{"id":1,"os_version":"Ubuntu\u0000 26.04","osquery_version":"5.\u000023",
+			"orbit_version":"1.\u00004","hardware_vendor":"LEN\u0000OVO","hardware_serial":"\u0000",
+			"software":[{"name":"ba\u0000sh","version":"5.2\u0000","source":"deb\u0000_packages",
+				"vulnerabilities":[{"cve":"CVE-1\u0000","resolved_in_version":"5.3\u0000"}]}],
+			"policies":[{"name":"disk\u0000_encrypted","response":"pass"},{"name":"x\u0000","response":""}]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := client(srv.URL)
+	inv, err := c.HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw := inv.Software[0]
+	got := []string{inv.OSVersion, inv.AgentVersion, inv.Hardware.Vendor, inv.Hardware.Serial, sw.Name, sw.Version, sw.Source,
+		sw.Vulnerabilities[0].CVE, sw.Vulnerabilities[0].FixedVersion, inv.Policies[0].Key, inv.UnansweredPolicies[0]}
+	want := []string{"Ubuntu 26.04", "1.4", "LENOVO", "", "bash", "5.2", "deb_packages", "CVE-1", "5.3", "disk_encrypted", "x"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("strings %q, want %q", got, want)
+	}
+	page, err := c.ListHostsChangedSince(context.Background(), time.Time{}, "")
+	if err != nil || page.Hosts[0].HardwareUUID != "abcd" || page.Seen[0].HardwareUUID != "abcd" {
+		t.Fatalf("host list %+v, %v", page, err)
+	}
+}
+
+// TestHostInventoryBoundsKeyStrings (PDK-1122k, review 1): software, vulnerability and policy strings are cut to
+// Fleet's column widths, so that they fit PostgreSQL's btree keys; a hardware UUID of NUL bytes only counts as none.
+func TestHostInventoryBoundsKeyStrings(t *testing.T) {
+	long := strings.Repeat("ü", 300)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest/fleet/hosts" {
+			_, _ = w.Write([]byte(`{"hosts":[{"id":1,"uuid":"\u0000\u0000"},{"id":2,"uuid":"ab"}]}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"host":{"id":1,"software":[{"name":%q,"version":%[1]q,"source":%[1]q,
+			"vulnerabilities":[{"cve":%[1]q,"resolved_in_version":%[1]q}]}],"policies":[{"name":%[1]q,"response":"pass"}]}}`, long)
+	}))
+	t.Cleanup(srv.Close)
+	c := client(srv.URL)
+	inv, err := c.HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw, v := inv.Software[0], inv.Software[0].Vulnerabilities[0]
+	got := []int{len([]rune(sw.Name)), len([]rune(sw.Version)), len([]rune(sw.Source)), len([]rune(v.CVE)),
+		len([]rune(v.FixedVersion)), len([]rune(inv.Policies[0].Key))}
+	if !slices.Equal(got, []int{255, 255, 64, 64, 255, 255}) {
+		t.Fatalf("rune lengths %v", got)
+	}
+	page, err := c.ListHostsChangedSince(context.Background(), time.Time{}, "")
+	if err != nil || len(page.Hosts) != 1 || len(page.Seen) != 1 || page.Hosts[0].Ref != "2" {
+		t.Fatalf("host list %+v, %v", page, err)
+	}
+}
+
+// TestHostInventoryErrorClass (PDK-1122k): a host Fleet no longer knows is not_found and Fleet's refusal of this one
+// host is invalid_state, so the round skips only that host; any other failure is upstream_unavailable.
+func TestHostInventoryErrorClass(t *testing.T) {
+	for _, c := range []struct {
+		code int
+		body string
+		want error
+	}{
+		{http.StatusNotFound, fleetError, problem.NotFound},
+		{http.StatusUnprocessableEntity, fleetError, problem.InvalidState},
+		{http.StatusNotFound, "404 page not found", problem.UpstreamUnavailable},
+		{http.StatusUnauthorized, fleetError, problem.UpstreamUnavailable},
+		{http.StatusBadGateway, fleetError, problem.UpstreamUnavailable},
+	} {
+		t.Run(fmt.Sprintf("%d %.12s", c.code, c.body), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(c.code)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(srv.Close)
+			if _, err := client(srv.URL).HostInventory(context.Background(), "1"); !errors.Is(err, c.want) {
+				t.Fatalf("HTTP %d %q: %v, want %v", c.code, c.body, err, c.want)
+			}
+		})
 	}
 }
 

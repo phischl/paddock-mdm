@@ -1,0 +1,71 @@
+# Software sections of paddock.v1 (plan M13c): sources, catalog and assignments. Merge them into paddock.yml, or apply
+# this file on its own: a section that is present is authoritative, and sections left out stay as they are.
+# Preview with `paddockctl apply -f examples/software.yaml --dry-run`.
+#
+# software_sources needs an organization administrator with a step-up, which an API token never has: the dry run names
+# the section as "Requires a step-up", and an apply with a token is refused as a whole. Create or change sources in
+# the portal first; this file then lists them unchanged, so the apply needs no step-up for them.
+api_version: paddock/v1
+kind: OrganizationConfig
+software_sources:
+  - slug: vendor
+    kind: apt
+    name: Vendor repository
+    uris:
+      - https://apt.example.com/ubuntu
+    suites:
+      - stable
+    components:
+      - main
+    architectures:
+      - amd64
+    # Replace with the vendor's armored public key and its fingerprint (they must match: 422 fingerprint_mismatch).
+    signing_key: |-
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      REPLACE-WITH-THE-VENDOR-KEY
+      -----END PGP PUBLIC KEY BLOCK-----
+    fingerprint: 0123456789ABCDEF0123456789ABCDEF01234567
+software_catalog:
+  - name: Vendor Browser
+    description: The browser of the vendor repository
+    category: Internet
+    source: vendor
+    packages:
+      - distribution: ubuntu
+        release: "*"
+        architecture: amd64
+        package: vendor-browser
+    approval: none
+  - name: Image editor
+    description: From the distribution's own repositories; users ask before they install it
+    category: Graphics
+    source: null
+    packages:
+      - distribution: ubuntu
+        release: "*"
+        architecture: "*"
+        package: gimp
+    approval: required
+software_assignments:
+  - entry: Vendor Browser
+    target:
+      type: organization
+    intent: required
+    update_rule: latest
+    version: null
+    reason: Standard browser
+  - entry: Image editor
+    target:
+      type: user_group
+      slug: designers
+    intent: available
+    version: null
+    reason: ""
+  - entry: Vendor Browser
+    target:
+      type: device_group
+      name: kiosks
+    intent: hold
+    version: 1.2.3
+    reason: Kiosk browser is pinned until the next release test

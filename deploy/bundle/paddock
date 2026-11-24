@@ -19,8 +19,13 @@ usage: ./paddock <command> [arguments]
   logs [service...]               show the last log lines
   compose <args...>               docker compose with this host's files
   bao <args...>                   the bao CLI inside the openbao container (BAO_TOKEN from the environment)
-  bootstrap openbao|buckets|audit-bucket|fleet
-                                  configure OpenBao, the buckets or Fleet (docs/operations/install.md)
+  bootstrap openbao|buckets|audit-bucket|fleet|broker
+                                  configure OpenBao, the buckets or Fleet (docs/operations/install.md);
+                                  buckets --add-missing only adds missing users and policies (./paddock upgrade);
+                                  broker applies the RabbitMQ users and permissions to the running broker and checks them;
+                                  broker --import only applies them, broker --check only checks them (./paddock upgrade)
+  bundles prune [--keep N] [--yes]   remove superseded bundle versions, keeping the newest N (default 2) per device;
+                                  without --yes only counts (control plane)
   agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
   agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P]
                 [--failure-threshold-min M]
@@ -190,7 +195,7 @@ case "$cmd" in
     upgrade_main "$BUNDLE_DIR" "$@"
     exit 0
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup | rollback) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | bundles | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup | rollback) ;;
   *) usage ;;
 esac
 
@@ -261,6 +266,68 @@ resolve_local_targets() {
   while IFS= read -r m; do mounts+=("$m"); done < <(backup_root_mount "$root")
   docker run --rm --user 0:0 --network none --cap-drop ALL --read-only "${mounts[@]}" "$PADDOCK_IMAGE" \
     backup resolve-local ${root:+--root "$root"} -- "${devs[@]}" </dev/null >/dev/null
+}
+
+# The most connections each long-running role holds on the control-plane database, per replica (plan M19 D1.4;
+# docs/operations/capacity.md "PostgreSQL connection budget"). server/cmd/paddock-server/pgbudget_test.go compares
+# every value with the pools' MaxConns, so a pool that changes without this table fails the tests.
+PG_ROLE_MAX_CONNS=(
+  paddock-api=12
+  paddock-worker=30
+  paddock-worker-ingest=11
+  paddock-notifier=10
+  paddock-compiler=8
+  paddock-backup=7
+  paddock-escrow-reader=4
+  paddock-revocation-issuer=4
+  paddock-outbox-relay=4
+  paddock-unsealer=2
+)
+
+# pg_budget: one checklist item from the effective Compose configuration (YAML on stdin, as `compose config` prints
+# it): every long-running role's maximum times its replicas against the postgres service's max_connections less 3 for
+# the superuser, 12 for pgBackRest and paddock-migrate and 4 for one operator command (plan M19 amendment c). FAIL
+# above that, WARN with fewer than 5 to spare. Prints
+# nothing for a configuration without the postgres service (the audit host). Returns 1 on FAIL.
+pg_budget() {
+  local e svc replicas conns max="" seen="" sum=0 limit status=PASS parts=()
+  declare -A role_max=()
+  for e in "${PG_ROLE_MAX_CONNS[@]}"; do role_max["${e%%=*}"]="${e#*=}"; done
+  # One line per service: its name, its replicas (deploy.replicas, else 1) and a max_connections in its command.
+  while read -r svc replicas conns; do
+    if [[ "$svc" == postgres ]]; then
+      seen=1
+      max="$conns"
+    fi
+    [[ -n "${role_max[$svc]:-}" && "$replicas" =~ ^[0-9]+$ ]] || continue
+    ((replicas > 0)) || continue
+    sum=$((sum + role_max[$svc] * replicas))
+    parts+=("$svc ${replicas}x${role_max[$svc]}")
+  done < <(awk '
+    function flush() { if (svc != "") print svc, rep, (conns == "" ? "-" : conns); svc = "" }
+    /^[^ ]/ { flush(); in_services = ($0 == "services:"); next }
+    !in_services { next }
+    /^  [^ ]/ { flush(); svc = $1; sub(/:$/, "", svc); rep = 1; conns = ""; in_deploy = 0; next }
+    /^    [^ ]/ { in_deploy = ($1 == "deploy:") }
+    in_deploy && /^      replicas:/ { rep = $2 }
+    match($0, /max_connections=[0-9]+/) { conns = substr($0, RSTART + 16, RLENGTH - 16) }
+    END { flush() }
+  ')
+  [[ -n "$seen" ]] || return 0
+  [[ "$max" =~ ^[0-9]+$ ]] || max=100
+  limit=$((max - 3 - 12 - 4))
+  if ((sum > limit)); then
+    status=FAIL
+  elif ((limit - sum < 5)); then
+    status=WARN
+  fi
+  echo "$status  postgres: connection budget"
+  echo "      - $sum of $limit connections (max_connections $max less 3 for the superuser, 12 for pgBackRest and paddock-migrate and 4 for an operator command): ${parts[*]:-no role}"
+  case "$status" in
+    FAIL) echo "      - lower the replicas or raise PADDOCK_PG_MAX_CONNECTIONS in .env (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
+    WARN) echo "      - fewer than 5 to spare: a further replica does not fit (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
+  esac
+  [[ "$status" != FAIL ]]
 }
 
 case "$cmd" in
@@ -348,7 +415,12 @@ case "$cmd" in
         for d in "${leftovers[@]}"; do
           echo "      - $d: a bundle-seq/ replaced by an upgrade after a rollback; nothing reads it, its high-water is outdated"
         done
-        echo "      - remove them (root, they belong to uid 999): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+        if [[ -d "$BUNDLE_DIR/bundle-seq" && ! -L "$BUNDLE_DIR/bundle-seq" ]]; then
+          echo "      - remove them (root, they belong to uid 999; ./paddock up does it as root): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+        else
+          # migrate-from's double failure (PDK-1007): the aside is then the release's only bundle-seq/.
+          echo "      - $BUNDLE_DIR/bundle-seq is missing: do not remove these; move the newest back with mv -T <aside> $BUNDLE_DIR/bundle-seq"
+        fi
       fi
     fi
     # Online, the project's running containers against the hardening matrix of hardening-exceptions.yaml (plan M12h
@@ -372,11 +444,68 @@ case "$cmd" in
         echo "      - not checked: listing the project's containers failed"
       fi
     fi
+    # Online on a host with RabbitMQ, the broker's permissions on vhost paddock against the definitions (PDK-1017, main
+    # §44): rabbitmqctl's listing goes in as a file, never the definitions file with the passwords.
+    # PADDOCK_CHECK_SKIP_BROKER: set by ./paddock upgrade before up; the old release's broker has the old permissions
+    # until the step broker applies the new ones, and the exact comparison waits for the step broker-check after up.
+    broker=() broker_mount=()
+    if [[ -n "$online" && "$PADDOCK_HOST" != audit ]]; then
+      if [[ -n "${PADDOCK_CHECK_SKIP_BROKER:-}" ]]; then
+        echo "WARN  rabbitmq: permissions match the definitions"
+        echo "      - not checked: the old release still runs; the upgrade checks them in its step broker-check after up"
+      else
+        broker_file="$(mktemp)"
+        trap 'rm -f "${containers_file:-}" "$broker_file"' EXIT
+        if compose exec -T -e "RABBITMQ_CTL_ERL_ARGS=+S 1:1 +SDcpu 1:1 +SDio 1 +A 1 +sbwt none +sbwtdcpu none +sbwtdio none" \
+          rabbitmq rabbitmqctl -q list_permissions -p paddock --formatter json </dev/null >"$broker_file"; then
+          broker_mount=(-v "$broker_file:/run/paddock-check/broker.json:ro")
+          broker=(--broker-permissions /run/paddock-check/broker.json)
+        else
+          echo "WARN  rabbitmq: permissions match the definitions"
+          echo "      - not checked: rabbitmqctl list_permissions failed (is the broker running?)"
+        fi
+      fi
+    fi
+    # The connection budget of the control-plane database (plan M19 D1.4) from the same configuration, so the replicas
+    # of .env count (PADDOCK_WORKER_INGEST_REPLICAS); its FAIL fails the check after the checklist.
+    budget_failed=""
+    if config="$(PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config </dev/null)"; then
+      printf '%s\n' "$config" | pg_budget || budget_failed=1
+    else
+      echo "WARN  postgres: connection budget"
+      echo "      - not checked: rendering the Compose configuration failed"
+    fi
+    # The organization deletion's object-store users (PDK-1054d): one per policy, the key file's. The control plane's
+    # object store only, and only online, because the listing needs the running store.
+    offboard_failed=""
+    if [[ -n "$online" && ("$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == lab) ]]; then
+      if [[ -n "${PADDOCK_CHECK_SKIP_CONTAINERS:-}" ]]; then
+        # The old release's store holds no such users yet; the post-checks after the buckets step check them.
+        echo "WARN  object store: one organization deletion user per policy"
+        echo "      - not checked: the old release still runs; the checks after up compare the users"
+      else
+        "$BUNDLE_DIR/scripts/offboard-users-check.sh" || offboard_failed=1
+      fi
+    fi
+    # Valkey's memory headroom (plan M17 amendment s point 4.6): the container's usage against its limit from docker
+    # stats, without a Valkey credential. A WARN only; an empty usage (listing failed, container down) reads as not
+    # checked.
+    if [[ -n "$online" && ("$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == lab) ]]; then
+      valkey_usage=""
+      if valkey_id="$(compose ps -q valkey </dev/null)" && [[ -n "$valkey_id" ]]; then
+        valkey_usage="$(docker stats --no-stream --format '{{.MemUsage}}' "$valkey_id" 2>/dev/null)" || valkey_usage=""
+      fi
+      "$BUNDLE_DIR/scripts/valkey-headroom.sh" "$valkey_usage"
+    fi
+    rc=0
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
+      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" "${broker_mount[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
         prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
-        "${docker_networks[@]}" "${containers[@]}"
+        "${docker_networks[@]}" "${broker[@]}" "${containers[@]}" || rc=$?
+    ((rc == 0)) || exit "$rc"
+    [[ -z "$budget_failed" ]] || exit 1
+    [[ -z "$offboard_failed" ]] || exit 1
     ;;
   up)
     profiles=(--profile paddock --profile observability)
@@ -393,7 +522,13 @@ case "$cmd" in
       resolve_local_targets "$BACKUP_TARGETS_FILE" ||
         die "a local backup target no longer resolves below PADDOCK_BACKUP_LOCAL_ROOT (see above); fix the directory or the target, then ./paddock backup-target apply"
     fi
+    backup_host && remove_seq_leftovers "$BUNDLE_DIR"
     run_redacted compose "${profiles[@]}" up -d
+    # The blueprints in order before the wait: paddock-api becomes ready only once the portal's providers exist (plan
+    # M12h-2 amendment g). The audit host has no Authentik.
+    if [[ "$PADDOCK_HOST" != audit ]]; then
+      "$BUNDLE_DIR/scripts/authentik-apply-blueprints.sh" || die "the Authentik blueprints were not applied (see above); fix the cause, then ./paddock up again"
+    fi
     "$BUNDLE_DIR/scripts/wait-healthy.sh" "${profiles[@]}"
     ;;
   down)
@@ -434,7 +569,8 @@ case "$cmd" in
         ;;
       buckets)
         require_host controlplane lab "bootstrap buckets"
-        "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh"
+        [[ $# -eq 1 || ($# -eq 2 && "$2" == --add-missing) ]] || die "usage: ./paddock bootstrap buckets [--add-missing]" 2
+        "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh" "${@:2}"
         ;;
       audit-bucket)
         require_host audit lab "bootstrap audit-bucket"
@@ -444,8 +580,19 @@ case "$cmd" in
         require_host controlplane lab "bootstrap fleet"
         "$BUNDLE_DIR/scripts/fleet-bootstrap.sh"
         ;;
-      *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet" 2 ;;
+      broker)
+        require_host controlplane lab "bootstrap broker"
+        [[ $# -eq 1 || ($# -eq 2 && ("$2" == --import || "$2" == --check)) ]] ||
+          die "usage: ./paddock bootstrap broker [--import|--check]" 2
+        "$BUNDLE_DIR/scripts/rabbitmq-definitions.sh" "${@:2}"
+        ;;
+      *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet|broker" 2 ;;
     esac
+    ;;
+  bundles)
+    [[ "${1:-}" == prune ]] || die "usage: ./paddock bundles prune [--keep N] [--yes]" 2
+    require_host controlplane lab "bundles prune"
+    "$BUNDLE_DIR/scripts/bundles-prune.sh" "${@:2}"
     ;;
   agent-release)
     [[ $# -eq 2 && -d "$2" ]] || die "usage: ./paddock agent-release <version> <dir>" 2

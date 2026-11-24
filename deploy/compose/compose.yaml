@@ -125,6 +125,10 @@ services:
     pids_limit: 512
     # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
     mem_limit: ${PADDOCK_POSTGRES_MEM_LIMIT:-2g}
+    # The connection limit (plan M19 D1.2; docs/operations/capacity.md "PostgreSQL connection budget"). PostgreSQL
+    # writes it into the WAL and every backup, so restore.sh starts a restored cluster with at least the backup's value.
+    # compose.backup.yaml replaces this command and repeats the setting.
+    command: ["postgres", "-c", "max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}"]
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
@@ -244,7 +248,7 @@ services:
     read_only: true
     pids_limit: 256
     # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
-    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-512m}
+    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-1g}
     # One ACL user per role (plan M12h §14): the entrypoint renders /run/valkey/users.acl with hashed passwords.
     entrypoint: ["/usr/local/bin/paddock-entrypoint.sh"]
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
@@ -509,8 +513,9 @@ services:
       FLEET_SERVER_ADDRESS: 0.0.0.0:8080
       # Caddy terminates TLS.
       FLEET_SERVER_TLS: "false"
-      # Hosts enroll with their hardware UUID, which Paddock maps to devices (plan M5a decision 6).
-      FLEET_OSQUERY_HOST_IDENTIFIER: uuid
+      # Hosts enroll under the identifier fleetd provides, osquery's per-installation instance ID (ADR 0057); Paddock maps
+      # hosts to devices through the binding the device reports.
+      FLEET_OSQUERY_HOST_IDENTIFIER: provided
       FLEET_OSQUERY_STATUS_LOG_PLUGIN: stdout
       FLEET_OSQUERY_RESULT_LOG_PLUGIN: stdout
       # Policy results (mutual watch, plan M5a decision 8) at most this old.
@@ -899,6 +904,12 @@ services:
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_worker_access_key
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_worker_secret_key
+      # Organization deletion only (plan M17 amendment k): list and delete, never read, below org/ and apt/ of bundles
+      # and the escrowed headers' and diagnostics bundles' versions; the full worker alone holds these credentials.
+      PADDOCK_OFFBOARD_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_offboard_access_key
+      PADDOCK_OFFBOARD_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_offboard_secret_key
+      PADDOCK_OFFBOARD_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_offboard_access_key
+      PADDOCK_OFFBOARD_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_offboard_secret_key
       # Fleet settings, inventory sync and policies (plan M5a decisions 2, 6 and 8).
       PADDOCK_FLEET_URL: http://fleet:8080
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
@@ -920,6 +931,10 @@ services:
       - rustfs_escrow_worker_secret_key
       - rustfs_bundles_worker_access_key
       - rustfs_bundles_worker_secret_key
+      - rustfs_bundles_offboard_access_key
+      - rustfs_bundles_offboard_secret_key
+      - rustfs_escrow_offboard_access_key
+      - rustfs_escrow_offboard_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
@@ -937,6 +952,58 @@ services:
       paddock-migrate:
         condition: service_completed_successfully
       caddy-ca-export:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+
+  # Further workers for the ingest load (architecture N2, plan M19 D1.1): only the queue consumers, with 11 instead of 30
+  # database connections, no rounds and none of the rounds' credentials. None run by default; their number is
+  # PADDOCK_WORKER_INGEST_REPLICAS in .env (plan M19 amendment b), so every up, upgrade and restore keeps it, once
+  # PostgreSQL's connection limit leaves room for them (docs/operations/capacity.md, "PostgreSQL connection budget").
+  # Not scraped by Prometheus: the full worker exports the role's metrics.
+  paddock-worker-ingest:
+    logging: *paddock-logging
+    <<: *paddock
+    command: ["serve", "worker"]
+    deploy:
+      replicas: ${PADDOCK_WORKER_INGEST_REPLICAS:-0}
+    mem_limit: ${PADDOCK_WORKER_INGEST_MEM_LIMIT:-1g}
+    environment:
+      <<: *paddock-env
+      PADDOCK_WORKER_MODE: ingest
+      PADDOCK_DB_WORKER_URL_FILE: /run/secrets/db_paddock_worker_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: worker
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_USER: worker
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_worker_password
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_worker_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_worker_secret_id
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_worker_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_worker_secret_key
+      # The ops listener on network data only, under an alias of its own (decisions-alpha10 A10-1).
+      PADDOCK_OPS_ADDR: worker-ingest-ops:9090
+    secrets:
+      - rustfs_escrow_worker_access_key
+      - rustfs_escrow_worker_secret_key
+      - db_paddock_worker_url
+      - db_paddock_platform_url
+      - rabbitmq_worker_password
+      - valkey_worker_password
+      - approle_worker_role_id
+      - approle_worker_secret_id
+    networks:
+      data:
+        aliases: [worker-ingest-ops]
+    depends_on:
+      paddock-migrate:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
@@ -1094,6 +1161,10 @@ secrets:
   rustfs_escrow_api_secret_key: { file: ./.secrets/rustfs_escrow_api_secret_key }
   rustfs_escrow_revocation_access_key: { file: ./.secrets/rustfs_escrow_revocation_access_key }
   rustfs_escrow_revocation_secret_key: { file: ./.secrets/rustfs_escrow_revocation_secret_key }
+  rustfs_bundles_offboard_access_key: { file: ./.secrets/rustfs_bundles_offboard_access_key }
+  rustfs_bundles_offboard_secret_key: { file: ./.secrets/rustfs_bundles_offboard_secret_key }
+  rustfs_escrow_offboard_access_key: { file: ./.secrets/rustfs_escrow_offboard_access_key }
+  rustfs_escrow_offboard_secret_key: { file: ./.secrets/rustfs_escrow_offboard_secret_key }
   release_public_key: { file: ./.secrets/release/minisign.pub }
   revoke_release_public_key: { file: ./.secrets/release/revoke-minisign.pub }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }

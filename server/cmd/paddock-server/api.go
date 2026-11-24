@@ -199,7 +199,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	imports := app.NewReleaseImports(runner, platformPool, releases, source, cfgSource)
 	accounts := app.NewAccounts(runner, orgPool, platformPool, sessionStore)
-	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
+	escrowReader := escrowreader.NewClient(escrowReaderURL, escrowReaderToken)
+	escrowAccess := app.NewEscrowAccess(escrowReader, stepUpTokens)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
@@ -234,6 +235,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	diagnostics := app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, escrowObjects)
 	softwarePackages := app.NewSoftwarePackages(runner, orgPool, baoClient, packageStore,
 		objectstore.NewPresigner(bundlesURL, bundlesAccessKey, bundlesSecretKey, bundlesBucket), bundlesURL)
+	uninstalls := app.NewUninstalls(runner, orgPool, devicecache.New(vk))
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:     app.NewDeviceGroups(runner, orgPool),
 		Tokens:           app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
@@ -241,7 +243,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Declarative:      app.NewDeclarative(runner, orgPool),
 		Devices:          app.NewDevices(runner, orgPool, devicecache.New(vk)),
 		Managed:          app.NewManagedConfig(runner, orgPool),
-		Organizations:    app.NewOrganizations(runner, platformPool, ak),
+		Organizations:    app.NewOrganizations(runner, platformPool, ak, uninstalls, common.Development()),
 		Users:            app.NewUsers(runner, orgPool, ak),
 		UserGroups:       app.NewUserGroups(runner, orgPool, ak),
 		Logins:           app.NewLogins(runner, orgPool, ak),
@@ -253,6 +255,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LocalAdmin:       app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:      app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:             app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
+		RecoveryExports:  app.NewRecoveryExports(runner, platformPool, stepUpTokens, escrowReader, time.Now),
 		Revocations:      app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
 		DMS:              app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		RolloutSettings:  app.NewRolloutSettings(runner, orgPool, common.Development()),
@@ -275,20 +278,24 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Overview:         app.NewOverview(orgPool),
 		SecurityReview:   app.NewSecurityReview(orgPool),
 		AccessReview:     app.NewAccessReview(runner, orgPool, auditReader),
+		PatchSLA:         app.NewPatchSLA(runner, orgPool),
+		PatchCompliance:  app.NewPatchCompliance(runner, orgPool),
 		Diagnostics:      diagnostics,
 		MCPSettings:      app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:        app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Inventory:        app.NewInventory(orgPool),
 		ConfigStatus:     app.NewConfigStatus(orgPool),
 		Accounts:         accounts,
+		MFANotices:       app.NewMFAEnrolmentNotices(platformPool, ak, ak),
 		Releases:         releases,
 		ReleaseImports:   imports,
 		AgentUpdates:     app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
-		Uninstalls:       app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
+		Uninstalls:       uninstalls,
 		Conversions:      app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
 		AuditLog:         app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity:   app.NewAuditIntegrity(auditReader),
 		AuditExports:     app.NewAuditExports(runner, auditReader),
+		DeletedOrgAudit:  app.NewDeletedOrgAudit(runner, auditReader, platformPool),
 		ServerVersion:    buildinfo.Version,
 		IPAllowlist:      ipAllowlist,
 		IPGuard:          ipGuard,
@@ -316,6 +323,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUpMFAClass:   devStepUp.MFAClass,
 		ExposeStepUp:     common.Development(),
 		LoginMFAOptional: loginMFAOptional,
+		Passkeys:         ak,
 		TrustedProxies:   common.TrustedProxies,
 		RateLimiter:      ratelimit.New(ratelimit.NewValkeyStore(vk), nil, rateLimits.Limits),
 		RateLimitExempt:  rateLimits.Exempt,

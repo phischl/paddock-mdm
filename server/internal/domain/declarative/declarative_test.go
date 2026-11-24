@@ -163,6 +163,34 @@ func TestDiffPrivacySettings(t *testing.T) {
 	}
 }
 
+// TestDiffPatchSLASettings: settings.patch_sla is a settings section like settings.privacy (plan M13c decision 17).
+func TestDiffPatchSLASettings(t *testing.T) {
+	cur := current()
+	cur.Settings.PatchSLA = &declarative.PatchSLASettings{CriticalDays: 7, HighDays: 30, MediumDays: 90}
+	want := current()
+	want.Settings.PatchSLA = &declarative.PatchSLASettings{CriticalDays: 3, HighDays: 30, MediumDays: 90}
+	plan := declarative.Diff(cur, want)
+	if len(plan.Changes) != 1 || plan.Updated != 1 {
+		t.Fatalf("plan %+v", plan)
+	}
+	c := plan.Changes[0]
+	if c.Section != declarative.SectionSettingsPatchSLA || c.Action != declarative.ActionUpdate || c.Key != "" ||
+		len(c.Fields) != 1 || c.Fields[0] != (declarative.FieldChange{Name: "critical_days", Before: 7, After: 3}) {
+		t.Fatalf("change %+v", c)
+	}
+	want.Settings.PatchSLA = nil
+	if plan := declarative.Diff(cur, want); len(plan.Changes) != 0 {
+		t.Fatalf("absent section: %+v", plan)
+	}
+	if got := declarative.Path(declarative.SectionSettingsPatchSLA, 0); got != "/settings/patch_sla" {
+		t.Fatalf("Path = %s", got)
+	}
+	if !slices.Contains(declarative.Sections(), declarative.SectionSettingsPatchSLA) ||
+		slices.Contains(declarative.RolloutSections(), declarative.SectionSettingsPatchSLA) {
+		t.Fatalf("sections %v, rollout sections %v", declarative.Sections(), declarative.RolloutSections())
+	}
+}
+
 func TestDiffRenameIsDeleteAndCreate(t *testing.T) {
 	d := current()
 	(*d.ManagedFiles)[0].Path = "/etc/motd.d/paddock"
@@ -226,6 +254,12 @@ func TestValidateJSONNamesThePaths(t *testing.T) {
 			[]string{"/settings/privacy/retired_inventory_days"}},
 		"privacy days too high": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"privacy":{"retired_inventory_days":366,"audit_search_recorded":false,"inventory_view_recorded":false}}}`,
 			[]string{"/settings/privacy/retired_inventory_days"}},
+		"patch sla days too high": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"patch_sla":{"critical_days":366,"high_days":30,"medium_days":90,"low_days":0}}}`,
+			[]string{"/settings/patch_sla/critical_days"}},
+		"patch sla negative": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"patch_sla":{"critical_days":7,"high_days":30,"medium_days":90,"low_days":-1}}}`,
+			[]string{"/settings/patch_sla/low_days"}},
+		"partial patch sla": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"patch_sla":{"critical_days":7}}}`,
+			[]string{"/settings/patch_sla"}},
 		"partial privacy": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","settings":{"privacy":{"retired_inventory_days":14}}}`,
 			[]string{"/settings/privacy"}},
 		"subject": {`{"api_version":"paddock/v1","kind":"OrganizationConfig","profile_assignments":[{"profile":"p","subject":{"type":"group"}}]}`,
@@ -310,6 +344,31 @@ func TestExampleIsValid(t *testing.T) {
 	if d.Settings == nil || d.Settings.Login == nil || d.Settings.Updates == nil || d.DeviceGroups == nil || d.PermissionProfiles == nil ||
 		d.ManagedFiles == nil || d.ManagedUnits == nil || d.PackageHolds == nil || d.ProfileAssignments == nil {
 		t.Fatalf("the example lacks a section: %+v", d)
+	}
+	if declarative.Duplicates(d) != nil {
+		t.Fatal("the example has duplicate keys")
+	}
+}
+
+// TestSoftwareExampleIsValid: examples/software.yaml passes the schema and decodes with the three software sections.
+func TestSoftwareExampleIsValid(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/software.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := yaml.YAMLToJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := declarative.ValidateJSON(doc); err != nil {
+		t.Fatalf("examples/software.yaml violates the schema: %v", err)
+	}
+	d, err := declarative.Decode(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.SoftwareSources == nil || d.SoftwareCatalog == nil || d.SoftwareAssignments == nil {
+		t.Fatalf("the example lacks a software section: %+v", d)
 	}
 	if declarative.Duplicates(d) != nil {
 		t.Fatal("the example has duplicate keys")

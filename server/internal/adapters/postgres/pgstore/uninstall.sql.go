@@ -32,10 +32,49 @@ func (q *Queries) CancelDeviceCommand(ctx context.Context, arg CancelDeviceComma
 	return result.RowsAffected(), nil
 }
 
+const cancelOffboardingCommands = `-- name: CancelOffboardingCommands :many
+UPDATE device_command SET status = 'cancelled', finished_at = $1::timestamptz
+WHERE id = ANY($2::uuid[]) AND status IN ('pending','delivered','failed','expired')
+RETURNING id, device_id
+`
+
+type CancelOffboardingCommandsParams struct {
+	FinishedAt time.Time
+	Ids        []uuid.UUID
+}
+
+type CancelOffboardingCommandsRow struct {
+	ID       uuid.UUID
+	DeviceID uuid.UUID
+}
+
+// The withdrawn (result claimed as cancelled, so pending or delivered meanwhile), failed and expired commands; a
+// command that got its result meanwhile is not returned and its request stays.
+func (q *Queries) CancelOffboardingCommands(ctx context.Context, arg CancelOffboardingCommandsParams) ([]CancelOffboardingCommandsRow, error) {
+	rows, err := q.db.Query(ctx, cancelOffboardingCommands, arg.FinishedAt, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CancelOffboardingCommandsRow{}
+	for rows.Next() {
+		var i CancelOffboardingCommandsRow
+		if err := rows.Scan(&i.ID, &i.DeviceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const clearDeviceUninstall = `-- name: ClearDeviceUninstall :one
-UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL, uninstalled_at = NULL
+UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL, uninstalled_at = NULL,
+  uninstall_reason = NULL
 WHERE id = $1
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 func (q *Queries) ClearDeviceUninstall(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -70,8 +109,23 @@ func (q *Queries) ClearDeviceUninstall(ctx context.Context, id uuid.UUID) (Devic
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
+}
+
+const clearOffboardingUninstalls = `-- name: ClearOffboardingUninstalls :execrows
+UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL, uninstalled_at = NULL,
+  uninstall_reason = NULL
+WHERE id = ANY($1::uuid[]) AND uninstall_reason = 'organization_offboarding'
+`
+
+func (q *Queries) ClearOffboardingUninstalls(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, clearOffboardingUninstalls, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deviceHasOpenRevocation = `-- name: DeviceHasOpenRevocation :one
@@ -90,7 +144,7 @@ func (q *Queries) DeviceHasOpenRevocation(ctx context.Context, deviceID uuid.UUI
 }
 
 const endFailedUninstall = `-- name: EndFailedUninstall :execrows
-UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL
+UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL, uninstall_reason = NULL
 WHERE id = $1 AND uninstall_command_id = $2::uuid AND uninstalled_at IS NULL
 `
 
@@ -110,7 +164,7 @@ func (q *Queries) EndFailedUninstall(ctx context.Context, arg EndFailedUninstall
 }
 
 const getDeviceUninstall = `-- name: GetDeviceUninstall :one
-SELECT d.uninstall_mode::text AS mode, d.uninstall_requested_at::timestamptz AS requested_at,
+SELECT d.uninstall_mode::text AS mode, d.uninstall_requested_at::timestamptz AS requested_at, d.uninstall_reason AS reason,
        d.uninstall_command_id::uuid AS command_id, coalesce(c.status, '')::text AS command_status,
        d.uninstalled_at, coalesce(c.result ->> 'local_admin', '')::text AS local_admin,
        coalesce(c.result ->> 'tpm', '')::text AS tpm, c.delivered_at AS command_delivered_at,
@@ -123,6 +177,7 @@ WHERE d.id = $1 AND d.uninstall_requested_at IS NOT NULL
 type GetDeviceUninstallRow struct {
 	Mode               string
 	RequestedAt        time.Time
+	Reason             *string
 	CommandID          uuid.UUID
 	CommandStatus      string
 	UninstalledAt      *time.Time
@@ -141,6 +196,7 @@ func (q *Queries) GetDeviceUninstall(ctx context.Context, id uuid.UUID) (GetDevi
 	err := row.Scan(
 		&i.Mode,
 		&i.RequestedAt,
+		&i.Reason,
 		&i.CommandID,
 		&i.CommandStatus,
 		&i.UninstalledAt,
@@ -151,6 +207,61 @@ func (q *Queries) GetDeviceUninstall(ctx context.Context, id uuid.UUID) (GetDevi
 		&i.RefusedReason,
 	)
 	return i, err
+}
+
+const insertOffboardingUninstalls = `-- name: InsertOffboardingUninstalls :many
+INSERT INTO device_command (id, organization_id, device_id, type, params, status, issued_at, expires_at)
+SELECT uuidv7(), d.organization_id, d.id, 'uninstall', $1::jsonb, 'pending', $2::timestamptz,
+       $3::timestamptz
+FROM device d
+WHERE d.id = ANY($4::uuid[]) AND d.state = 'active'
+  AND NOT (d.uninstall_requested_at IS NOT NULL AND d.uninstalled_at IS NULL)
+  AND NOT EXISTS (
+    SELECT 1 FROM revocation_request r
+    WHERE r.device_id = d.id AND r.action IN ('lock','destroy') AND r.status IN ('requested','approved','issued','delivered')
+  )
+ORDER BY d.id
+RETURNING id, device_id
+`
+
+type InsertOffboardingUninstallsParams struct {
+	Params    json.RawMessage
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	LockedIds []uuid.UUID
+}
+
+type InsertOffboardingUninstallsRow struct {
+	ID       uuid.UUID
+	DeviceID uuid.UUID
+}
+
+// Every locked active device without an open uninstall and without an open Lock or Destroy (the condition of
+// DeviceHasOpenRevocation). Only the devices LockActiveDevicesForOffboarding locked, so a device that becomes active
+// in between is neither issued nor counted.
+func (q *Queries) InsertOffboardingUninstalls(ctx context.Context, arg InsertOffboardingUninstallsParams) ([]InsertOffboardingUninstallsRow, error) {
+	rows, err := q.db.Query(ctx, insertOffboardingUninstalls,
+		arg.Params,
+		arg.IssuedAt,
+		arg.ExpiresAt,
+		arg.LockedIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InsertOffboardingUninstallsRow{}
+	for rows.Next() {
+		var i InsertOffboardingUninstallsRow
+		if err := rows.Scan(&i.ID, &i.DeviceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listCancelledDeviceCommands = `-- name: ListCancelledDeviceCommands :many
@@ -173,6 +284,70 @@ func (q *Queries) ListCancelledDeviceCommands(ctx context.Context, since time.Ti
 	for rows.Next() {
 		var i ListCancelledDeviceCommandsRow
 		if err := rows.Scan(&i.ID, &i.DeviceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockActiveDevicesForOffboarding = `-- name: LockActiveDevicesForOffboarding :many
+
+SELECT id FROM device WHERE state = 'active' ORDER BY id FOR NO KEY UPDATE
+`
+
+// Organization offboarding (plan M17 decisions 3 and 4, amendment e points 1, 4–6): the deletion request issues
+// uninstall leave to every active device as the system and marks it with its reason; cancelling the deletion withdraws
+// exactly the marked ones. Both work set-based with a constant number of statements. The locks are FOR NO KEY UPDATE:
+// they serialize with LockDevice and the other uninstall writers but not with the FOR KEY SHARE of foreign-key checks,
+// so the organization's devices keep reporting meanwhile.
+func (q *Queries) LockActiveDevicesForOffboarding(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, lockActiveDevicesForOffboarding)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockOffboardingUninstalls = `-- name: LockOffboardingUninstalls :many
+SELECT d.id AS device_id, c.id AS command_id, c.status
+FROM device d JOIN device_command c ON c.id = d.uninstall_command_id
+WHERE d.uninstall_reason = 'organization_offboarding' AND d.uninstalled_at IS NULL
+ORDER BY d.id
+FOR NO KEY UPDATE OF d
+`
+
+type LockOffboardingUninstallsRow struct {
+	DeviceID  uuid.UUID
+	CommandID uuid.UUID
+	Status    string
+}
+
+func (q *Queries) LockOffboardingUninstalls(ctx context.Context) ([]LockOffboardingUninstallsRow, error) {
+	rows, err := q.db.Query(ctx, lockOffboardingUninstalls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LockOffboardingUninstallsRow{}
+	for rows.Next() {
+		var i LockOffboardingUninstallsRow
+		if err := rows.Scan(&i.DeviceID, &i.CommandID, &i.Status); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -234,9 +409,9 @@ func (q *Queries) SetDeviceRetiredReason(ctx context.Context, arg SetDeviceRetir
 const setDeviceUninstall = `-- name: SetDeviceUninstall :one
 
 UPDATE device SET uninstall_requested_at = $1, uninstall_mode = $2, uninstall_command_id = $3,
-  uninstalled_at = NULL
+  uninstalled_at = NULL, uninstall_reason = NULL
 WHERE id = $4
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 type SetDeviceUninstallParams struct {
@@ -284,8 +459,29 @@ func (q *Queries) SetDeviceUninstall(ctx context.Context, arg SetDeviceUninstall
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
+}
+
+const setOffboardingUninstalls = `-- name: SetOffboardingUninstalls :execrows
+UPDATE device d SET uninstall_requested_at = $1::timestamptz, uninstall_mode = 'leave',
+  uninstall_command_id = c.id, uninstalled_at = NULL, uninstall_reason = 'organization_offboarding'
+FROM device_command c
+WHERE c.id = ANY($2::uuid[]) AND c.device_id = d.id
+`
+
+type SetOffboardingUninstallsParams struct {
+	RequestedAt time.Time
+	CommandIds  []uuid.UUID
+}
+
+func (q *Queries) SetOffboardingUninstalls(ctx context.Context, arg SetOffboardingUninstallsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOffboardingUninstalls, arg.RequestedAt, arg.CommandIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const uninstallResultPending = `-- name: UninstallResultPending :one

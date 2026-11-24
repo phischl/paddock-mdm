@@ -6,7 +6,7 @@ import DataList from '../components/DataList.vue'
 import EffectiveProfileView from '../components/EffectiveProfileView.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
-import type { Device, UserDetail, UserEffectiveProfile, UserGroup, UserSoftware } from '../api/client'
+import type { Device, UserDetail, UserEffectiveProfile, UserEnrolmentLink, UserGroup, UserSoftware } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allDevices } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
@@ -15,7 +15,8 @@ import { listUserSoftware, softwareIntentFilter } from '../lib/software'
 import { userLockStatus } from '../lib/status'
 import { allUserGroups } from '../lib/userGroups'
 import type { ListColumn } from '../lib/listQuery'
-import { deleteUser, getEffectiveProfile, getUser, listOwnedDevices, setLocked, updateUser } from '../lib/users'
+import { createEnrolmentLink, deleteUser, getEffectiveProfile, getUser, listOwnedDevices, setLocked, updateUser } from '../lib/users'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -65,8 +66,64 @@ async function loadEffective(): Promise<void> {
   effective.value = typeof e === 'string' ? null : e
 }
 
+// The sign-in setup link (ADR 0053 decision 1) is shown once in its dialog and dropped when the dialog closes.
+const enrolmentLinkAction = 'user-enrolment-link'
+const enrolmentLink = ref<UserEnrolmentLink | null>(null)
+const linkCopied = ref(false)
+const linkCopyFailed = ref(false)
+
+async function onEnrolmentLink(): Promise<void> {
+  if (!user.value) return
+  const confirmed = await confirm({
+    title: t('users.enrolmentLink.title'), message: t('users.enrolmentLink.confirm', { username: user.value.username }),
+    confirmLabel: t('users.enrolmentLink.create'),
+  })
+  if (!confirmed) return
+  await requestEnrolmentLink(false)
+}
+
+// A request repeated after the step-up never starts another one: the problem is shown instead (lib/stepUp.ts contract).
+async function requestEnrolmentLink(resumed: boolean): Promise<void> {
+  problem.value = ''
+  const res = await createEnrolmentLink(id.value)
+  if (res === stepUpRequired && !resumed) {
+    startStepUp(enrolmentLinkAction, id.value)
+    return
+  }
+  if (typeof res === 'string') {
+    problem.value = res
+    return
+  }
+  linkCopied.value = false
+  linkCopyFailed.value = false
+  enrolmentLink.value = res
+}
+
+function closeEnrolmentLink(): void {
+  enrolmentLink.value = null
+}
+
+async function copyEnrolmentLink(): Promise<void> {
+  if (!enrolmentLink.value) return
+  // The Clipboard API rejects on a non-secure origin or without permission; the link stays in the read-only field.
+  try {
+    await navigator.clipboard.writeText(enrolmentLink.value.link)
+    linkCopied.value = true
+    linkCopyFailed.value = false
+  } catch {
+    linkCopied.value = false
+    linkCopyFailed.value = true
+  }
+}
+
 onMounted(async () => {
   await load()
+  const resumed = resumeStepUp<null>(enrolmentLinkAction, id.value)
+  if (resumed) {
+    await router.replace(withoutStepUpParam())
+    if (resumed.failed) problem.value = 'step_up_failed'
+    else await requestEnrolmentLink(true)
+  }
   const [d, g] = await Promise.all([allDevices(), allUserGroups()])
   devices.value = d
   groups.value = g
@@ -160,6 +217,16 @@ async function saveEdit(): Promise<void> {
             {{ t('common.edit') }}
           </v-btn>
           <v-btn
+            v-if="session.canDelete && !user.locked"
+            variant="tonal"
+            data-testid="enrolment-link"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(onEnrolmentLink)"
+          >
+            {{ t('users.enrolmentLink.create') }}
+          </v-btn>
+          <v-btn
             v-if="session.canDelete"
             :color="user.locked ? 'primary' : 'error'"
             data-testid="lock-user"
@@ -222,6 +289,13 @@ async function saveEdit(): Promise<void> {
       >
         {{ t('users.syncedHint') }}
       </v-alert>
+      <p
+        v-if="session.canDelete"
+        class="summary"
+        data-testid="enrolment-link-help"
+      >
+        {{ t('users.enrolmentLink.help') }}
+      </p>
       <v-table class="table facts">
         <tbody>
           <tr>
@@ -408,6 +482,56 @@ async function saveEdit(): Promise<void> {
               </v-btn>
             </div>
           </form>
+        </v-card-text>
+      </v-card>
+    </v-dialog>
+    <v-dialog
+      :model-value="enrolmentLink !== null"
+      max-width="36rem"
+      persistent
+      :aria-label="t('users.enrolmentLink.title')"
+    >
+      <v-card
+        v-if="enrolmentLink && user"
+        :title="t('users.enrolmentLink.title')"
+      >
+        <v-card-text>
+          <v-alert
+            type="warning"
+            variant="tonal"
+          >
+            {{ t('users.enrolmentLink.shownOnce', { username: user.username, at: formatDateTime(enrolmentLink.expires_at, locale) }) }}
+          </v-alert>
+          <v-text-field
+            :model-value="enrolmentLink.link"
+            :label="t('users.enrolmentLink.link')"
+            readonly
+            data-testid="enrolment-link-value"
+          />
+          <div class="form-actions">
+            <span
+              v-if="linkCopied"
+              role="status"
+            >{{ t('tokens.copied') }}</span>
+            <span
+              v-if="linkCopyFailed"
+              role="alert"
+            >{{ t('users.enrolmentLink.copyFailed') }}</span>
+            <v-btn
+              variant="tonal"
+              data-testid="copy-enrolment-link"
+              @click="copyEnrolmentLink"
+            >
+              {{ t('tokens.copy') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              data-testid="close-enrolment-link"
+              @click="closeEnrolmentLink"
+            >
+              {{ t('tokens.done') }}
+            </v-btn>
+          </div>
         </v-card-text>
       </v-card>
     </v-dialog>

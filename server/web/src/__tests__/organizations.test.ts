@@ -11,17 +11,18 @@ import { vuetify } from '../plugins/vuetify'
 import { parseDomains, validateDomains } from '../lib/validation'
 
 const acme: Organization = {
-  id: 'o1', slug: 'acme', name: 'Acme', status: 'active', domains: ['acme.test'], created_at: '2026-10-01T00:00:00Z',
+  id: 'o1', slug: 'acme', name: 'Acme', status: 'active', domains: ['acme.test'], created_at: '2026-10-01T00:00:00Z', deletion: null,
 }
 const createOrganization = vi.fn<(slug: string, name: string) => Promise<Organization | string>>()
 const updateOrganizationDomains = vi.fn<(id: string, domains: string[]) => Promise<string | null>>()
 const listed = vi.fn()
+let items: Organization[] = [acme]
 
 vi.mock('../lib/organizations', async (original) => ({
   ...(await original<typeof import('../lib/organizations')>()),
   listOrganizations: () => {
     listed()
-    return Promise.resolve({ items: [acme], page: 1, page_size: 25, total: 1, total_capped: false, sort: 'slug' })
+    return Promise.resolve({ items, page: 1, page_size: 25, total: items.length, total_capped: false, sort: 'slug' })
   },
   createOrganization: (slug: string, name: string) => createOrganization(slug, name),
   updateOrganizationDomains: (id: string, domains: string[]) => updateOrganizationDomains(id, domains),
@@ -33,6 +34,7 @@ beforeEach(() => {
   createOrganization.mockReset()
   updateOrganizationDomains.mockReset()
   listed.mockReset()
+  items = [acme]
 })
 
 afterEach(() => {
@@ -161,6 +163,27 @@ describe('organization domains (plan M8x decisions 21–24)', () => {
     await submit('#org-edit-domains')
     expect(document.querySelector('.form-error[role="alert"]')?.textContent).toContain('One of these domains belongs to another organization.')
     expect(document.querySelector('#org-edit-domains')).not.toBeNull()
+  })
+})
+
+describe('recovery export row action (plan M17 amendments g and h)', () => {
+  const deletion = {
+    requested_at: '2026-11-14T10:00:00Z', requested_by: 'root', reason: 'contract ended', delete_after: '2099-12-14T10:00:00Z',
+    recovery_export_until: '2099-12-14T09:40:00Z', step: null, last_error_code: null, deleted_at: null, uninstalls_issued: 2,
+    uninstalls_skipped: 0, audit_final_verified_at: null, audit_final_outcome: null,
+  }
+
+  it('offers the export for a pending deletion of an active or provisioning_failed organization only', async () => {
+    items = [
+      { ...acme, slug: 'pending', deletion },
+      { ...acme, id: 'o2', slug: 'failed', status: 'provisioning_failed', deletion },
+      { ...acme, id: 'o3', slug: 'plain' },
+    ]
+    await mountView()
+    expect(document.querySelector('[data-testid="recovery-export-pending"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="recovery-export-failed"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="recovery-export-plain"]')).toBeNull()
+    expect(document.body.textContent).toContain('Recovery export available until')
   })
 })
 

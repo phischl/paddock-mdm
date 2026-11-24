@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -41,6 +42,10 @@ func TestOutcomeOf(t *testing.T) {
 		{"mcp write not enabled", problem.MCPWriteNotEnabled, audit.OutcomeDenied, "mcp_write_not_enabled"},
 		{"rate limited", problem.RateLimited, audit.OutcomeDenied, "rate_limited"},
 		{"mcp login required", problem.MCPLoginRequired, audit.OutcomeFailure, "mcp_login_required"},
+		{"transaction timeout", fmt.Errorf("x: %w: %w", db.ErrTransactionTimeout, errors.New("25P04")),
+			audit.OutcomeFailure, "transaction_timeout"},
+		{"organization deleting", fmt.Errorf("x: %w", db.OrganizationUnavailable(uuid.New(), "deleting")),
+			audit.OutcomeDenied, "organization_inactive"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -86,6 +91,22 @@ func TestSecretParamsPanic(t *testing.T) {
 			rec := r.newRecorder(context.Background(), p, ScopeOrg, ActionSpec{Code: audit.CodeDeviceGroupCreated})
 			defer expectPanic(t)
 			rec.SetParam(key, "x")
+		})
+	}
+}
+
+// TestSecretCountParam: secrets, the count of organization.recovery_exported, is the one param that names a secret
+// word without carrying a secret; "secret" and "secret_value" still panic.
+func TestSecretCountParam(t *testing.T) {
+	r := testRunner()
+	p := principal.Principal{Kind: principal.KindAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
+	rec := r.newRecorder(context.Background(), p, ScopeOrg, ActionSpec{Code: audit.CodeOrganizationRecoveryExported,
+		Params: map[string]any{"secrets": 2}})
+	rec.SetParam("secrets", 3)
+	for _, key := range []string{"secret", "secret_value"} {
+		t.Run(key, func(t *testing.T) {
+			defer expectPanic(t)
+			rec.SetParam(key, 1)
 		})
 	}
 }

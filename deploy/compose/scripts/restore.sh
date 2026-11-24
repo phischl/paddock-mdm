@@ -181,6 +181,8 @@ restore_preflight() {
   if restore_has postgres; then
     [[ -n "${RESTORE_SET[schema.paddock]:-}" ]] ||
       restore_die "the backup set names no paddock schema version; nothing was changed"
+    [[ "$(env_value PADDOCK_PG_MAX_CONNECTIONS)" =~ ^([1-9][0-9]*)?$ ]] ||
+      restore_die "PADDOCK_PG_MAX_CONNECTIONS is '$(env_value PADDOCK_PG_MAX_CONNECTIONS)', not a whole number; nothing was changed"
     for stanza in paddock authentik; do
       [[ ",${RESTORE_SET[stanzas]:-}," == *",$stanza,"* ]] ||
         restore_die "the backup set holds no pgBackRest backup of $stanza in ${RESTORE_SET[repo_path]}"
@@ -441,16 +443,66 @@ shift
 exec /usr/local/bin/paddock-pgbackrest restore "$@"'
 
 # restore_wait_recovered <service> <user> <database>
+# Recovery pauses (and the database stays read-only) when the restored cluster needs larger values than the server
+# runs with, such as max_connections; waiting out the timeout would not help, so two paused polls at least 10 s apart
+# fail fast (plan M19 D3).
 restore_wait_recovered() {
-  local deadline=$((SECONDS + ${RESTORE_RECOVERY_TIMEOUT:-1800}))
+  local deadline=$((SECONDS + ${RESTORE_RECOVERY_TIMEOUT:-1800})) state paused=0 excerpt param
   while ((SECONDS < deadline)); do
-    if [[ "$(compose exec -T "$1" psql -U "$2" -d "$3" -Atc 'select pg_is_in_recovery()' </dev/null 2>/dev/null)" == f ]]; then
+    state="$(compose exec -T "$1" psql -U "$2" -d "$3" -Atc \
+      "select case when pg_is_in_recovery() then pg_get_wal_replay_pause_state() else 'f' end" </dev/null 2>/dev/null)" ||
+      state="" # PostgreSQL refuses connections while it starts up or replays WAL; the poll retries until the deadline.
+    if [[ "$state" == f ]]; then
       return 0
     fi
+    if [[ "$state" == paused ]]; then
+      if ((++paused >= 2)); then
+        excerpt="$(compose logs --no-color --tail 500 "$1" </dev/null 2>&1 || true)"
+        echo "restore: $1 paused its recovery (pg_get_wal_replay_pause_state: $state)" >&2
+        grep -E 'insufficient parameter settings|recovery has paused' <<<"$excerpt" | tail -20 >&2 || true
+        param="$(grep -oE '[a-z_]+ = [0-9]+ is a lower setting' <<<"$excerpt" | tail -1 | cut -d' ' -f1 || true)"
+        if [[ -n "$param" ]]; then
+          echo "restore: the restored cluster needs a larger $param than $1 runs with" >&2
+          if [[ "$param" == max_connections ]]; then
+            echo "restore: set PADDOCK_PG_MAX_CONNECTIONS to at least the backed-up server's value and run the restore again" >&2
+          fi
+        fi
+        return 1
+      fi
+      sleep "${RESTORE_PAUSE_RECHECK_S:-10}"
+      continue
+    fi
+    paused=0
     sleep 2
   done
   echo "restore: $1 did not finish its recovery" >&2
   return 1
+}
+
+# restore_pg_max_connections: before the first start of the restored paddock cluster, the larger of
+# PADDOCK_PG_MAX_CONNECTIONS and the max_connections in its restored control file (pg_controldata), exported for every
+# later Compose call of this restore (plan M19 D1.3). A server started with less than the backup was written with
+# pauses its recovery. The next ./paddock up starts the promoted database with the configured value, which a primary
+# accepts. Authentik's database keeps PostgreSQL's default; the audit database is never restored.
+restore_pg_max_connections() {
+  local configured backed effective
+  configured="$(env_value PADDOCK_PG_MAX_CONNECTIONS)"
+  configured="${configured:-100}"
+  [[ "$configured" =~ ^[1-9][0-9]*$ ]] || restore_die "PADDOCK_PG_MAX_CONNECTIONS is '$configured', not a whole number"
+  # shellcheck disable=SC2016 # expanded by the container's shell
+  backed="$(compose run --rm --no-deps -T --user postgres -e LC_ALL=C --entrypoint sh postgres -c 'exec pg_controldata' \
+    </dev/null 2>/dev/null | sed -n 's/^max_connections setting: *\([0-9][0-9]*\)$/\1/p')" || backed=""
+  if [[ -z "$backed" ]]; then
+    effective="$configured"
+    restore_log "PostgreSQL: max_connections: configured $configured, the restored control file not readable (pg_controldata); starting with $effective"
+  else
+    effective=$((10#$backed > configured ? 10#$backed : configured))
+    restore_log "PostgreSQL: max_connections: configured $configured, backup $backed; starting with $effective"
+  fi
+  if ((effective > configured)); then
+    restore_log "PostgreSQL: the next ./paddock up starts it with the configured $configured; set PADDOCK_PG_MAX_CONNECTIONS=$effective in .env to keep $effective"
+  fi
+  export PADDOCK_PG_MAX_CONNECTIONS="$effective"
 }
 
 # restore_postgres: both stanzas from the set's repository path, to the latest point or --at (step 3).
@@ -476,6 +528,7 @@ restore_postgres() {
     compose run --rm --no-deps -T --entrypoint bash -e PADDOCK_BACKUP_RUNTIME_DIR=/tmp/restore-runtime "$svc" \
       -c "$RESTORE_PG_SCRIPT" restore "${RESTORE_SET[repo_path]}" "${pg_at[@]}" <"$RESTORE_KEY_FILE"
   done
+  restore_pg_max_connections
   restore_log "PostgreSQL: starting both databases; they replay the staged WAL"
   compose up -d --no-deps postgres authentik-postgres
   restore_wait_recovered postgres postgres paddock

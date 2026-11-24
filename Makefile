@@ -12,9 +12,9 @@ COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
-UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... ./test/acceptance/cmd/loadenrol/... \
 	./test/acceptance/internal/stack/... \
-	./test/acceptance/cmd/acceptanceshard/...
+	./test/acceptance/cmd/acceptanceshard/... ./test/system/cmd/testlive/...
 WEB_DIR       := server/web
 # Default to the tag of this checkout's stack (deploy/compose/.env, see dev_setting), so a second dev stack never
 # retags the first one's image.
@@ -80,9 +80,9 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice renovate-check ## Run all linters, govulncheck, the license gate and the server image build
 
-# The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
+# The supervisor's line budget (plan M2b decision 15, amendment 2026-11-16): at most 865 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
@@ -103,6 +103,11 @@ lint-migrations-frozen:
 .PHONY: lint-compose
 lint-compose:
 	go run ./tools/composelint --compose-dir $(COMPOSE_DIR)
+
+# Every pin of versions.env and the compiler's Himmelblau default must be matched by a Renovate custom manager (PDK-1023).
+.PHONY: renovate-check
+renovate-check:
+	go run ./tools/renovatecheck
 
 # Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
 # tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release
@@ -132,18 +137,27 @@ test-selfservice: ## Unit tests of the self-service app (python3 -m unittest, no
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
+	shellcheck -s bash deploy/compose/valkey/entrypoint_test.sh deploy/compose/scripts/valkey-headroom.sh \
+		deploy/compose/scripts/valkey-headroom_test.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
+	shellcheck -s bash test/system-test-run.sh test/system-test-run_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
 	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/rabbitmq-definitions.sh deploy/bundle/ci/assert-broker.sh \
+		deploy/bundle/ci/assert-broker_test.sh deploy/compose/scripts/rabbitmq-definitions_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/bundles-prune.sh deploy/compose/scripts/bundles-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/authentik-apply-blueprints.sh \
+		deploy/compose/scripts/authentik-apply-blueprints_test.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
 		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
-		deploy/bundle/ci/smoke.sh
+		deploy/bundle/ci/smoke.sh deploy/bundle/ci/assert-buckets.sh deploy/bundle/ci/assert-buckets_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -262,17 +276,25 @@ typecheck: ## Type-check every Go module (go vet, including tests) and the porta
 test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
+	go test -count=1 -run '^TestSuitesComplete$$' ./test/system/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/valkey-headroom_test.sh
+	VALKEY_IMAGE=$(VALKEY_IMAGE) bash $(COMPOSE_DIR)/valkey/entrypoint_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh
+	bash $(COMPOSE_DIR)/scripts/offboard-prune_test.sh
+	bash $(COMPOSE_DIR)/scripts/bundles-prune_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-offboard_test.sh
+	bash $(COMPOSE_DIR)/scripts/gen-secrets-upgrade_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/provision-roles_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
+	bash $(COMPOSE_DIR)/scripts/rabbitmq-definitions_test.sh
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
@@ -283,12 +305,15 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/assert-broker_test.sh
 	bash deploy/bundle/ci/assert-segmentation_test.sh
+	bash deploy/bundle/ci/assert-buckets_test.sh
 	bash deploy/bundle/ci/upgrade_test.sh
 	bash deploy/bundle/ci/fetch-previous_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash test/require-tests_test.sh
+	bash test/system-test-run_test.sh
 	bash test/stack-preflight_test.sh
 	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
@@ -447,12 +472,18 @@ up: dev-secrets ## Start the full stack (infrastructure, OpenBao/bucket bootstra
 	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
+	$(COMPOSE_DIR)/scripts/authentik-apply-blueprints.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 	$(if $(BACKUP),$(COMPOSE_DIR)/scripts/rustfs-backup-bootstrap.sh,)
 	$(COMPOSE) --profile paddock --profile observability up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
+
+.PHONY: authentik-blueprints-test
+# Its own Compose project with throwaway secrets, so it runs beside a development stack and never touches it.
+authentik-blueprints-test: ## Cold start of the pinned Authentik, then the serial blueprint apply twice (plan M12h-2 amendment g)
+	bash $(COMPOSE_DIR)/scripts/authentik-apply-blueprints_test.sh
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)
@@ -485,6 +516,10 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 .PHONY: dev-seed
 dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and a confirmed backup key and the development backup targets)
 	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
+
+.PHONY: dev-prune-gate-orgs
+dev-prune-gate-orgs: ## Delete the leftover "Gate gate-" organizations of a development stack through the admin API (refuses unless PADDOCK_ENV=development)
+	go run ./test/acceptance/cmd/orgprune
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
@@ -542,15 +577,15 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 
 .PHONY: system-test
 # T and the zero-test guard as for acceptance (PDK-339).
-system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
-	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
+system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex> or SUITE=<name|all>, see test/system/suites.txt)
+	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex> | SUITE=<name|all>]"; exit 1; }
+	@test -z "$(value T)" -o -z "$(SUITE)" || { echo "system-test: T and SUITE are mutually exclusive" >&2; exit 1; }
 	$(STACK_PREFLIGHT)
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
 	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	set -o pipefail; PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... \
-		$(if $(value T),-run '$(value T)',) -v | bash test/require-tests.sh
+	PADDOCK_SYSTEM_VMS=$(VM) bash test/system-test-run.sh '$(SUITE)' '$(value T)'
 
 # The Playwright image ships the browsers of exactly one @playwright/test version (PDK-290): refuse a mismatch before
 # any test runs instead of failing on missing browsers. Dependabot ignores the package; bump both together.
@@ -590,6 +625,7 @@ e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
+N        ?= 250
 SCENARIO ?= checkin
 # Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the checkout's project
 # is not PADDOCK_ENV=production and the checkout is a development one.
@@ -601,6 +637,11 @@ LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=$(DEV_
 		--filter label=com.docker.compose.project=$(DEV_PROJECT) --format '{{.Label "com.docker.compose.project.config_files"}}' | \
 		tr ',' '\n' | sort -u)
 
+.PHONY: load-enrol-configs
+load-enrol-configs: ## Create TOKENS auto-approving enrollment tokens (USES devices each) in organization ORG and write their configurations to bin/load/token-<i>.json
+	@$(LOAD_GUARD)
+	go run ./test/acceptance/cmd/loadenrol $(if $(ORG),--org $(ORG)) $(if $(TOKENS),--tokens $(TOKENS)) $(if $(USES),--uses $(USES))
+
 .PHONY: load-identities
 load-identities: ## Enroll COUNT load test devices with the enrollment configurations CONFIGS (auto-approving tokens) into bin/load/identities.json
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
@@ -609,6 +650,14 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
+
+.PHONY: load-orgs
+load-orgs: ## Create N organizations (load-001 …) through the admin API; COOKIE_FILE = file inside the checkout with the platform admin's paddock_session value (PDK-1020)
+	@test -s "$(COOKIE_FILE)" || { echo "usage: make load-orgs COOKIE_FILE=bin/load/platform-session [N=250]"; exit 2; }
+	@$(LOAD_GUARD)
+	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/orgseed ./test/load/cmd/orgseed
+	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+		/src/$(LOAD_DIR)/orgseed --server http://paddock-api:8080 --cookie-file $(COOKIE_FILE) --count $(N)
 
 # k6 joins edge for the gateway and data for the ingest scenario's Prometheus, which stays off edge (PDK-819).
 .PHONY: load-test

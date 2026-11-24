@@ -61,6 +61,15 @@ type fakeIdP struct {
 	onLock func()
 	// onEnsure runs at the start of EnsureOrganization with its context; its error is returned.
 	onEnsure func(ctx context.Context) error
+	// roleGroups are the direct members of the role groups RoleGroupsMembers lists; a group without a key is missing.
+	roleGroups map[string][]ports.IdentityUser
+	// failRoleGroups makes only RoleGroupsMembers fail, so a caller that swallowed a listing error would be caught.
+	failRoleGroups bool
+	// links counts the unexpired one-time links per user pk; failRevoke makes only ending them fail.
+	links      map[string]int
+	failRevoke bool
+	// attrs are the user attributes set per pk, so a test sees an attribute the portal must never set.
+	attrs map[string]map[string]any
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -68,7 +77,7 @@ var fakePKs atomic.Int64
 
 func newFakeIdP() *fakeIdP {
 	return &fakeIdP{users: map[string]ports.NewIdentityUser{}, groups: map[string]string{}, members: map[string][]string{},
-		locked: map[string]bool{}, inactive: map[string]bool{}}
+		locked: map[string]bool{}, inactive: map[string]bool{}, links: map[string]int{}, attrs: map[string]map[string]any{}}
 }
 
 func (f *fakeIdP) err() error {
@@ -76,6 +85,10 @@ func (f *fakeIdP) err() error {
 		return problem.UpstreamUnavailable
 	}
 	return nil
+}
+
+func (f *fakeIdP) DeleteOrganization(context.Context, string) (ports.OrgIdentityDeletion, error) {
+	return ports.OrgIdentityDeletion{}, problem.Internal
 }
 
 func (f *fakeIdP) EnsureOrganization(ctx context.Context, _ string) (ports.OrgIdentityRefs, error) {
@@ -126,7 +139,37 @@ func (f *fakeIdP) DeleteUser(_ context.Context, pk string) error {
 }
 
 func (f *fakeIdP) RecoveryLink(_ context.Context, pk string) (string, error) {
-	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, f.err()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return "", err
+	}
+	f.links[pk]++
+	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, nil
+}
+
+func (f *fakeIdP) RevokeRecoveryLinks(_ context.Context, pk string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return 0, err
+	}
+	if f.failRevoke {
+		return 0, problem.UpstreamUnavailable
+	}
+	n := f.links[pk]
+	delete(f.links, pk)
+	return n, nil
+}
+
+func (f *fakeIdP) SetUserAttribute(_ context.Context, pk, key string, value any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attrs[pk] == nil {
+		f.attrs[pk] = map[string]any{}
+	}
+	f.attrs[pk][key] = value
+	return f.err()
 }
 
 func (f *fakeIdP) UserActive(_ context.Context, pk string) (bool, error) {
@@ -172,8 +215,19 @@ func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUs
 	return nil, f.err()
 }
 
-func (f *fakeIdP) RoleGroupsMembers(context.Context, []string) (map[string][]ports.IdentityUser, error) {
-	return nil, f.err()
+func (f *fakeIdP) RoleGroupsMembers(_ context.Context, names []string) (map[string][]ports.IdentityUser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string][]ports.IdentityUser{}
+	for _, n := range names {
+		if m, ok := f.roleGroups[n]; ok {
+			out[n] = m
+		}
+	}
+	if f.failRoleGroups {
+		return nil, problem.UpstreamUnavailable
+	}
+	return out, f.err()
 }
 
 func (f *fakeIdP) Superusers(context.Context) ([]ports.IdentityUser, error) {
@@ -342,6 +396,8 @@ type env struct {
 	accounts *app.Accounts
 	// identitySessions are the identity provider's sessions that End all sessions ends (plan M8f decision 16).
 	identitySessions *fakeIdentitySessions
+	// orgPool is the handler's organization pool, whose gate status cache a test refreshes after a status change.
+	orgPool *db.OrgPool
 }
 
 func newEnv(t *testing.T) *env {
@@ -398,10 +454,11 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		t.Fatal(err)
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, writerDSN: ag.Writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
-		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
-	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
+		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}, orgPool: orgPool}
+	escrowReader := newEscrowReader(t, pg.EscrowReader, e.stepUps, e.disk)
+	escrowAccess := app.NewEscrowAccess(escrowReader, e.stepUps)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
-	e.orgs = app.NewOrganizations(runner, platformPool, idp)
+	e.orgs = app.NewOrganizations(runner, platformPool, idp, app.NewUninstalls(runner, orgPool, discardCommands{}), false)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
 			return nil, problem.UpstreamUnavailable
@@ -412,56 +469,59 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		return []protocol.BundleKey{{KeyID: "revocation-signing:v1", PublicKey: testBundleKey}}, nil
 	}
 	d := admin.Deps{
-		DeviceGroups:   app.NewDeviceGroups(runner, orgPool),
-		Tokens:         app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
-		APITokens:      app.NewAPITokens(runner, orgPool),
-		Declarative:    app.NewDeclarative(runner, orgPool),
-		Devices:        app.NewDevices(runner, orgPool, discardCommands{}),
-		Managed:        app.NewManagedConfig(runner, orgPool),
-		Organizations:  e.orgs,
-		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
-		Releases:       app.NewAgentReleases(runner, platformPool, &memoryStore{objects: map[string][]byte{}}, verifyRelease, verifyRelease, true),
-		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
-		Uninstalls:     app.NewUninstalls(runner, orgPool, discardCommands{}),
-		Conversions:    app.NewDiskConversions(runner, orgPool, discardCommands{}),
-		Users:          app.NewUsers(runner, orgPool, idp),
-		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
-		Logins:         app.NewLogins(runner, orgPool, idp),
-		LoginSettings:  app.NewLoginSettings(runner, orgPool),
-		WatchedUnits:   app.NewWatchedUnits(runner, orgPool),
-		Privacy:        app.NewPrivacy(runner, orgPool),
-		ReadAudit:      app.NewReadAudit(runner),
-		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
-		Privileges:     app.NewPrivileges(runner, orgPool),
-		Commands:       app.NewDeviceCommands(runner, orgPool),
-		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
-		Autoinstall:    app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
-		Disk:           app.NewDisk(runner, orgPool, escrowAccess, e.disk),
-		Revocations:    app.NewRevocations(runner, orgPool, e.stepUps, discardCommands{}, true),
-		DMS:            app.NewDMS(runner, orgPool, discardCommands{}, true, false),
-		Inventory:      app.NewInventory(orgPool),
-		ConfigStatus:   app.NewConfigStatus(orgPool),
-		AuditLog:       app.NewAuditLog(reader, orgPool),
-		AuditIntegrity: app.NewAuditIntegrity(reader),
-		AuditExports:   app.NewAuditExports(runner, reader),
-		Attention:      app.NewAttention(orgPool),
-		Findings:       app.NewFindings(runner, orgPool),
-		AccountList:    app.NewAccountList(orgPool),
-		Overview:       app.NewOverview(orgPool),
-		SecurityReview: app.NewSecurityReview(orgPool),
-		AccessReview:   app.NewAccessReview(runner, orgPool, reader),
-		Diagnostics:    app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, e.disk),
-		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
-		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
-		Runner:         runner,
-		Keys:           keys,
-		OIDC:           admin.NewOIDC(admin.OIDCConfig{}),
-		StepUpTokens:   e.stepUps,
-		Sessions:       e.sessions,
-		EndSessions:    app.NewSessions(runner, e.sessions, e.identitySessions, e.identitySessions),
-		AutoUnseal:     app.NewAutoUnseal(runner, platformPool, nil),
-		PublicURL:      "https://admin.test",
-		Static:         static,
+		DeviceGroups:    app.NewDeviceGroups(runner, orgPool),
+		Tokens:          app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
+		APITokens:       app.NewAPITokens(runner, orgPool),
+		Declarative:     app.NewDeclarative(runner, orgPool),
+		Devices:         app.NewDevices(runner, orgPool, discardCommands{}),
+		Managed:         app.NewManagedConfig(runner, orgPool),
+		Organizations:   e.orgs,
+		Accounts:        app.NewAccounts(runner, orgPool, platformPool, e.sessions),
+		Releases:        app.NewAgentReleases(runner, platformPool, &memoryStore{objects: map[string][]byte{}}, verifyRelease, verifyRelease, true),
+		AgentUpdates:    app.NewAgentUpdates(runner, orgPool, noOffer{}),
+		Uninstalls:      app.NewUninstalls(runner, orgPool, discardCommands{}),
+		Conversions:     app.NewDiskConversions(runner, orgPool, discardCommands{}),
+		Users:           app.NewUsers(runner, orgPool, idp),
+		UserGroups:      app.NewUserGroups(runner, orgPool, idp),
+		Logins:          app.NewLogins(runner, orgPool, idp),
+		LoginSettings:   app.NewLoginSettings(runner, orgPool),
+		WatchedUnits:    app.NewWatchedUnits(runner, orgPool),
+		Privacy:         app.NewPrivacy(runner, orgPool),
+		ReadAudit:       app.NewReadAudit(runner),
+		LoginHistory:    app.NewLoginHistory(runner, orgPool, 24*time.Hour),
+		Privileges:      app.NewPrivileges(runner, orgPool),
+		Commands:        app.NewDeviceCommands(runner, orgPool),
+		LocalAdmin:      app.NewLocalAdmin(runner, orgPool, escrowAccess),
+		Autoinstall:     app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
+		Disk:            app.NewDisk(runner, orgPool, escrowAccess, e.disk),
+		RecoveryExports: app.NewRecoveryExports(runner, platformPool, e.stepUps, escrowReader, time.Now),
+		Revocations:     app.NewRevocations(runner, orgPool, e.stepUps, discardCommands{}, true),
+		DMS:             app.NewDMS(runner, orgPool, discardCommands{}, true, false),
+		Inventory:       app.NewInventory(orgPool),
+		ConfigStatus:    app.NewConfigStatus(orgPool),
+		AuditLog:        app.NewAuditLog(reader, orgPool),
+		AuditIntegrity:  app.NewAuditIntegrity(reader),
+		AuditExports:    app.NewAuditExports(runner, reader),
+		Attention:       app.NewAttention(orgPool),
+		Findings:        app.NewFindings(runner, orgPool),
+		AccountList:     app.NewAccountList(orgPool),
+		Overview:        app.NewOverview(orgPool),
+		SecurityReview:  app.NewSecurityReview(orgPool),
+		AccessReview:    app.NewAccessReview(runner, orgPool, reader),
+		PatchSLA:        app.NewPatchSLA(runner, orgPool),
+		PatchCompliance: app.NewPatchCompliance(runner, orgPool),
+		Diagnostics:     app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, e.disk),
+		MCPSettings:     app.NewMCPSettings(runner, orgPool, platformPool),
+		MCPAccess:       app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
+		Runner:          runner,
+		Keys:            keys,
+		OIDC:            admin.NewOIDC(admin.OIDCConfig{}),
+		StepUpTokens:    e.stepUps,
+		Sessions:        e.sessions,
+		EndSessions:     app.NewSessions(runner, e.sessions, e.identitySessions, e.identitySessions),
+		AutoUnseal:      app.NewAutoUnseal(runner, platformPool, nil),
+		PublicURL:       "https://admin.test",
+		Static:          static,
 	}
 	d.ReleaseImports = app.NewReleaseImports(runner, platformPool, d.Releases, nil, config.ReleaseSource{})
 	d.SoftwareSources = app.NewSoftwareSources(runner, orgPool)
@@ -529,6 +589,9 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 		e.t.Fatal(err)
 	}
 	sess.StepUpAt, sess.StepUpJTI, sess.StepUpClasses = at.Unix(), e.stepUps.issue(sess.Sub, at), []string{admin.StepUpWebAuthnClass}
+	if principal.Kind(sess.Kind) == principal.KindPlatformAdmin {
+		e.stepUps.withGroups(sess.StepUpJTI, []string{organization.PlatformAdminsGroup()})
+	}
 	v, err := e.keys.Seal(admin.SessionCookie, sess)
 	if err != nil {
 		e.t.Fatal(err)
