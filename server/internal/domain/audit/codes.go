@@ -165,7 +165,7 @@ const (
 	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
 	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
 	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
-	// CodeDeviceTamperInventoryRejected: the inventory round could not take over a device's inventory (PDK-1122k).
+	// CodeDeviceTamperInventoryRejected: the inventory round could not store a device's inventory (PDK-1122k).
 	CodeDeviceTamperInventoryRejected Code = "device.tamper_inventory_rejected"
 	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
 	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
@@ -1313,7 +1313,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperInventoryRejected: {
 		Code: CodeDeviceTamperInventoryRejected, Emitted: true,
-		Description: "The inventory round could not take over the inventory of a device and skipped it (actor: system). reason fetch_refused: Fleet no longer knows the host that speaks for the device, or refused it; reason store_refused: Paddock refused the host's inventory data. fleet_host is the inventory system's ID of the host that speaks for the device. Until the device's inventory is stored again, its software, vulnerabilities and the agent reports derived from the inventory system rest on its last stored inventory.",
+		Description: "The inventory round could not store the inventory of a device and skipped it (actor: system). reason fetch_refused: Fleet no longer knows the host that speaks for the device, or refused it; reason store_refused: Paddock refused the host's inventory data. fleet_host is the inventory system's ID of the host that speaks for the device. Until the device's inventory is stored again, its software, vulnerabilities and the agent reports derived from the inventory system rest on its last stored inventory.",
 		Params:      []string{"reason", "fleet_host"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per episode; the episode ends when the device's inventory is stored again.",
