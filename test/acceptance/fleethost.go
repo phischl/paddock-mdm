@@ -173,6 +173,8 @@ const fleetOSVSeedName = "osv-ubuntu-2404-2000-01-01.json.gz"
 // (server/vulnerabilities/nvd/cpe.go, TranslateSoftwareToCPE), and finds its OSV artifacts only through GitHub's API
 // (server/vulnerabilities/vulnrepo, LatestRelease), which shared CI runners exhaust anonymously; without an artifact
 // on disk no host gets an Ubuntu finding (PDK-1093). The records are copied from Fleet's artifact of 2026-11-24.
+// The seed is never removed: on a stack that never reaches GitHub it stays the only Ubuntu 24.04 artifact, which
+// covers just these findings (ADR 0009 amendment 2026-11-24 (c)).
 func seedFleetOSVArtifact(t *testing.T, findings []fleetOSVFinding) {
 	t.Helper()
 	artifact, err := fleetOSVArtifact(findings)
