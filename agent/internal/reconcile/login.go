@@ -45,6 +45,22 @@ var HimmelblauSocketDropIns = []string{HimmelblaudSocketDropIn, "/etc/systemd/sy
 
 var himmelblaudSocketDropIn = []byte("# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n")
 
+// LoginManagedFiles are the identity files the login reconciler writes; the integrity check judges them through a
+// FileGuard (plan M5a amendment 2026-11-17 f).
+var LoginManagedFiles = append([]string{HimmelblauConf, DenyList}, HimmelblauSocketDropIns...)
+
+// FileGuard keeps the integrity baseline of the LoginManagedFiles: it only ever learns their content from Paddock,
+// never from the disk (plan M5a amendment 2026-11-17 f).
+type FileGuard interface {
+	// Expect records the content Paddock wrote to path before this agent start as its baseline when the baseline has
+	// none yet.
+	Expect(path string, content []byte)
+	// BeforeWrite reports a change of path made outside Paddock since Paddock's last write.
+	BeforeWrite(path string)
+	// Written records the content Paddock wrote to path; nil means Paddock removed it.
+	Written(path string, content []byte)
+}
+
 // The PAM lines the pam-auth-update profile paddock-deny of the paddock-agent package produces (plan M3b decision
 // 9); the agent verifies them and never edits PAM files.
 const (
@@ -111,6 +127,25 @@ type Login struct {
 	restartPending atomic.Bool
 	// reloadPending marks socket drop-ins written whose daemon-reload failed; the next pass retries it.
 	reloadPending atomic.Bool
+	// Guard sees every write of the LoginManagedFiles; nil: they are not checked.
+	Guard FileGuard
+	// prev is the login spec of the last enforced bundle, prevApplied whether there was one: what Paddock wrote
+	// before Guard saw its writes (SetPrevious).
+	prev        *bundle.LoginSpec
+	prevApplied bool
+}
+
+// SetPrevious tells Login the login resource of the bundle the agent enforced before this start (nil: none) and
+// whether there was such a bundle. Apply and EnsureDenyList hand its renders to the Guard, so that a change made
+// before the agent update is judged against what Paddock wrote, never against the disk.
+func (l *Login) SetPrevious(r *bundle.Resource, applied bool) {
+	l.prev, l.prevApplied = nil, applied
+	if r == nil {
+		return
+	}
+	if s, err := l.spec(*r); err == nil {
+		l.prev = &s
+	}
 }
 
 // Type implements Reconciler.
@@ -266,6 +301,12 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	if err != nil {
 		return errorResult(r.ID, err)
 	}
+	// Only Apply hands the renders over: a report-only device runs Plan alone and never writes them. The socket
+	// drop-ins have no previous render: agents before them never wrote them (plan M5a amendment 2026-11-17 f).
+	if l.Guard != nil && l.prev != nil {
+		l.Guard.Expect(HimmelblauConf, renderHimmelblauConf(*l.prev))
+		l.Guard.Expect(DenyList, renderDenyList(*l.prev, st.local))
+	}
 	var changed []string
 	var aptErr error
 	wasSuspended := suspendedConf(l.read(HimmelblauConf))
@@ -282,7 +323,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	wasDenied := denied(l.read(DenyList))
 	if !l.fileIs(DenyList, st.wantDeny) {
-		if err := l.Sys.WriteFileAtomic(DenyList, st.wantDeny, 0o644, 0, 0); err != nil {
+		if err := l.writeManaged(DenyList, st.wantDeny); err != nil {
 			return l.fail(r.ID, protocol.LoginStageDenyList, err)
 		}
 		changed = append(changed, "deny_list")
@@ -292,7 +333,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	var confErr error
 	confStage := protocol.LoginStageConfig
 	if aptErr == nil && (confWritten || !l.fileIs(HimmelblauConf, st.wantConf)) {
-		if confErr = l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); confErr == nil {
+		if confErr = l.writeManaged(HimmelblauConf, st.wantConf); confErr == nil {
 			changed = append(changed, "config")
 			l.restartPending.Store(true)
 		}
@@ -333,6 +374,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		return l.fail(r.ID, protocol.LoginStageNotice, noticeErr)
 	}
 	l.lastFailure = ""
+	l.prev = &s
 	l.reportDaemon(ctx)
 	if len(changed) == 0 {
 		return Result{ID: r.ID, Status: OK}
@@ -394,7 +436,12 @@ func (l *Login) EnsureDenyList() (bool, error) {
 	if !l.DenyListMissing() {
 		return false, nil
 	}
-	if err := l.Sys.WriteFileAtomic(DenyList, []byte{}, 0o644, 0, 0); err != nil {
+	// The agent before this start kept the list in place, so its absence after an enforced bundle is a change: it
+	// unlocks every locked user (plan M5a amendment 2026-11-17 f).
+	if l.Guard != nil && l.prevApplied {
+		l.Guard.Expect(DenyList, []byte{})
+	}
+	if err := l.writeManaged(DenyList, []byte{}); err != nil {
 		return false, fmt.Errorf("write %s: %w", DenyList, err)
 	}
 	return true, nil
@@ -448,7 +495,7 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 	}
 	previous, _, readErr := l.Sys.ReadFile(HimmelblauConf)
 	if !l.fileIs(HimmelblauConf, conf) {
-		if err := l.Sys.WriteFileAtomic(HimmelblauConf, conf, 0o644, 0, 0); err != nil {
+		if err := l.writeManaged(HimmelblauConf, conf); err != nil {
 			return false, false, fmt.Errorf("%w: %w", errConfig, err)
 		}
 		confWritten = true
@@ -472,9 +519,9 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		l.aptTimeoutErr = fmt.Errorf("killed after %s, next attempt in %s: %w", PackageTimeout, backoff, err)
 		return false, confWritten, l.aptTimeoutErr
 	case confWritten && readErr == nil:
-		return false, confWritten, errors.Join(err, l.Sys.WriteFileAtomic(HimmelblauConf, previous, 0o644, 0, 0))
+		return false, confWritten, errors.Join(err, l.writeManaged(HimmelblauConf, previous))
 	case confWritten:
-		return false, confWritten, errors.Join(err, l.Sys.Remove(HimmelblauConf))
+		return false, confWritten, errors.Join(err, l.removeManaged(HimmelblauConf))
 	}
 	return false, confWritten, err
 }
@@ -488,7 +535,7 @@ func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
 		if l.fileIs(p, himmelblaudSocketDropIn) {
 			continue
 		}
-		if err := l.Sys.WriteFileAtomic(p, himmelblaudSocketDropIn, 0o644, 0, 0); err != nil {
+		if err := l.writeManaged(p, himmelblaudSocketDropIn); err != nil {
 			return written, err
 		}
 		written = true
@@ -502,6 +549,33 @@ func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
 	}
 	l.reloadPending.Store(false)
 	return true, nil
+}
+
+// writeManaged writes one of the LoginManagedFiles 0644 root:root between the guard's check and its record.
+func (l *Login) writeManaged(path string, data []byte) error {
+	if data == nil {
+		data = []byte{} // the guard takes nil for a removal
+	}
+	if l.Guard != nil {
+		l.Guard.BeforeWrite(path)
+	}
+	err := l.Sys.WriteFileAtomic(path, data, 0o644, 0, 0)
+	if err == nil && l.Guard != nil {
+		l.Guard.Written(path, data)
+	}
+	return err
+}
+
+// removeManaged removes one of the LoginManagedFiles between the guard's check and its record.
+func (l *Login) removeManaged(path string) error {
+	if l.Guard != nil {
+		l.Guard.BeforeWrite(path)
+	}
+	err := l.Sys.Remove(path)
+	if (err == nil || errors.Is(err, fs.ErrNotExist)) && l.Guard != nil {
+		l.Guard.Written(path, nil)
+	}
+	return err
 }
 
 func (l *Login) socketDropInsAre() bool {

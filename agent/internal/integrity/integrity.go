@@ -7,6 +7,8 @@ package integrity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -67,13 +69,15 @@ type Checker struct {
 	mu       sync.Mutex
 	deferred map[string]uint64 // device path → token of its latest Defer
 	deferSeq uint64
+	expected map[string]string // identity path → render Expect found a baseline entry for
+	written  map[string]string // identity path → Paddock's latest write, until a saved baseline holds it
 }
 
 // New returns the check of a device.
 func New(l paths.Layout, sys System) *Checker {
 	frontend := reconcile.FrontendLockBusy(l.Join(reconcile.DpkgFrontendLock))
 	database := reconcile.FrontendLockBusy(l.Join("/var/lib/dpkg/lock"))
-	return &Checker{Layout: l, Sys: sys, Arch: runtime.GOARCH, Now: time.Now,
+	return &Checker{Layout: l, Sys: sys, Arch: runtime.GOARCH, Now: time.Now, expected: map[string]string{}, written: map[string]string{},
 		DpkgBusy: func() bool { return frontend() || database() }}
 }
 
@@ -127,6 +131,7 @@ func (c *Checker) deferredNow() map[string]uint64 {
 type snapshot struct {
 	slots          map[string]string   // nil: the slots are not judged in this pass
 	files          map[string]string   // agent-written files
+	identity       map[string]string   // reconcile.LoginManagedFiles
 	obs            map[string]observed // judged without the baseline: the paddockd link and foreign unit files
 	pkgFiles       map[string]pkgFile
 	supervisorSums map[string]string // the md5sums of a completely observed supervisor package
@@ -155,7 +160,7 @@ func (c *Checker) Check(ctx context.Context, p Pass) Result {
 	s := c.observe(ctx, p)
 	var changed []string
 	var raced, resetDue, established bool
-	err := newStore(c.Layout, c.Sleep).update(func(b *Baseline) bool {
+	err := c.update(func(b *Baseline) bool {
 		if b.Generation != gen0 {
 			raced = true
 			return false
@@ -188,6 +193,12 @@ func (c *Checker) Check(ctx context.Context, p Pass) Result {
 			slog.Warn("a protected Paddock file changed outside Paddock", "file", f)
 			c.emit(f, "")
 		}
+	}
+	if resetDue {
+		// A rebuilt baseline lost the renders Expect recorded; the next Expect records them again.
+		c.mu.Lock()
+		clear(c.expected)
+		c.mu.Unlock()
 	}
 	if resetDue && !c.resetReported {
 		c.emit(integrityFile, protocol.TamperReasonBaselineReset)
@@ -225,7 +236,7 @@ func (c *Checker) forgetApplied(applied map[string]uint64) {
 
 // observe evaluates the flow conditions and hashes every checked path, without the lock (plan M5a R1).
 func (c *Checker) observe(ctx context.Context, p Pass) *snapshot {
-	s := &snapshot{files: map[string]string{}, obs: map[string]observed{}, pkgFiles: map[string]pkgFile{},
+	s := &snapshot{files: map[string]string{}, identity: map[string]string{}, obs: map[string]observed{}, pkgFiles: map[string]pkgFile{},
 		deferred: c.deferredNow(), applied: map[string]uint64{}, blocked: blockers{}}
 	if c.quiescent(p.ReportedUpdateAt, s.blocked) {
 		if v, err := c.hash.slots(c.Layout); err != nil {
@@ -284,6 +295,12 @@ func (c *Checker) classify(b *Baseline, s *snapshot, established bool, now time.
 		}
 		obs[p] = observed{value: v, expected: v == exp}
 	}
+	// An identity file is judged only against content Paddock gave the baseline, never recorded from the disk.
+	for p, v := range s.identity {
+		if exp, ok := b.Expected[p]; ok {
+			obs[p] = observed{value: v, expected: v == exp}
+		}
+	}
 	for p, f := range s.pkgFiles {
 		obs[p] = observed{value: f.sha, expected: f.md5 == f.entry || excepted(b, p, f.entry, f.sha)}
 	}
@@ -331,7 +348,11 @@ func mark(b *Baseline, obs map[string]observed, unitsComplete bool) []string {
 // and suspends its check (R3 conversion).
 func (c *Checker) observeFiles(skip []string, s *snapshot) {
 	l := c.Layout
-	for _, full := range []string{l.AgentConfig(), l.Trust(), l.RevokeTrust(), l.DiskSetupConfig()} {
+	files := []string{l.AgentConfig(), l.Trust(), l.RevokeTrust(), l.DiskSetupConfig()}
+	for _, p := range reconcile.LoginManagedFiles {
+		files = append(files, l.Join(p))
+	}
+	for _, full := range files {
 		p := devicePath(l, full)
 		if slices.Contains(skip, full) {
 			s.blocked.block("file:"+p, 0, p)
@@ -343,8 +364,108 @@ func (c *Checker) observeFiles(skip []string, s *snapshot) {
 			s.blocked.block("file:"+p, 1, p)
 			continue
 		}
-		s.files[p] = v
+		if slices.Contains(reconcile.LoginManagedFiles, p) {
+			s.identity[p] = v
+		} else {
+			s.files[p] = v
+		}
 	}
+}
+
+// update runs fn on the baseline under the lock after it applied the writes Written could not save (plan M5a
+// amendment 2026-11-17 f).
+func (c *Checker) update(fn func(b *Baseline) bool) error {
+	var applied map[string]string
+	err := newStore(c.Layout, c.Sleep).update(func(b *Baseline) bool {
+		c.mu.Lock()
+		applied = maps.Clone(c.written)
+		c.mu.Unlock()
+		for p, v := range applied {
+			b.expect(p, v)
+			delete(b.Reported, p)
+		}
+		return fn(b) || len(applied) > 0
+	})
+	if err == nil {
+		c.mu.Lock()
+		for p, v := range applied {
+			if c.written[p] == v {
+				delete(c.written, p)
+			}
+		}
+		c.mu.Unlock()
+	}
+	return err
+}
+
+// Expect implements reconcile.FileGuard: what Paddock wrote before this agent start becomes the baseline of an
+// identity file without one, so that an agent update never takes a manipulated file as its baseline. Any goroutine
+// may call it.
+func (c *Checker) Expect(path string, content []byte) {
+	v := contentValue(content)
+	c.mu.Lock()
+	known := c.expected[path] == v && len(c.written) == 0
+	c.mu.Unlock()
+	if known {
+		return
+	}
+	err := c.update(func(b *Baseline) bool {
+		if _, ok := b.Expected[path]; !ok {
+			b.expect(path, v)
+		}
+		return true
+	})
+	if err != nil {
+		slog.Warn("recording the integrity baseline of a Paddock-written file failed", "file", path, "error", err)
+		return
+	}
+	c.mu.Lock()
+	c.expected[path] = v
+	c.mu.Unlock()
+}
+
+// BeforeWrite implements reconcile.FileGuard: right before Paddock corrects an identity file it reports a change
+// since Paddock's last write, which the correction would otherwise hide. Any goroutine may call it.
+func (c *Checker) BeforeWrite(path string) {
+	var h hasher
+	v, err := h.value(c.Layout, path)
+	var changed []string
+	if err == nil {
+		err = c.update(func(b *Baseline) bool {
+			exp, ok := b.Expected[path]
+			changed = mark(b, map[string]observed{path: {value: v, expected: !ok || v == exp}}, false)
+			return ok
+		})
+	}
+	if err != nil {
+		slog.Warn("the integrity check before a Paddock write failed", "file", path, "error", err)
+		return
+	}
+	for _, p := range changed {
+		slog.Warn("a protected Paddock file changed outside Paddock", "file", p)
+		c.emit(p, "")
+	}
+}
+
+// Written implements reconcile.FileGuard: the content Paddock wrote becomes the baseline; one that cannot be saved
+// now is saved by the next Expect, BeforeWrite, Written or Check. Any goroutine may call it.
+func (c *Checker) Written(path string, content []byte) {
+	v := ""
+	if content != nil {
+		v = contentValue(content)
+	}
+	c.mu.Lock()
+	c.written[path] = v
+	c.mu.Unlock()
+	if err := c.update(func(*Baseline) bool { return true }); err != nil {
+		slog.Warn("recording a Paddock write in the integrity baseline failed; the next check records it", "file", path, "error", err)
+	}
+}
+
+// contentValue is the value hasher.value observes for a regular file with content.
+func contentValue(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
 // quiescent reports that no agent update runs: no request, no probation, and no unprocessed result (plan M5a C4).

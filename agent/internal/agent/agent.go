@@ -218,11 +218,12 @@ func Load(l paths.Layout) (Deps, error) {
 	pkgSys := reconcile.Shielded{System: sys, Shield: shield}
 	inventory := &reconcile.Inventory{Sys: pkgSys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
 	software := &reconcile.Software{Sys: pkgSys, Events: events}
+	integ := integrity.New(l, sys)
 	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
-		Software: software, Shield: shield, Integrity: integrity.New(l, sys),
+		Software: software, Shield: shield, Integrity: integ,
 		Applier: apply.New(pkgSys, managed, events).WithInventory(inventory).
-			WithWatch(&reconcile.Watch{Sys: sys, Events: events}).WithSoftware(software).WithNSSShield(shield),
+			WithWatch(&reconcile.Watch{Sys: sys, Events: events}).WithSoftware(software).WithNSSShield(shield).WithFileGuard(integ),
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
@@ -345,6 +346,7 @@ func New(d Deps) (*Agent, error) {
 	}
 	a.refreshHealth()
 	a.loadCurrent()
+	a.d.Applier.SetPrevious(a.current)
 	return a, nil
 }
 

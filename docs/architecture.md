@@ -1617,7 +1617,9 @@ Expired commands are marked `expired` and never executed (platform outage questi
 | Paddock-managed APT sources, keyrings and forbid pins | drift pass 5 min | `tamper.protected_file_changed` |
 
 Not watched today: `/etc/nsswitch.conf`, `/etc/security/`, `/etc/pam.d/` beyond the deny-list lines, Himmelblau's
-package version *(not scheduled)*; `/etc/himmelblau/himmelblau.conf` is re-rendered by the drift loop.
+package version *(not scheduled)*. `/etc/himmelblau/himmelblau.conf`, `/etc/paddock/login-deny` and the
+`90-paddock.conf` drop-ins of the Himmelblau socket units are re-rendered by the drift loop and judged by the ADR 0056
+check against the content Paddock last wrote, also right before each correction (plan M5a amendment 2026-11-17 f).
 
 Every event carries `event_seq` (per device, monotonic, persisted). The worker reports a hole in a device's sequence
 numbers as `device.event_gap`, a counter that restarted as `device.event_seq_reset`, and a hole that was filled
