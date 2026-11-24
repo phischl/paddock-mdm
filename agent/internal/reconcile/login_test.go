@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -117,6 +118,10 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	want := []string{
 		// The configuration precedes the packages, whose installation starts himmelblaud (plan M4b.1 step 6).
 		"write /etc/himmelblau/himmelblau.conf",
+		// The socket drop-in is in place before the packages start the socket unit (PDK-1126).
+		"write /etc/systemd/system/himmelblaud.socket.d/90-paddock.conf",
+		"write /etc/systemd/system/himmelblaud-tasks.socket.d/90-paddock.conf",
+		"write /etc/systemd/system/himmelblaud-broker.socket.d/90-paddock.conf", "systemctl daemon-reload",
 		"write /etc/apt/keyrings/himmelblau.gpg", "write /etc/apt/sources.list.d/paddock-himmelblau.list", "apt-get update",
 		"apt-get install himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config",
 		"write /etc/paddock/login-deny", "write /etc/himmelblau/himmelblau.conf",
@@ -190,6 +195,74 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 		}
 		if got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); got != wantConf {
 			t.Fatalf("himmelblau.conf after the apply\n%s", got)
+		}
+	}
+}
+
+const wantSocketDropIn = "# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n"
+
+// TestLoginManagesTheSocketDropIn (PDK-1126): the drop-ins that make systemd remove the nodes of Himmelblau's three
+// socket units when they stop are written root:root 0644 with the configuration; a missing, edited or loosened drop-in
+// is drift, rewritten with a daemon-reload and reported as login.applied (config) without a daemon restart; intact
+// ones are left alone.
+func TestLoginManagesTheSocketDropIn(t *testing.T) {
+	ctx := context.Background()
+	sys, l, events := loginFixture(t)
+	r := loginResource(t, loginSpec())
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	want := []string{"/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf",
+		"/etc/systemd/system/himmelblaud-tasks.socket.d/90-paddock.conf", "/etc/systemd/system/himmelblaud-broker.socket.d/90-paddock.conf"}
+	if !slices.Equal(reconcile.HimmelblauSocketDropIns, want) {
+		t.Fatalf("drop-ins %q", reconcile.HimmelblauSocketDropIns)
+	}
+	for _, p := range want {
+		if f := sys.Files[p]; f == nil || string(f.Data) != wantSocketDropIn || f.Mode != 0o644 || f.UID != 0 || f.GID != 0 {
+			t.Fatalf("%s %+v", p, f)
+		}
+	}
+	sys.TakeCalls()
+	takeEvents(events)
+	for _, p := range want {
+		for name, damage := range map[string]func(f *fakesys.File){
+			"removed": nil,
+			"edited":  func(f *fakesys.File) { f.Data = []byte("[Socket]\nRemoveOnStop=no\n") },
+			"mode":    func(f *fakesys.File) { f.Mode = 0o666 },
+		} {
+			name = p + " " + name
+			if damage == nil {
+				delete(sys.Files, p)
+			} else {
+				damage(sys.Files[p])
+			}
+			if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+				t.Fatalf("%s: plan %v %v", name, changes, err)
+			}
+			if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+				t.Fatalf("%s: apply %+v", name, res)
+			}
+			if calls := sys.TakeCalls(); !slices.Equal(calls, []string{"write " + p, "systemctl daemon-reload"}) {
+				t.Fatalf("%s: calls %q", name, calls)
+			}
+			if f := sys.Files[p]; string(f.Data) != wantSocketDropIn || f.Mode != 0o644 {
+				t.Fatalf("%s: drop-in %+v", name, f)
+			}
+			if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventLoginApplied, `{"changed":["config"]}`}}) {
+				t.Fatalf("%s: events %v", name, got)
+			}
+			if changes, err := l.Plan(ctx, r); err != nil || len(changes) != 0 {
+				t.Fatalf("%s: plan after the apply %v %v", name, changes, err)
+			}
+		}
+	}
+}
+
+// The policy denies the drop-in to managed files (protected area 4), so an operator's resource cannot override it.
+func TestSocketDropInIsDenied(t *testing.T) {
+	for _, p := range reconcile.HimmelblauSocketDropIns {
+		if err := policy.ValidatePath(p); !errors.Is(err, policy.ErrPathNotAllowed) {
+			t.Fatalf("ValidatePath(%s) = %v", p, err)
 		}
 	}
 }
@@ -328,6 +401,114 @@ func TestLoginLocksSessionsOfNewlyLockedUsers(t *testing.T) {
 	}
 }
 
+// TestLoginLockSurvivesConfigFailures (PDK-1126d): once the deny list is written, a failing configuration write, socket
+// drop-in write, daemon-reload or daemon restart no longer ends the apply before the sessions. The next pass sees the
+// user as denied already and would never lock them; the failure is reported after the session action instead.
+func TestLoginLockSurvivesConfigFailures(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, stage, failWrite, failCmd string
+		damage                          string // the managed file made to drift
+	}{
+		{"config write", protocol.LoginStageConfig, reconcile.HimmelblauConf, "", reconcile.HimmelblauConf},
+		{"drop-in write", protocol.LoginStageConfig, reconcile.HimmelblaudSocketDropIn, "", reconcile.HimmelblaudSocketDropIn},
+		{"daemon-reload", protocol.LoginStageConfig, "", "systemctl daemon-reload", reconcile.HimmelblaudSocketDropIn},
+		{"restart", protocol.LoginStageRestart, "", "systemctl restart himmelblaud.service", reconcile.HimmelblauConf},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sys, l, events := loginFixture(t)
+			sys.Sessions = deviceSessions
+			l.Apply(ctx, loginResource(t, loginSpec()))
+			sys.TakeCalls()
+			takeEvents(events)
+
+			if tc.damage == reconcile.HimmelblauConf {
+				sys.Files[tc.damage].Data = []byte("[global]\n")
+			} else {
+				delete(sys.Files, tc.damage)
+			}
+			sys.FailWrite, sys.FailCmd = tc.failWrite, tc.failCmd
+			s := loginSpec()
+			s.LockedUsers = []string{"dave@acme.test"}
+			res := l.Apply(ctx, loginResource(t, s))
+			if res.Status != reconcile.Error || !strings.HasPrefix(res.Message, tc.stage+": ") {
+				t.Fatalf("apply %+v, want an error of stage %s", res, tc.stage)
+			}
+			calls := sys.TakeCalls()
+			if !slices.Contains(calls, "loginctl lock-session 7") || !slices.Contains(calls, "loginctl lock-session 9") {
+				t.Fatalf("the lock's sessions were not locked: %q", calls)
+			}
+			var failed bool
+			for _, e := range takeEvents(events) {
+				failed = failed || (e.typ == protocol.EventLoginApplyFailed && strings.Contains(e.data, `"stage":"`+tc.stage+`"`))
+			}
+			if !failed {
+				t.Fatalf("no login.apply_failed of stage %s", tc.stage)
+			}
+
+			// The failure goes away: the next pass completes the configuration and does not lock again.
+			sys.FailWrite, sys.FailCmd = "", ""
+			if res := l.Apply(ctx, loginResource(t, s)); res.Status == reconcile.Error {
+				t.Fatalf("retry %+v", res)
+			}
+			calls = sys.TakeCalls()
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "loginctl") }) {
+				t.Fatalf("locked again: %q", calls)
+			}
+			if tc.name == "restart" && !slices.Contains(calls, "systemctl restart himmelblaud.service") {
+				t.Fatalf("the deferred restart was not retried: %q", calls)
+			}
+			if changes, err := l.Plan(ctx, loginResource(t, s)); err != nil || len(changes) != 0 {
+				t.Fatalf("plan after the retry %v %v", changes, err)
+			}
+		})
+	}
+}
+
+// TestLoginInstallsDespiteADropInFailure (PDK-1126): a drop-in that cannot be written before the installation does not
+// stop the apply before the deny list; the packages are installed and the failure is reported as stage config.
+func TestLoginInstallsDespiteADropInFailure(t *testing.T) {
+	sys, l, _ := loginFixture(t)
+	sys.FailWrite = reconcile.HimmelblaudSocketDropIn
+	s := loginSpec()
+	s.LockedUsers = []string{"dave@acme.test"}
+	res := l.Apply(context.Background(), loginResource(t, s))
+	if res.Status != reconcile.Error || !strings.HasPrefix(res.Message, protocol.LoginStageConfig+": ") {
+		t.Fatalf("apply %+v", res)
+	}
+	if f := sys.Files[reconcile.DenyList]; f == nil || string(f.Data) != "dave@acme.test\n" || !l.Sys.PackageInstalled("himmelblau") {
+		t.Fatalf("deny list %+v, himmelblau installed %v", f, l.Sys.PackageInstalled("himmelblau"))
+	}
+}
+
+// TestLoginRetriesAFailedReload (PDK-1126): drop-ins written while the daemon-reload failed are retried by the next
+// pass, which only reloads; Plan reports it meanwhile.
+func TestLoginRetriesAFailedReload(t *testing.T) {
+	ctx := context.Background()
+	sys, l, _ := loginFixture(t)
+	r := loginResource(t, loginSpec())
+	l.Apply(ctx, r)
+	delete(sys.Files, reconcile.HimmelblaudSocketDropIn)
+	sys.FailCmd = "systemctl daemon-reload"
+	if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply %+v", res)
+	}
+	sys.FailCmd = ""
+	sys.TakeCalls()
+	if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+		t.Fatalf("plan with the reload pending %v %v", changes, err)
+	}
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("retry %+v", res)
+	}
+	if calls := sys.TakeCalls(); !slices.Equal(calls, []string{"systemctl daemon-reload"}) {
+		t.Fatalf("retry calls %q", calls)
+	}
+	if changes, err := l.Plan(ctx, r); err != nil || len(changes) != 0 {
+		t.Fatalf("plan after the retry %v %v", changes, err)
+	}
+}
+
 func TestLoginSuspensionTerminatesDirectorySessions(t *testing.T) {
 	ctx := context.Background()
 	sys, l, events := loginFixture(t)
@@ -355,6 +536,63 @@ func TestLoginSuspensionTerminatesDirectorySessions(t *testing.T) {
 	l.Apply(ctx, loginResource(t, s))
 	if calls := sys.TakeCalls(); len(calls) != 0 {
 		t.Fatalf("terminated again: %v", calls)
+	}
+}
+
+// TestLoginSuspensionWaitsForTheConfiguration (PDK-1126): while the himmelblau.conf write fails, a suspension neither
+// terminates the sessions nor reports logins.suspension_applied, pass after pass; once the write succeeds it is applied
+// once. A lock in the same state still runs its session action once.
+func TestLoginSuspensionWaitsForTheConfiguration(t *testing.T) {
+	ctx := context.Background()
+	sys, l, events := loginFixture(t)
+	sys.Sessions = deviceSessions
+	l.Apply(ctx, loginResource(t, loginSpec()))
+	sys.TakeCalls()
+	takeEvents(events)
+
+	sys.FailWrite = reconcile.HimmelblauConf
+	s := loginSpec()
+	s.Suspended, s.Himmelblau.PamAllowGroups, s.LockedUsers = true, []string{}, []string{"dave@acme.test"}
+	r := loginResource(t, s)
+	for pass := range 3 {
+		if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+			t.Fatalf("pass %d: apply %+v", pass, res)
+		}
+		var terminated, locked int
+		for _, c := range sys.TakeCalls() {
+			if strings.HasPrefix(c, "loginctl terminate-user") {
+				terminated++
+			}
+			if strings.HasPrefix(c, "loginctl lock-session") {
+				locked++
+			}
+		}
+		if terminated != 0 || (pass == 0) != (locked == 2) || (pass > 0 && locked != 0) {
+			t.Fatalf("pass %d: %d terminated, %d locked", pass, terminated, locked)
+		}
+		for _, e := range takeEvents(events) {
+			if e.typ == protocol.EventLoginsSuspensionApplied {
+				t.Fatalf("pass %d: suspension reported while himmelblau.conf is not written", pass)
+			}
+		}
+	}
+	sys.FailWrite = ""
+	l.Apply(ctx, r)
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "loginctl terminate-user 923001122") {
+		t.Fatalf("suspension not applied after the write: %v", calls)
+	}
+	var applied int
+	for _, e := range takeEvents(events) {
+		if e.typ == protocol.EventLoginsSuspensionApplied {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("%d logins.suspension_applied, want 1", applied)
+	}
+	l.Apply(ctx, r)
+	if calls := sys.TakeCalls(); slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "loginctl") }) {
+		t.Fatalf("applied again: %v", calls)
 	}
 }
 

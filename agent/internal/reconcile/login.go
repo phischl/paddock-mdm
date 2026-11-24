@@ -30,7 +30,20 @@ const (
 	himmelblauSource  = "/etc/apt/sources.list.d/paddock-himmelblau.list"
 	commonAuth        = "/etc/pam.d/common-auth"
 	commonAccount     = "/etc/pam.d/common-account"
+	// HimmelblaudSocketDropIn makes systemd remove /run/himmelblaud/socket whenever himmelblaud.socket stops
+	// (PDK-1126). Himmelblau 4.0.8's socket unit keeps the node, and the socket stops with the daemon (PartOf), e.g.
+	// during the shield's hold around package transactions (PDK-983): pam_himmelblau then writes "connection refused"
+	// to the stdout of every PAM caller, while a missing node fails silently.
+	HimmelblaudSocketDropIn = "/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf"
 )
+
+// HimmelblauSocketDropIns are HimmelblaudSocketDropIn and the same drop-in for the daemon's other two socket units,
+// which stop with it and keep task_sock and broker_sock the same way. Only RemoveOnStop is set: every other setting
+// stays Himmelblau's.
+var HimmelblauSocketDropIns = []string{HimmelblaudSocketDropIn, "/etc/systemd/system/himmelblaud-tasks.socket.d/90-paddock.conf",
+	"/etc/systemd/system/himmelblaud-broker.socket.d/90-paddock.conf"}
+
+var himmelblaudSocketDropIn = []byte("# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n")
 
 // The PAM lines the pam-auth-update profile paddock-deny of the paddock-agent package produces (plan M3b decision
 // 9); the agent verifies them and never edits PAM files.
@@ -96,6 +109,8 @@ type Login struct {
 	Shield         *NSSShield
 	daemonStopped  atomic.Bool
 	restartPending atomic.Bool
+	// reloadPending marks socket drop-ins written whose daemon-reload failed; the next pass retries it.
+	reloadPending atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -171,7 +186,7 @@ func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	if !l.installed(s.Himmelblau.PackageVersion) {
 		changes = append(changes, "package")
 	}
-	if !l.fileIs(HimmelblauConf, st.wantConf) {
+	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.socketDropInsAre() || l.reloadPending.Load() {
 		changes = append(changes, "config")
 	}
 	if !l.fileIs(DenyList, st.wantDeny) {
@@ -272,17 +287,25 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 		changed = append(changed, "deny_list")
 	}
+	// With the deny list written, a failure from here on is reported after the sessions: the next pass sees the user
+	// as denied already and would never run the session action of the lock (PDK-1126d).
+	var confErr error
+	confStage := protocol.LoginStageConfig
 	if aptErr == nil && (confWritten || !l.fileIs(HimmelblauConf, st.wantConf)) {
-		if err := l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); err != nil {
-			return l.fail(r.ID, protocol.LoginStageConfig, err)
+		if confErr = l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); confErr == nil {
+			changed = append(changed, "config")
+			l.restartPending.Store(true)
 		}
-		changed = append(changed, "config")
-		l.restartPending.Store(true)
 	}
-	if aptErr == nil && l.restartPending.Load() {
-		if err := l.restartAfterHolds(ctx); err != nil {
-			return l.fail(r.ID, protocol.LoginStageRestart, err)
+	if aptErr == nil && confErr == nil {
+		written, err := l.ensureSocketDropIn(ctx)
+		if written && !slices.Contains(changed, "config") {
+			changed = append(changed, "config")
 		}
+		confErr = err
+	}
+	if aptErr == nil && confErr == nil && l.restartPending.Load() {
+		confErr, confStage = l.restartAfterHolds(ctx), protocol.LoginStageRestart
 	}
 	noticeChanged, noticeErr := l.applyNotice(ctx, s.Notice)
 	if noticeChanged && noticeErr == nil {
@@ -291,7 +314,10 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	if len(changed) > 0 {
 		l.Events.emit(protocol.EventLoginApplied, protocol.LoginApplied{Changed: changed})
 	}
-	if err := l.sessions(ctx, s, st.local, wasDenied, s.Suspended && !wasSuspended); err != nil {
+	// A suspension counts as applied only once himmelblau.conf denies everyone: while its write fails, every pass would
+	// otherwise terminate the sessions and report the suspension again.
+	suspended := s.Suspended && !wasSuspended && suspendedConf(l.read(HimmelblauConf))
+	if err := l.sessions(ctx, s, st.local, wasDenied, suspended); err != nil {
 		return l.fail(r.ID, protocol.LoginStageSessions, err)
 	}
 	if aptErr != nil {
@@ -299,6 +325,9 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	if res, ok := l.checkPAM(r.ID); !ok {
 		return res
+	}
+	if confErr != nil {
+		return l.fail(r.ID, confStage, confErr)
 	}
 	if noticeErr != nil {
 		return l.fail(r.ID, protocol.LoginStageNotice, noticeErr)
@@ -424,6 +453,10 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		}
 		confWritten = true
 	}
+	if _, err := l.ensureSocketDropIn(ctx); err != nil {
+		// Not errConfig: Apply would return before the deny list. The drift step after the installation retries it.
+		slog.WarnContext(ctx, "writing the himmelblaud socket drop-ins before the installation failed", "error", err)
+	}
 	err = l.install(ctx, version)
 	switch {
 	case err == nil:
@@ -444,6 +477,35 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		return false, confWritten, errors.Join(err, l.Sys.Remove(HimmelblauConf))
 	}
 	return false, confWritten, err
+}
+
+// ensureSocketDropIn writes the HimmelblauSocketDropIns that differ and reloads systemd, so that the next stop of the
+// socket units removes their nodes. It goes with the configuration, before the packages start the units; a failed
+// installation leaves it, inert without the unit.
+func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
+	written := false
+	for _, p := range HimmelblauSocketDropIns {
+		if l.fileIs(p, himmelblaudSocketDropIn) {
+			continue
+		}
+		if err := l.Sys.WriteFileAtomic(p, himmelblaudSocketDropIn, 0o644, 0, 0); err != nil {
+			return written, err
+		}
+		written = true
+	}
+	if !written && !l.reloadPending.Load() {
+		return false, nil
+	}
+	l.reloadPending.Store(true)
+	if err := run(ctx, l.Sys, []string{"systemctl daemon-reload"}); err != nil {
+		return written, err
+	}
+	l.reloadPending.Store(false)
+	return true, nil
+}
+
+func (l *Login) socketDropInsAre() bool {
+	return !slices.ContainsFunc(HimmelblauSocketDropIns, func(p string) bool { return !l.fileIs(p, himmelblaudSocketDropIn) })
 }
 
 func (l *Login) now() time.Time {
