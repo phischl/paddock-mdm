@@ -473,3 +473,46 @@ func TestInventoryRoundNotLeaderResetsClaimGauge(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestInventoryRoundAnnouncedResetRaisesNoFleetSilence (plan M5a amendment 2026-11-24 f, F-8; regression H1-a): an
+// unbound device announces an enrollment reset; its stored host stops at once while the new host is listed and fresh.
+// The device and a peer check in every round; the device's token cannot be resolved for 45 minutes. No
+// device.tamper_fleetd_silent and no claim are recorded, and the device ends bound to the new host.
+func TestInventoryRoundAnnouncedResetRaisesNoFleetSilence(t *testing.T) {
+	r := newFleetRig(t, 2)
+	dev := r.devices[0]
+	if err := r.tick(t); err != nil {
+		t.Fatal(err)
+	}
+	hw := r.value(t, "SELECT hardware_uuid FROM device WHERE id = $1", dev)
+	next := r.id(50)
+	r.host(next, hw, true)
+	r.binder.hosts[tokenA] = ports.HostSeen{Ref: next, HardwareUUID: hw}
+	r.binder.err = fmt.Errorf("%w: fleet device endpoint: HTTP 503", problem.UpstreamUnavailable)
+	r.report(t, dev, tokenA, r.clock)
+	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_fleet_binding SET reset_announced_at = $2 WHERE device_id = $1",
+		dev, r.clock); err != nil {
+		t.Fatal(err)
+	}
+	r.frozen[r.hosts[0]] = true
+	start := r.clock
+	for r.clock.Sub(start) < 90*time.Minute {
+		if r.clock.Sub(start) >= 40*time.Minute {
+			r.binder.err = nil
+		}
+		at := r.clock.Add(DefaultInventorySyncInterval)
+		r.src.seenAt[next], r.src.policyAt[next] = at, &at
+		if err := r.tick(t); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := r.events(t, dev); n != 0 {
+		t.Fatalf("%d %s events for an announced reset", n, fleetdSilentCode)
+	}
+	if n := r.bindRig.events(t, claimCode, dev); n != 0 {
+		t.Fatalf("%d claims for an announced reset", n)
+	}
+	if got := r.boundHost(t, dev); got != next {
+		t.Fatalf("bound to %q, want the new host %q", got, next)
+	}
+}

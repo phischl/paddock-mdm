@@ -66,7 +66,8 @@ func (q *Queries) ClearFleetDeviceToken(ctx context.Context, arg ClearFleetDevic
 }
 
 const clearFleetSilence = `-- name: ClearFleetSilence :exec
-UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_reported_at = NULL
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL,
+                                fleet_silent_reported_at = NULL
 WHERE device_id = ANY($1::uuid[])
 `
 
@@ -439,7 +440,12 @@ SELECT w.device_id::uuid AS device_id, w.organization_id::uuid AS organization_i
        coalesce(w.last_seen_at, 'epoch')::timestamptz AS last_seen_at,
        coalesce(w.policy_updated_at, 'epoch')::timestamptz AS policy_updated_at,
        coalesce(w.fleet_silent_since, 'epoch')::timestamptz AS fleet_silent_since,
-       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at
+       coalesce(w.fleet_silent_checkin_at, 'epoch')::timestamptz AS fleet_silent_checkin_at,
+       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at,
+       coalesce(w.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
+       coalesce(w.bound_at, 'epoch')::timestamptz AS bound_at,
+       coalesce(w.suspended_at, 'epoch')::timestamptz AS suspended_at,
+       coalesce(w.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at
 FROM paddock_fleet_watch_devices() w ORDER BY w.device_id
 `
 
@@ -453,7 +459,12 @@ type FleetWatchDevicesRow struct {
 	LastSeenAt            time.Time
 	PolicyUpdatedAt       time.Time
 	FleetSilentSince      time.Time
+	FleetSilentCheckinAt  time.Time
 	FleetSilentReportedAt time.Time
+	ResetAnnouncedAt      time.Time
+	BoundAt               time.Time
+	SuspendedAt           time.Time
+	FleetReenrolledAt     time.Time
 }
 
 // The fleetd silence watch (plan M5a amendments 2026-11-16 c and d).
@@ -476,7 +487,12 @@ func (q *Queries) FleetWatchDevices(ctx context.Context) ([]FleetWatchDevicesRow
 			&i.LastSeenAt,
 			&i.PolicyUpdatedAt,
 			&i.FleetSilentSince,
+			&i.FleetSilentCheckinAt,
 			&i.FleetSilentReportedAt,
+			&i.ResetAnnouncedAt,
+			&i.BoundAt,
+			&i.SuspendedAt,
+			&i.FleetReenrolledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1391,6 +1407,18 @@ func (q *Queries) MarkLeftInventoryHostRemoved(ctx context.Context, arg MarkLeft
 	return err
 }
 
+const noteFleetSilenceCheckin = `-- name: NoteFleetSilenceCheckin :exec
+UPDATE device_inventory_ref i SET fleet_silent_checkin_at = s.last_contact_at
+FROM device_status s
+WHERE s.device_id = i.device_id AND i.device_id = ANY($1::uuid[])
+  AND i.fleet_silent_since IS NOT NULL AND i.fleet_silent_checkin_at IS NULL AND s.last_contact_at IS NOT NULL
+`
+
+func (q *Queries) NoteFleetSilenceCheckin(ctx context.Context, deviceIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, noteFleetSilenceCheckin, deviceIds)
+	return err
+}
+
 const recordRelistedInventoryHost = `-- name: RecordRelistedInventoryHost :exec
 INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
 VALUES ($1, $2, $3, 'relisted', $4)
@@ -1446,7 +1474,8 @@ func (q *Queries) RecordRetiredInventoryHost(ctx context.Context, deviceID uuid.
 }
 
 const resetFleetSilence = `-- name: ResetFleetSilence :exec
-UPDATE device_inventory_ref SET fleet_silent_since = NULL WHERE device_id = ANY($1::uuid[])
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL
+WHERE device_id = ANY($1::uuid[])
 `
 
 func (q *Queries) ResetFleetSilence(ctx context.Context, deviceIds []uuid.UUID) error {

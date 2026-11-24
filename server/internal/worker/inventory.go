@@ -674,7 +674,7 @@ func (i *Inventory) watchFleet(ctx context.Context, seen []ports.HostSeen, t inv
 	}
 	for _, org := range orgs {
 		part := w.ForOrganization(org, devices)
-		if len(part.Start)+len(part.Reset)+len(part.Clear)+len(part.Report) == 0 {
+		if len(part.Start)+len(part.Note)+len(part.Reset)+len(part.Clear)+len(part.Report) == 0 {
 			continue
 		}
 		ids, err := i.sync.ApplyFleetWatch(systemContext(ctx, org, "inventory-sync"), part, now)

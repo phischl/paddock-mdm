@@ -309,7 +309,8 @@ func TestInventoryFleetSuppressedGauge(t *testing.T) {
 }
 
 // TestInventoryRoundFleetWorkerRestart (plan M5a amendment 2026-11-16 c, section 8): a new worker instance continues
-// the stored state: a device silent for 16 minutes is reported in its first round, exactly once across both instances.
+// the stored state: a device silent for 16 minutes with a noted check-in is reported in its first round, exactly once
+// across both instances.
 func TestInventoryRoundFleetWorkerRestart(t *testing.T) {
 	r := newFleetRig(t, 4)
 	watched := r.devices[0]
@@ -325,8 +326,8 @@ func TestInventoryRoundFleetWorkerRestart(t *testing.T) {
 	if r.since(t, watched) == "" || r.events(t, watched) != 0 {
 		t.Fatal("the silence did not start")
 	}
-	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_inventory_ref SET fleet_silent_since = $2 WHERE device_id = $1",
-		watched, r.clock.Add(-16*time.Minute)); err != nil {
+	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_inventory_ref SET fleet_silent_since = $2, fleet_silent_checkin_at = $3 WHERE device_id = $1",
+		watched, r.clock.Add(-16*time.Minute), r.clock.Add(-5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	old := r.inv
@@ -375,5 +376,22 @@ func TestInventoryRoundAgentRunningQueryFails(t *testing.T) {
 	}
 	if g := testutil.ToFloat64(metricPolicyUnanswered.WithLabelValues(inventory.PolicyAgentRunning)); g < 1 {
 		t.Fatalf("the unanswered gauge stopped counting the host: %v", g)
+	}
+}
+
+// TestInventoryRoundAgentRunningGateClosed (plan M5a amendment 2026-11-24 f, L-a): right after the definition was applied
+// the gate is closed, and an unanswered paddock_agent_running stores no failing result.
+func TestInventoryRoundAgentRunningGateClosed(t *testing.T) {
+	r := newBinaryRig(t, strings.Repeat("a", 64))
+	at := r.clock
+	r.src.results = []ports.PolicyResult{{Key: inventory.PolicyAgentBinaryKnown, Passing: true}}
+	r.src.unanswered, r.src.evaluatedAt = []string{inventory.PolicyAgentRunning}, &at
+	r.round(t)
+	if n := r.f.count(t, "SELECT count(*) FROM inventory_policy_result WHERE device_id = $1 AND policy_key = $2", r.dev,
+		inventory.PolicyAgentRunning); n != 0 {
+		t.Fatalf("%d agent-running results stored while the gate was closed", n)
+	}
+	if n := r.f.count(t, "SELECT count(*) FROM inventory_policy_result WHERE device_id = $1", r.dev); n == 0 {
+		t.Fatal("the host's other results were not stored")
 	}
 }

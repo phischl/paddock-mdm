@@ -824,7 +824,8 @@ func answerEvery(t *testing.T, tick func(ctx context.Context)) {
 
 // startFleetPeers enrolls n simulated devices in the device's organization, each with a simulated Fleet host, which
 // check in and answer Fleet every 30 s until the test ends (plan M5a amendment 2026-11-16 c, F7 step 1): each VM brings
-// its own fresh peers, so the fleetd silence watch's majority guard holds without the other VM. It returns their IDs.
+// its own fresh peers, so the fleetd silence watch's majority guard holds without the other VM; they are retired when
+// the test ends. It returns their IDs.
 func startFleetPeers(t *testing.T, d *Device, n int) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -868,6 +869,10 @@ func startFleetPeers(t *testing.T, d *Device, n int) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Registered before the answering goroutine, so it runs after that stopped.
+		t.Cleanup(func() {
+			d.s.cleanupCall(t, http.MethodPost, "/api/v1/devices/"+dev.DeviceID+"/retire", http.StatusOK, http.StatusConflict)
+		})
 		answerEvery(t, func(ctx context.Context) {
 			_, _, _ = dev.Checkin(ctx)
 			_, _ = host.Answer(ctx)
@@ -899,16 +904,17 @@ func gateF7(t *testing.T, d *Device, impostor string) []string {
 	hw := strings.ToLower(d.MustRoot("cat /sys/class/dmi/id/product_uuid"))
 	checkin := func() { d.Must("sudo pkill -HUP -x " + impostor + " || true") }
 	peers := startFleetPeers(t, d, 2)
-	if h, ok := fleetHostByUUID(t, hw); ok {
-		first := h
-		time.Sleep(3 * time.Minute)
-		if h, ok = fleetHostByUUID(t, hw); ok && first.SeenTime != nil && h.SeenTime != nil {
-			t.Logf("%s: probe seen_time %s -> %s over 3 minutes", d.Name, first.SeenTime, h.SeenTime)
-			if !h.SeenTime.After(*first.SeenTime) {
-				t.Fatalf("%s: Fleet's seen_time of the running fleetd did not advance in 3 minutes (stop condition)", d.Name)
-			}
-		}
+	first, ok := fleetHostByUUID(t, hw)
+	if !ok || first.SeenTime == nil {
+		t.Fatalf("%s: Fleet lists no host with a seen_time for the device (stop condition)", d.Name)
 	}
+	time.Sleep(3 * time.Minute)
+	later, ok := fleetHostByUUID(t, hw)
+	if !ok || later.SeenTime == nil || !later.SeenTime.After(*first.SeenTime) {
+		t.Fatalf("%s: Fleet's seen_time of the running fleetd did not advance in 3 minutes: %v -> %v (stop condition)", d.Name,
+			first.SeenTime, later.SeenTime)
+	}
+	t.Logf("%s: probe seen_time %s -> %s over 3 minutes", d.Name, first.SeenTime, later.SeenTime)
 	gateF7FrozenOsquery(t, d, hw)
 
 	m0, claims0 := len(d.s.Events(t, fleetdSilentCode, d.ID)), len(d.s.Events(t, fleetHostClaimedCode, d.ID))

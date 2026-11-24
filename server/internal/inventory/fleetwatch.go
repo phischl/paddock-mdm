@@ -17,6 +17,9 @@ const (
 	// PolicySilence is how much older than the newest stored policy results of any host a device's may be before it
 	// is stale: three times Fleet's default policy interval.
 	PolicySilence = 30 * time.Minute
+	// FleetSilenceGap is how long a device may go without check-in before its open silence episode is dropped
+	// (plan M5a amendment 2026-11-24 f, F-M1).
+	FleetSilenceGap = 60 * time.Minute
 )
 
 // Reasons of device.tamper_fleetd_silent and of a suppressed round.
@@ -36,6 +39,10 @@ type WatchedDevice struct {
 	ExternalID, BoundHost ports.HostRef
 	// LastSeenAt and PolicyUpdatedAt are the stored host's values, used when the speaking host is not listed.
 	LastContactAt, LastSeenAt, PolicyUpdatedAt, SilentSince, ReportedAt *time.Time
+	// CheckinAt is the first check-in after the silence was found, outside a hold (amendment 2026-11-24 f, F-M1).
+	CheckinAt *time.Time
+	// ResetAnnouncedAt, BoundAt, SuspendedAt and ReenrolledAt start a hold (ADR 0057; amendment 2026-11-24 f, F-H1).
+	ResetAnnouncedAt, BoundAt, SuspendedAt, ReenrolledAt *time.Time
 }
 
 // SilentDevice is a device to report, with the inventory system's times the decision used (nil when unknown).
@@ -47,15 +54,16 @@ type SilentDevice struct {
 
 // FleetWatch are the decisions of one round.
 type FleetWatch struct {
-	Start, Reset, Clear []uuid.UUID
-	Report              []SilentDevice
-	// Due counts the devices due this round, Live the devices that check in, Fresh those of them that are not stale.
+	Start, Note, Reset, Clear []uuid.UUID
+	Report                    []SilentDevice
+	// Due counts the devices due this round, Live the devices that check in, are not held and are not reported and
+	// still stale, Fresh those of them that are not stale (amendment 2026-11-24 f, F-M2).
 	Due, Live, Fresh int
 	// Suppressed is SuppressedNoFreshPeer or SuppressedFreshMinority when due devices were held back, else "".
 	Suppressed string
 }
 
-// WatchFleet decides one round (E1 to E3, F5). seen is the round's complete host list and t its Targets; a device is
+// WatchFleet decides one round (E1, E3, F5 and amendment 2026-11-24 f). seen is the round's complete host list and t its Targets; a device is
 // judged by its speaking host, else by its stored values. live is app.AgentSilence. It is pure: no clock, no I/O.
 func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now time.Time, live time.Duration) FleetWatch {
 	var w FleetWatch
@@ -85,7 +93,8 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 		policyStale := policyAt != nil && policyAt.Before(p.Add(-PolicySilence))
 		stale := contactStale || policyStale
 		isLive := d.LastContactAt != nil && !d.LastContactAt.Before(now.Add(-live))
-		if isLive {
+		held, e := holdOf(d, now)
+		if isLive && !held && !(stale && d.ReportedAt != nil) {
 			w.Live++
 			if !stale {
 				w.Fresh++
@@ -93,16 +102,23 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 		}
 		switch {
 		case !stale:
-			if d.SilentSince != nil || d.ReportedAt != nil {
+			if d.SilentSince != nil || d.CheckinAt != nil || d.ReportedAt != nil {
 				w.Clear = append(w.Clear, d.DeviceID)
 			}
-		case !isLive:
+		case d.LastContactAt == nil || d.LastContactAt.Before(now.Add(-FleetSilenceGap)):
 			if d.SilentSince != nil {
 				w.Reset = append(w.Reset, d.DeviceID)
 			}
 		case d.SilentSince == nil:
-			w.Start = append(w.Start, d.DeviceID)
-		case d.ReportedAt == nil && now.Sub(*d.SilentSince) >= FleetSilenceConfirm:
+			if isLive {
+				w.Start = append(w.Start, d.DeviceID)
+			}
+		case d.CheckinAt == nil:
+			if d.LastContactAt.After(e) {
+				w.Note = append(w.Note, d.DeviceID)
+			}
+		// A second check-in after the noted one: a resume's first check-in before orbit reconnects is not enough.
+		case d.ReportedAt == nil && d.LastContactAt.After(*d.CheckinAt) && !now.Before(e.Add(FleetSilenceConfirm)):
 			s := SilentDevice{WatchedDevice: d, FleetdSeenAt: seenAt, FleetdPolicyUpdatedAt: policyAt, Reason: SilentPolicies}
 			if contactStale {
 				s.Reason = SilentContact
@@ -121,6 +137,35 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 		w.Report = due
 	}
 	return w
+}
+
+// holdOf returns whether d is held and its effective start E (amendment 2026-11-24 f, F-H1): a hold starts with an
+// announced enrollment reset not followed by a binding, a suspended binding or a re-enrollment, each counted only when
+// not later than the episode start, so that a later one never extends it, and lasts ClaimQuiet. E is the later of the
+// episode start and the hold end; it is zero without an episode.
+func holdOf(d WatchedDevice, now time.Time) (bool, time.Time) {
+	episode := now
+	if d.SilentSince != nil {
+		episode = *d.SilentSince
+	}
+	reset := d.ResetAnnouncedAt
+	if reset != nil && d.BoundAt != nil && !d.BoundAt.Before(*reset) {
+		reset = nil
+	}
+	var end time.Time
+	for _, at := range []*time.Time{reset, d.SuspendedAt, d.ReenrolledAt} {
+		if at != nil && !at.After(episode) && at.Add(ClaimQuiet).After(end) {
+			end = at.Add(ClaimQuiet)
+		}
+	}
+	var e time.Time
+	if d.SilentSince != nil {
+		e = *d.SilentSince
+		if end.After(e) {
+			e = end
+		}
+	}
+	return now.Before(end), e
 }
 
 // speakingHost returns the listed host that speaks for d (plan M5a amendment 2026-11-16 d, D-c1): the bound host, else
@@ -155,7 +200,7 @@ func (w FleetWatch) ForOrganization(org uuid.UUID, devices []WatchedDevice) Flee
 		}
 		return out
 	}
-	out := FleetWatch{Start: keep(w.Start), Reset: keep(w.Reset), Clear: keep(w.Clear)}
+	out := FleetWatch{Start: keep(w.Start), Note: keep(w.Note), Reset: keep(w.Reset), Clear: keep(w.Clear)}
 	for _, s := range w.Report {
 		if in[s.DeviceID] {
 			out.Report = append(out.Report, s)

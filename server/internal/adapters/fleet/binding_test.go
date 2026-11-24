@@ -112,3 +112,38 @@ func TestResolveDeviceToken(t *testing.T) {
 		t.Fatalf("transport error %v", err)
 	}
 }
+
+// TestPolicyUpdatedAtPlaceholder (plan M5a amendment 2026-11-24 f, F-L1): Fleet's 2000-01-01 placeholder of a host that
+// never stored policy results is nil in the host list and in the host detail; a real time is kept in both.
+func TestPolicyUpdatedAtPlaceholder(t *testing.T) {
+	for _, c := range []struct {
+		at   string
+		want *time.Time
+	}{
+		{"2000-01-01T00:00:00Z", nil},
+		{"2026-11-24T10:00:00Z", func() *time.Time { at := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC); return &at }()},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := `{"id": 7, "uuid": "u-7", "seen_time": "2026-11-24T10:00:00Z", "policy_updated_at": "` + c.at + `"}`
+			if r.URL.Path == "/api/latest/fleet/hosts/7" {
+				_, _ = w.Write([]byte(`{"host": ` + h + `}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"hosts": [` + h + `]}`))
+		}))
+		page, err := client(srv.URL).ListHostsChangedSince(context.Background(), time.Time{}, "")
+		if err != nil || len(page.Seen) != 1 {
+			t.Fatalf("%s: list %+v, %v", c.at, page, err)
+		}
+		inv, err := client(srv.URL).HostInventory(context.Background(), "7")
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, got := range map[string]*time.Time{"list": page.Seen[0].PolicyUpdatedAt, "detail": inv.PolicyUpdatedAt} {
+			if (got == nil) != (c.want == nil) || got != nil && !got.Equal(*c.want) {
+				t.Errorf("%s %s: %v, want %v", c.at, name, got, c.want)
+			}
+		}
+	}
+}

@@ -443,25 +443,30 @@ func (s *InventorySync) FleetWatchDevices(ctx context.Context) ([]inventory.Watc
 				HardwareUUID: r.HardwareUuid, ExternalID: ports.HostRef(r.ExternalID), BoundHost: ports.HostRef(r.BoundHost),
 				LastContactAt: nullTime(r.LastContactAt), LastSeenAt: nullTime(r.LastSeenAt),
 				PolicyUpdatedAt: nullTime(r.PolicyUpdatedAt), SilentSince: nullTime(r.FleetSilentSince),
-				ReportedAt: nullTime(r.FleetSilentReportedAt)})
+				ReportedAt: nullTime(r.FleetSilentReportedAt), CheckinAt: nullTime(r.FleetSilentCheckinAt),
+				ResetAnnouncedAt: nullTime(r.ResetAnnouncedAt), BoundAt: nullTime(r.BoundAt), SuspendedAt: nullTime(r.SuspendedAt),
+				ReenrolledAt: nullTime(r.FleetReenrolledAt)})
 		}
 		return err
 	})
 	return out, err
 }
 
-// ApplyFleetWatch applies the decisions of w that concern the organization in ctx: Start, Reset and Clear in one
+// ApplyFleetWatch applies the decisions of w that concern the organization in ctx: Clear, Reset, Start and Note in one
 // transaction, then each report as device.tamper_fleetd_silent with a tamper finding, once per silence: the mark and
 // the event are one transaction, and a device already marked records nothing. It returns the reported devices.
 func (s *InventorySync) ApplyFleetWatch(ctx context.Context, w inventory.FleetWatch, now time.Time) ([]uuid.UUID, error) {
 	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		if err := q.StartFleetSilence(ctx, pgstore.StartFleetSilenceParams{At: now, DeviceIds: nonNilIDs(w.Start)}); err != nil {
+		if err := q.ClearFleetSilence(ctx, nonNilIDs(w.Clear)); err != nil {
 			return err
 		}
 		if err := q.ResetFleetSilence(ctx, nonNilIDs(w.Reset)); err != nil {
 			return err
 		}
-		return q.ClearFleetSilence(ctx, nonNilIDs(w.Clear))
+		if err := q.StartFleetSilence(ctx, pgstore.StartFleetSilenceParams{At: now, DeviceIds: nonNilIDs(w.Start)}); err != nil {
+			return err
+		}
+		return q.NoteFleetSilenceCheckin(ctx, nonNilIDs(w.Note))
 	})
 	if err != nil {
 		return nil, err

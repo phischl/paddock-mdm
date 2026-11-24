@@ -900,7 +900,8 @@ const fleetdSilentCode = "device.tamper_fleetd_silent"
 //  1. three peers check in and their simulated hosts answer Fleet every iteration, so that most live devices reach
 //     Fleet;
 //  2. silent checks in every iteration and has no host in Fleet; its inventory reference is seeded with a last contact
-//     20 minutes ago and a silence that started 16 minutes ago (the branch of a host deleted in Fleet, confirmed);
+//     20 minutes ago, a silence that started 16 minutes ago and a check-in noted 10 minutes ago (the branch of a host
+//     deleted in Fleet, confirmed);
 //  3. quiet is seeded alike without a silence start and stops checking in after the first iteration.
 //
 // alice sees exactly one device.tamper_fleetd_silent for silent with its params and a tamper finding; quiet gets a
@@ -926,9 +927,10 @@ func TestInventoryFleetdSilent(t *testing.T) {
 		}
 	}
 	if _, err := db.Exec(testContext(t, time.Minute), `INSERT INTO device_inventory_ref
-		(device_id, organization_id, external_id, last_seen_at, fleet_silent_since)
+		(device_id, organization_id, external_id, last_seen_at, fleet_silent_since, fleet_silent_checkin_at)
 		SELECT id, organization_id, 'acceptance-missing', now() - interval '20 minutes',
-		       CASE WHEN id = $1 THEN now() - interval '16 minutes' END
+		       CASE WHEN id = $1 THEN now() - interval '16 minutes' END,
+		       CASE WHEN id = $1 THEN now() - interval '10 minutes' END
 		FROM device WHERE id = ANY($2::uuid[])`, silent.DeviceID, []string{silent.DeviceID, quiet.DeviceID}); err != nil {
 		t.Fatal(err)
 	}

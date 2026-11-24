@@ -563,6 +563,7 @@ type DeviceInventoryRef struct {
 	FleetClaimSince       *time.Time
 	FleetClaimReportedAt  *time.Time
 	FleetSilentSince      *time.Time
+	FleetSilentCheckinAt  *time.Time
 	FleetSilentReportedAt *time.Time
 }
 

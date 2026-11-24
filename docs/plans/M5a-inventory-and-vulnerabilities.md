@@ -4975,10 +4975,10 @@ Agent tests with a real applier and checker:
 
 ## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds, sparse check-ins and the majority guard of the fleetd silence watch
 
-Status: **proposed** (architect, 2026-11-24). It amends amendments 2026-11-16 c and d for the fix round of PDK-1122d.
-Where they differ, this amendment wins. ADR 0056 records the decision in its amendment "2026-11-24 f". It builds on
-ADR 0057 (accepted) and on the implementation in commits `d4fcaa20` and `539584fe`. Migration `00164` is not merged
-anywhere, so this amendment changes it in place.
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). It amends amendments
+2026-11-16 c and d for the fix round of PDK-1122d. Where they differ, this amendment wins. ADR 0056 records the decision
+in its amendment "2026-11-24 f". It builds on ADR 0057 (accepted) and on the implementation in commits `d4fcaa20` and
+`539584fe`. Migration `00164` is not merged anywhere, so this amendment changes it in place.
 
 ### F-1. Goal
 
@@ -5381,8 +5381,7 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 - **A device that checks in less often than once an hour** is not reported. The portal shows it as not in contact for
   most of the time. RR-149.
 - **A future `seen_time`** blinds the watch until that time passes. The alert fires. RR-149 and the runbook.
-- **Open:** the status of this amendment and of ADR 0056 amendment f is "proposed" until main accepts them with the
-  fix round.
+- **Resolved:** main accepted this amendment and ADR 0056 amendment f with the fix round.
 
 ### F-13. Size (estimate)
 

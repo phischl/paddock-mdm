@@ -339,7 +339,7 @@ every locked user. The remaining gaps are listed in RR-148.
 
 ## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds and sparse check-ins in the fleetd silence watch
 
-Status: **proposed** (architect, 2026-11-24; main accepts it with the PDK-1122d fix round). Details, texts and tests:
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). Details, texts and tests:
 plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-24 f (architect, PDK-1122d review 1)".
 
 **Context.** The review of amendment c's implementation found three problems:

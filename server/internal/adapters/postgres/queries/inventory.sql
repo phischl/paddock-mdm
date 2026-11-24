@@ -403,18 +403,31 @@ SELECT w.device_id::uuid AS device_id, w.organization_id::uuid AS organization_i
        coalesce(w.last_seen_at, 'epoch')::timestamptz AS last_seen_at,
        coalesce(w.policy_updated_at, 'epoch')::timestamptz AS policy_updated_at,
        coalesce(w.fleet_silent_since, 'epoch')::timestamptz AS fleet_silent_since,
-       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at
+       coalesce(w.fleet_silent_checkin_at, 'epoch')::timestamptz AS fleet_silent_checkin_at,
+       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at,
+       coalesce(w.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
+       coalesce(w.bound_at, 'epoch')::timestamptz AS bound_at,
+       coalesce(w.suspended_at, 'epoch')::timestamptz AS suspended_at,
+       coalesce(w.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at
 FROM paddock_fleet_watch_devices() w ORDER BY w.device_id;
 
 -- name: StartFleetSilence :exec
 UPDATE device_inventory_ref SET fleet_silent_since = @at::timestamptz
 WHERE device_id = ANY(@device_ids::uuid[]) AND fleet_silent_since IS NULL;
 
+-- name: NoteFleetSilenceCheckin :exec
+UPDATE device_inventory_ref i SET fleet_silent_checkin_at = s.last_contact_at
+FROM device_status s
+WHERE s.device_id = i.device_id AND i.device_id = ANY(@device_ids::uuid[])
+  AND i.fleet_silent_since IS NOT NULL AND i.fleet_silent_checkin_at IS NULL AND s.last_contact_at IS NOT NULL;
+
 -- name: ResetFleetSilence :exec
-UPDATE device_inventory_ref SET fleet_silent_since = NULL WHERE device_id = ANY(@device_ids::uuid[]);
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
 
 -- name: ClearFleetSilence :exec
-UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_reported_at = NULL
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL,
+                                fleet_silent_reported_at = NULL
 WHERE device_id = ANY(@device_ids::uuid[]);
 
 -- name: MarkFleetSilentReported :execrows
