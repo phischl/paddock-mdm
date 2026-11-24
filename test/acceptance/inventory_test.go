@@ -190,7 +190,9 @@ var (
 // acme never sees globex's inventory (nor the other way round). Fleet free reports no CVSS score or severity: the
 // findings are "unknown".
 func TestInventoryF3SoftwareAndVulnerabilities(t *testing.T) {
-	waitFleetVulnerabilityData(t, acmeCVE, globexCVE)
+	waitFleetVulnerabilityData(t,
+		fleetOSVFinding{acmeVulnerable[0], acmeVulnerable[1], acmeCVE, time.Date(2022, 5, 17, 18, 0, 0, 0, time.UTC)},
+		fleetOSVFinding{globexVulnerable[0], globexVulnerable[1], globexCVE, time.Date(2024, 2, 5, 15, 15, 0, 0, time.UTC)})
 	alice, carol := login(t, env.Alice), login(t, env.Carol)
 	suffix := uniqueSuffix()
 	acmeDevice := activeDevice(t, alice, "", "inv-f3-acme-"+suffix)

@@ -20,13 +20,37 @@ token (60 requests per hour and address). Development and CI stacks skip that lo
 `FLEET_CPE_TRANSLATIONS_URL` in the development and CI section at the end of `deploy/compose/versions.env`, which
 the operator bundle does not ship) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
 latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's limit still gets the data the
-inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
-API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
-variables still exist and move the pin to a current `fleetdm/nvd` release (its asset `cpe-<sha256>.sqlite.gz` and
-`cpe_translations.json`). Fleet skips its once-a-day check when the CPE URL is set and downloads the database on
-every vulnerability run, which is why the development period stays at 1 hour (see the round intervals below); if the
-pinned release is ever pruned, the inventory gates fail with Fleet's download error
-and the pin is moved the same way.
+inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, Windows Office, Go vulnerability
+database, OVAL and OSV syncs still use the API; Fleet logs each failure (`"cron":"vulnerabilities"`, for example
+`updating OSV artifacts` with `github http status error: 403`) and continues its run with the data already on disk.
+With its default OSV setting, Fleet matches Ubuntu deb packages (except kernel images) only through its OSV
+artifacts (OVAL when OSV is off), not through the CPE dictionary, so a Fleet that has never downloaded the artifact
+for an Ubuntu release reports no package findings for its hosts until a later run gets past the limit; once the artifact
+is on disk, a failed sync leaves the last one in use. Gate F3 therefore seeds an artifact with its two
+findings into Fleet's volume before it waits (ADR 0009 amendment 2026-11-24 (c)); the seed
+exists only in the development and test stack, and an artifact Fleet downloads itself takes precedence over it. Fleet
+skips its once-a-day check when the CPE URL is set and downloads the database on every vulnerability run, which is why
+the development period stays at 1 hour (see the round intervals below); if the pinned release is ever pruned, the
+inventory gates fail with Fleet's download error and the pin is moved as in the checklist below.
+
+## Checklist for a `FLEET_IMAGE` upgrade
+
+Work through it for every change of `FLEET_IMAGE`, in addition to green inventory gates (F0–F4), and record the result
+with the upgrade:
+
+1. **Direct URLs.** The three variables above still exist in the new version; move the pin to a current `fleetdm/nvd`
+   release (its assets `cpe-<sha256>.sqlite.gz` and `cpe_translations.json`).
+2. **Matching source per platform.** In Fleet's source at the new tag, compare with the table in ADR 0009 amendment
+   2026-11-24 (c) which data matches the software of an Ubuntu host and where Fleet finds that data: the phases of
+   `scanVulnerabilities` in `cmd/fleet/cron.go`, the sources `TranslateSoftwareToCPE` excludes
+   (`server/vulnerabilities/nvd/cpe.go`, `oval.SupportedSoftwareSources`), the default of
+   `vulnerabilities.osv_for_vulnerabilities`, and whether each source is fetched from a configurable URL or through
+   GitHub's API. Release notes and green gates do not show such a change: a runner within GitHub's limit passes either
+   way. A difference needs an architect decision before the upgrade merges.
+3. **OSV seed of gate F3.** `OSVArtifact` and `OSVVulnerability` in `server/vulnerabilities/osv/analyzer.go` still
+   have the fields the seed writes, artifacts are still named `osv-ubuntu-<release>-<date>.json.gz`, and Fleet still
+   prefers the artifact of the current day, then the newest by name, and removes older ones after a successful lookup
+   (`osv/artifact.go`), so that its own download keeps winning over the seed dated 2000-01-01.
 
 ## What is published
 

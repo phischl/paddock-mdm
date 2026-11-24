@@ -154,6 +154,7 @@
 0 TestWithoutOwnFailedAttempts
 0 TestSessionsEndAll
 0 TestSessionsPlatformEmptied
+0 TestFleetOSVArtifactMatchesTheGateFindings
 # Runs in every shard but only does something on a stack with an ingest worker (PDK-1070): CI adds it to shard 1.
 0 TestIngestWorkerConsumes
 0 TestUnknownTestRunsInExactlyOneShard
