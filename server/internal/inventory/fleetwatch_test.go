@@ -398,7 +398,7 @@ func TestWatchFleetTimeline(t *testing.T) {
 			switch {
 			case row.want == nil && len(got) != 1:
 				t.Fatalf("reports in rounds %v, want exactly one", got)
-			case row.want != nil && fmt.Sprint(got) != fmt.Sprint(row.want) && !(len(got) == 0 && len(row.want) == 0):
+			case row.want != nil && fmt.Sprint(got) != fmt.Sprint(row.want) && (len(got) != 0 || len(row.want) != 0):
 				t.Fatalf("reports in rounds %v, want %v", got, row.want)
 			}
 		})

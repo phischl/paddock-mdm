@@ -98,7 +98,7 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 		stale := contactStale || policyStale
 		isLive := d.LastContactAt != nil && !d.LastContactAt.Before(now.Add(-live))
 		held, e := holdOf(d, now)
-		if isLive && !held && !(stale && d.ReportedAt != nil) {
+		if isLive && !held && (!stale || d.ReportedAt == nil) {
 			w.Live++
 			if !stale {
 				w.Fresh++
