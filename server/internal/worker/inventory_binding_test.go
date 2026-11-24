@@ -516,3 +516,56 @@ func TestInventoryRoundAnnouncedResetRaisesNoFleetSilence(t *testing.T) {
 		t.Fatalf("bound to %q, want the new host %q", got, next)
 	}
 }
+
+// TestInventoryRoundSecondResetRebindsAtOnce (plan M5a amendment f, F-15.5): a bound device whose reset hold was granted
+// six hours ago resets fleetd again; its old host stops, the new host is fresh and the device reports its token while
+// the old host is still fresh. It is rebound in the first round after the token arrives, and neither
+// device.tamper_fleetd_silent nor a claim is recorded.
+func TestInventoryRoundSecondResetRebindsAtOnce(t *testing.T) {
+	r := newFleetRig(t, 2)
+	dev := r.devices[0]
+	if err := r.tick(t); err != nil {
+		t.Fatal(err)
+	}
+	hw := r.value(t, "SELECT hardware_uuid FROM device WHERE id = $1", dev)
+	r.bindNow(t, dev, r.hosts[0], hw)
+	first := r.clock.Add(-6 * time.Hour)
+	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_fleet_binding SET reset_announced_at = $2, bound_at = $3 WHERE device_id = $1",
+		dev, first, first.Add(40*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_inventory_ref SET fleet_reset_hold_at = $2 WHERE device_id = $1",
+		dev, first); err != nil {
+		t.Fatal(err)
+	}
+	next := r.id(60)
+	r.host(next, hw, true)
+	r.binder.hosts[tokenB] = ports.HostSeen{Ref: next, HardwareUUID: hw}
+	r.report(t, dev, tokenB, r.clock)
+	if _, err := r.f.super.Exec(context.Background(), "UPDATE device_fleet_binding SET reset_announced_at = $2 WHERE device_id = $1",
+		dev, r.clock); err != nil {
+		t.Fatal(err)
+	}
+	r.frozen[r.hosts[0]] = true
+	advance := func() {
+		t.Helper()
+		at := r.clock.Add(DefaultInventorySyncInterval)
+		r.src.seenAt[next], r.src.policyAt[next] = at, &at
+		if err := r.tick(t); err != nil {
+			t.Fatal(err)
+		}
+	}
+	advance()
+	if got := r.boundHost(t, dev); got != next {
+		t.Fatalf("bound to %q after the first round, want the new host %q", got, next)
+	}
+	for range 12 {
+		advance()
+	}
+	if n := r.events(t, dev); n != 0 {
+		t.Fatalf("%d %s events for a second reset", n, fleetdSilentCode)
+	}
+	if n := r.bindRig.events(t, claimCode, dev); n != 0 {
+		t.Fatalf("%d claims for a second reset", n)
+	}
+}

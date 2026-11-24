@@ -26,6 +26,7 @@ type watchCase struct {
 	contactAgo, sinceAgo, reportedAgo            *time.Duration
 	checkinAgo                                   *time.Duration
 	resetAgo, boundAgo, suspendedAgo, reenrolled *time.Duration
+	resetHoldAgo                                 *time.Duration
 	// bound binds the device to boundHost, else to its own host.
 	bound      bool
 	boundHost  ports.HostRef
@@ -60,7 +61,8 @@ func build(cases []watchCase) ([]WatchedDevice, []ports.HostSeen) {
 		d := WatchedDevice{DeviceID: uuid.New(), OrganizationID: uuid.New(), HardwareUUID: hw, ExternalID: ref,
 			LastSeenAt: at(c.storedSeenAgo), PolicyUpdatedAt: at(c.storedPolicyAgo), LastContactAt: at(c.contactAgo),
 			SilentSince: at(c.sinceAgo), ReportedAt: at(c.reportedAgo), CheckinAt: at(c.checkinAgo),
-			ResetAnnouncedAt: at(c.resetAgo), BoundAt: at(c.boundAgo), SuspendedAt: at(c.suspendedAgo), ReenrolledAt: at(c.reenrolled)}
+			ResetAnnouncedAt: at(c.resetAgo), BoundAt: at(c.boundAgo), SuspendedAt: at(c.suspendedAgo), ReenrolledAt: at(c.reenrolled),
+			ResetHoldAt: at(c.resetHoldAgo)}
 		if c.bound {
 			d.BoundHost = ref
 			if c.boundHost != "" {
@@ -122,10 +124,10 @@ func TestWatchFleet(t *testing.T) {
 	reportedStale := watchCase{host: stale25, contactAgo: live, sinceAgo: m(60), checkinAgo: m(50), reportedAgo: m(30)}
 	policyStale := watchCase{host: &watchHost{policyAgo: 40 * time.Minute}, contactAgo: live}
 	type want struct {
-		start, note, reset, clear, report []int
-		suppressed                        string
-		reason                            string
-		live                              int
+		start, held, note, reset, clear, report []int
+		suppressed                              string
+		reason                                  string
+		live                                    int
 	}
 	rows := []struct {
 		name  string
@@ -213,6 +215,18 @@ func TestWatchFleet(t *testing.T) {
 			want{report: []int{0}, reason: SilentContact, live: 2}},
 		{"guard without reported devices (M2)", append([]watchCase{due(watchCase{host: stale25}), reportedStale, reportedStale, reportedStale,
 			reportedStale}, peers(2)...), want{report: []int{0}, reason: SilentContact, live: 3}},
+		{"no start for a device that last checked in 30 min ago (L-1)", append([]watchCase{{host: stale25, contactAgo: m(30)}}, peers(3)...),
+			want{}},
+		{"reset hold: none granted yet, a held start", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(1)}}, peers(3)...),
+			want{start: []int{0}, held: []int{0}}},
+		{"reset hold: 23 h after the granted one, a plain start", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(1),
+			resetHoldAgo: m(23*60 + 1)}}, peers(3)...), want{start: []int{0}}},
+		{"reset hold: 23 h after the granted one, reported (regression L-1)", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(25),
+			resetHoldAgo: m(23*60 + 25), sinceAgo: m(20), checkinAgo: m(10)}}, peers(3)...), want{report: []int{0}, reason: SilentContact}},
+		{"reset hold: 24 h after the granted one, a held start", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(1),
+			resetHoldAgo: m(24*60 + 1)}}, peers(3)...), want{start: []int{0}, held: []int{0}}},
+		{"reset hold: the granted announcement continues", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(35),
+			resetHoldAgo: m(35), sinceAgo: m(20), checkinAgo: m(10)}}, peers(3)...), want{live: 3}},
 		{"only fully fresh devices are fresh (M-a)", append([]watchCase{due(watchCase{host: stale25}), policyStale, policyStale}, peers(1)...),
 			want{start: []int{1, 2}, suppressed: SuppressedFreshMinority, live: 4}},
 	}
@@ -221,6 +235,7 @@ func TestWatchFleet(t *testing.T) {
 			devices, seen := build(row.cases)
 			w := WatchFleet(devices, seen, HostTargets(seen, nil, nil, nil), watchNow, 15*time.Minute)
 			got := want{start: ids(w, devices, func(w FleetWatch) []uuid.UUID { return w.Start }),
+				held:   ids(w, devices, func(w FleetWatch) []uuid.UUID { return w.HeldStart }),
 				note:   ids(w, devices, func(w FleetWatch) []uuid.UUID { return w.Note }),
 				reset:  ids(w, devices, func(w FleetWatch) []uuid.UUID { return w.Reset }),
 				clear:  ids(w, devices, func(w FleetWatch) []uuid.UUID { return w.Clear }),
@@ -245,6 +260,8 @@ type timelineDevice struct {
 	seen    func(m int) int
 	contact func(m int) (int, bool)
 	bindAt  int
+	// resets are further reset announcements of a device bound to its own host before minute 0 (F-15).
+	resets []int
 }
 
 // every checks in every interval minutes at offset off, also before minute 0; none during the gaps.
@@ -275,6 +292,9 @@ func runTimeline(d timelineDevice) []int {
 	if d.bindAt != 0 {
 		dev.ResetAnnouncedAt = minute(0)
 	}
+	if d.resets != nil {
+		dev.BoundHost, dev.BoundAt = "100", minute(-60)
+	}
 	var reports []int
 	for m := 0; m <= 240; m += 5 {
 		now := *minute(m)
@@ -292,6 +312,11 @@ func runTimeline(d timelineDevice) []int {
 		if d.bindAt != 0 && m >= d.bindAt && dev.BoundHost == "" {
 			dev.BoundHost, dev.BoundAt = "101", &now
 		}
+		for _, a := range d.resets {
+			if a <= m {
+				dev.ResetAnnouncedAt = minute(a)
+			}
+		}
 		dev.LastContactAt = nil
 		if c, ok := d.contact(m); ok {
 			dev.LastContactAt = minute(c)
@@ -305,6 +330,9 @@ func runTimeline(d timelineDevice) []int {
 			dev.SilentSince, dev.CheckinAt = nil, nil
 		case has(w.Start):
 			dev.SilentSince = &now
+			if has(w.HeldStart) {
+				dev.ResetHoldAt = dev.ResetAnnouncedAt
+			}
 		case has(w.Note):
 			dev.CheckinAt = dev.LastContactAt
 		}
@@ -348,6 +376,8 @@ func TestWatchFleetTimeline(t *testing.T) {
 		{"boot after 3 h off", timelineDevice{seen: reconnects(0, 183), contact: every(5, 0, [2]int{-3, 180})}, []int{}},
 		{"announced reset, bound at 40 (regression H1-a)", timelineDevice{seen: frozen, contact: every(5, 1), bindAt: 40}, []int{}},
 		{"announced reset, bound at 80", timelineDevice{seen: frozen, contact: every(5, 1), bindAt: 80}, []int{75}},
+		{"a reset announced per check-in period (regression L-1)", timelineDevice{seen: func(int) int { return -300 },
+			contact: every(5, 1, [2]int{-1000, 1}, [2]int{51, 121}, [2]int{171, 1000}), resets: []int{0, 120}}, []int{140}},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {

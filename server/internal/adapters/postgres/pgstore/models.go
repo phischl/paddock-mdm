@@ -565,6 +565,7 @@ type DeviceInventoryRef struct {
 	FleetSilentSince      *time.Time
 	FleetSilentCheckinAt  *time.Time
 	FleetSilentReportedAt *time.Time
+	FleetResetHoldAt      *time.Time
 }
 
 type DeviceLoginAssignment struct {

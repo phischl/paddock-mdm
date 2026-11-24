@@ -132,11 +132,11 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    minutes longer than the newest host's (`reason` `policies`), while the device kept checking in (at most 60 minutes
    between check-ins), confirmed when the device has checked in twice more and 15 more minutes have passed. After an
    announced enrollment reset of fleetd, a suspended host binding or a re-enrollment of the device's host, the
-   confirmation counts only from 60 minutes after that event. Reports wait while fewer than half of the live devices
-   reach Fleet or none does: the worker then logs `fleet silence watch suppressed` and sets
-   `paddock_inventory_fleet_silent_suppressed`; a value above 0 for longer than a few rounds means devices cannot reach
-   `fleet.<domain>` (certificate, DNS, proxy) and needs the operator. A site that blocks only `fleet.<domain>` raises
-   the event for its devices;
+   confirmation counts only from 60 minutes after that event. An announced enrollment reset holds the watch at most once
+   per device in 24 hours. Reports wait while fewer than half of the live devices reach Fleet or none does: the worker
+   then logs `fleet silence watch suppressed` and sets `paddock_inventory_fleet_silent_suppressed`; a value above 0 for
+   longer than a few rounds means devices cannot reach `fleet.<domain>` (certificate, DNS, proxy) and needs the
+   operator. A site that blocks only `fleet.<domain>` raises the event for its devices;
 6. reports, once per episode, `device.tamper_fleet_host_claimed` when another host reports a device's hardware UUID
    and keeps contacting Fleet for 15 minutes, or when the device's host was enrolled again. After a re-enrollment, agent
    reports from Fleet wait 60 minutes. A Fleet database restore re-enrolls many hosts at once; the worker then holds

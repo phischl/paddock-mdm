@@ -43,6 +43,8 @@ type WatchedDevice struct {
 	CheckinAt *time.Time
 	// ResetAnnouncedAt, BoundAt, SuspendedAt and ReenrolledAt start a hold (ADR 0057; amendment 2026-11-24 f, F-H1).
 	ResetAnnouncedAt, BoundAt, SuspendedAt, ReenrolledAt *time.Time
+	// ResetHoldAt is the reset announcement whose hold the watch granted last (F-15.1).
+	ResetHoldAt *time.Time
 }
 
 // SilentDevice is a device to report, with the inventory system's times the decision used (nil when unknown).
@@ -55,7 +57,9 @@ type SilentDevice struct {
 // FleetWatch are the decisions of one round.
 type FleetWatch struct {
 	Start, Note, Reset, Clear []uuid.UUID
-	Report                    []SilentDevice
+	// HeldStart is the part of Start that grants a reset hold (F-15.1).
+	HeldStart []uuid.UUID
+	Report    []SilentDevice
 	// Due counts the devices due this round, Live the devices that check in, are not held and are not reported and
 	// still stale, Fresh those of them that are not stale (amendment 2026-11-24 f, F-M2).
 	Due, Live, Fresh int
@@ -110,8 +114,12 @@ func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now t
 				w.Reset = append(w.Reset, d.DeviceID)
 			}
 		case d.SilentSince == nil:
-			if isLive {
-				w.Start = append(w.Start, d.DeviceID)
+			if !isLive {
+				break
+			}
+			w.Start = append(w.Start, d.DeviceID)
+			if r := heldReset(d); r != nil && !r.After(now) && now.Sub(*r) < ClaimQuiet && !sameTime(d.ResetHoldAt, r) {
+				w.HeldStart = append(w.HeldStart, d.DeviceID)
 			}
 		case d.CheckinAt == nil:
 			if d.LastContactAt.After(e) {
@@ -148,12 +156,8 @@ func holdOf(d WatchedDevice, now time.Time) (bool, time.Time) {
 	if d.SilentSince != nil {
 		episode = *d.SilentSince
 	}
-	reset := d.ResetAnnouncedAt
-	if reset != nil && d.BoundAt != nil && !d.BoundAt.Before(*reset) {
-		reset = nil
-	}
 	var end time.Time
-	for _, at := range []*time.Time{reset, d.SuspendedAt, d.ReenrolledAt} {
+	for _, at := range []*time.Time{heldReset(d), d.SuspendedAt, d.ReenrolledAt} {
 		if at != nil && !at.After(episode) && at.Add(ClaimQuiet).After(end) {
 			end = at.Add(ClaimQuiet)
 		}
@@ -166,6 +170,19 @@ func holdOf(d WatchedDevice, now time.Time) (bool, time.Time) {
 		}
 	}
 	return now.Before(end), e
+}
+
+// heldReset returns the reset announcement that may hold d: not followed by a binding, and the one whose hold was granted
+// last or at least 24 hours after it, so that one reset per day holds the watch (F-15.1); nil otherwise.
+func heldReset(d WatchedDevice) *time.Time {
+	r := d.ResetAnnouncedAt
+	switch {
+	case r == nil || d.BoundAt != nil && !d.BoundAt.Before(*r):
+		return nil
+	case d.ResetHoldAt == nil || r.Equal(*d.ResetHoldAt) || !r.Before(d.ResetHoldAt.Add(24*time.Hour)):
+		return r
+	}
+	return nil
 }
 
 // speakingHost returns the listed host that speaks for d (plan M5a amendment 2026-11-16 d, D-c1): the bound host, else
@@ -200,7 +217,8 @@ func (w FleetWatch) ForOrganization(org uuid.UUID, devices []WatchedDevice) Flee
 		}
 		return out
 	}
-	out := FleetWatch{Start: keep(w.Start), Note: keep(w.Note), Reset: keep(w.Reset), Clear: keep(w.Clear)}
+	out := FleetWatch{Start: keep(w.Start), HeldStart: keep(w.HeldStart), Note: keep(w.Note), Reset: keep(w.Reset),
+		Clear: keep(w.Clear)}
 	for _, s := range w.Report {
 		if in[s.DeviceID] {
 			out.Report = append(out.Report, s)

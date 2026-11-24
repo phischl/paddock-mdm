@@ -191,3 +191,54 @@ func TestFleetWatchDevices(t *testing.T) {
 		t.Fatal("a retired device or a device without a reference is watched")
 	}
 }
+
+// TestApplyFleetWatchResetHold (plan M5a amendment f, F-15.1): a held Start records the binding's reset announcement;
+// a plain Start, Clear and Reset leave fleet_reset_hold_at unchanged.
+func TestApplyFleetWatchResetHold(t *testing.T) {
+	h := newInventoryHarness(t)
+	org, held := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	_, plain := h.device(t, org, uuid.NewString(), "active")
+	_, cleared := h.device(t, org, uuid.NewString(), "active")
+	_, reset := h.device(t, org, uuid.NewString(), "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	announced, granted := now.Add(-2*time.Minute), now.Add(-30*time.Hour)
+	for _, d := range []uuid.UUID{held, plain, cleared, reset} {
+		if err := h.sync.StoreHost(systemCtx(org), d, "9", ports.HostInventory{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.super.Exec(context.Background(), `INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+			VALUES ($1, $2, $3)`, d, org, announced); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.super.Exec(context.Background(), "UPDATE device_inventory_ref SET fleet_reset_hold_at = $2 WHERE device_id = $1",
+			d, granted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.super.Exec(context.Background(), "UPDATE device_inventory_ref SET fleet_silent_since = $2 WHERE device_id = ANY($1::uuid[])",
+		[]uuid.UUID{cleared, reset}, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	w := inventory.FleetWatch{Start: []uuid.UUID{held, plain}, HeldStart: []uuid.UUID{held}, Clear: []uuid.UUID{cleared},
+		Reset: []uuid.UUID{reset}}
+	if _, err := h.sync.ApplyFleetWatch(systemCtx(org), w, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		dev  uuid.UUID
+		want time.Time
+	}{{"held start", held, announced}, {"plain start", plain, granted}, {"clear", cleared, granted}, {"reset", reset, granted}} {
+		if n := h.count(t, "SELECT count(*) FROM device_inventory_ref WHERE device_id = $1 AND fleet_reset_hold_at = $2", c.dev, c.want); n != 1 {
+			t.Errorf("%s: fleet_reset_hold_at is not %v", c.name, c.want)
+		}
+	}
+	devices, err := h.sync.FleetWatchDevices(systemCtx(uuid.Nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(devices, func(d inventory.WatchedDevice) bool { return d.DeviceID == held })
+	if i < 0 || devices[i].ResetHoldAt == nil || !devices[i].ResetHoldAt.Equal(announced) {
+		t.Fatalf("watched device %+v", devices)
+	}
+}

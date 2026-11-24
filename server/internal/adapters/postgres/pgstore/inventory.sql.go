@@ -445,7 +445,8 @@ SELECT w.device_id::uuid AS device_id, w.organization_id::uuid AS organization_i
        coalesce(w.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
        coalesce(w.bound_at, 'epoch')::timestamptz AS bound_at,
        coalesce(w.suspended_at, 'epoch')::timestamptz AS suspended_at,
-       coalesce(w.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at
+       coalesce(w.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at,
+       coalesce(w.fleet_reset_hold_at, 'epoch')::timestamptz AS fleet_reset_hold_at
 FROM paddock_fleet_watch_devices() w ORDER BY w.device_id
 `
 
@@ -465,6 +466,7 @@ type FleetWatchDevicesRow struct {
 	BoundAt               time.Time
 	SuspendedAt           time.Time
 	FleetReenrolledAt     time.Time
+	FleetResetHoldAt      time.Time
 }
 
 // The fleetd silence watch (plan M5a amendments 2026-11-16 c and d).
@@ -493,6 +495,7 @@ func (q *Queries) FleetWatchDevices(ctx context.Context) ([]FleetWatchDevicesRow
 			&i.BoundAt,
 			&i.SuspendedAt,
 			&i.FleetReenrolledAt,
+			&i.FleetResetHoldAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1540,17 +1543,22 @@ func (q *Queries) StartFleetClaim(ctx context.Context, arg StartFleetClaimParams
 }
 
 const startFleetSilence = `-- name: StartFleetSilence :exec
-UPDATE device_inventory_ref SET fleet_silent_since = $1::timestamptz
-WHERE device_id = ANY($2::uuid[]) AND fleet_silent_since IS NULL
+UPDATE device_inventory_ref i SET fleet_silent_since = $1::timestamptz,
+       fleet_reset_hold_at = CASE WHEN i.device_id = ANY($2::uuid[])
+         THEN (SELECT b.reset_announced_at FROM device_fleet_binding b WHERE b.device_id = i.device_id)
+         ELSE i.fleet_reset_hold_at END
+WHERE i.device_id = ANY($3::uuid[]) AND i.fleet_silent_since IS NULL
 `
 
 type StartFleetSilenceParams struct {
 	At        time.Time
+	HeldIds   []uuid.UUID
 	DeviceIds []uuid.UUID
 }
 
+// A held Start records the reset announcement whose hold it grants (plan M5a amendment f, F-15.1).
 func (q *Queries) StartFleetSilence(ctx context.Context, arg StartFleetSilenceParams) error {
-	_, err := q.db.Exec(ctx, startFleetSilence, arg.At, arg.DeviceIds)
+	_, err := q.db.Exec(ctx, startFleetSilence, arg.At, arg.HeldIds, arg.DeviceIds)
 	return err
 }
 

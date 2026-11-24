@@ -445,7 +445,7 @@ func (s *InventorySync) FleetWatchDevices(ctx context.Context) ([]inventory.Watc
 				PolicyUpdatedAt: nullTime(r.PolicyUpdatedAt), SilentSince: nullTime(r.FleetSilentSince),
 				ReportedAt: nullTime(r.FleetSilentReportedAt), CheckinAt: nullTime(r.FleetSilentCheckinAt),
 				ResetAnnouncedAt: nullTime(r.ResetAnnouncedAt), BoundAt: nullTime(r.BoundAt), SuspendedAt: nullTime(r.SuspendedAt),
-				ReenrolledAt: nullTime(r.FleetReenrolledAt)})
+				ReenrolledAt: nullTime(r.FleetReenrolledAt), ResetHoldAt: nullTime(r.FleetResetHoldAt)})
 		}
 		return err
 	})
@@ -463,7 +463,8 @@ func (s *InventorySync) ApplyFleetWatch(ctx context.Context, w inventory.FleetWa
 		if err := q.ResetFleetSilence(ctx, nonNilIDs(w.Reset)); err != nil {
 			return err
 		}
-		if err := q.StartFleetSilence(ctx, pgstore.StartFleetSilenceParams{At: now, DeviceIds: nonNilIDs(w.Start)}); err != nil {
+		if err := q.StartFleetSilence(ctx, pgstore.StartFleetSilenceParams{At: now, HeldIds: nonNilIDs(w.HeldStart),
+			DeviceIds: nonNilIDs(w.Start)}); err != nil {
 			return err
 		}
 		return q.NoteFleetSilenceCheckin(ctx, nonNilIDs(w.Note))

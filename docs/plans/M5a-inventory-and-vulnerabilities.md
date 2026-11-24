@@ -5434,8 +5434,9 @@ at 0. Check-ins come at 2, 27, 52, 77, and so on. There is no hold.
 
 ### F-15. One reset hold per device per 24 hours (addendum after review 2, L-1)
 
-Status: **proposed** (architect, 2026-11-24). It implements main's choice of option (b) for review 2's finding L-1.
-It amends F-H1, and it amends rule 2 of plan amendment e, H5 (binding decisions), for resetting devices only.
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round 2). It implements main's
+choice of option (b) for review 2's finding L-1. It amends F-H1, and it amends rule 2 of plan amendment e, H5 (binding
+decisions), for resetting devices only.
 
 **Problem (L-1).** Row 2 (F-M1) ends an episode after 60 minutes without a check-in, so every period of check-ins
 opens a new episode. A reset announcement dated to the start of that period satisfies F-H1 again each time. The
