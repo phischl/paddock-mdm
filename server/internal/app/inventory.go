@@ -219,6 +219,37 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 	return reported, nil
 }
 
+// ReportInventoryRejected records device.tamper_inventory_rejected with its tamper finding for a device of the
+// organization of ctx whose inventory the round skipped (PDK-1122k), once per episode: not again until the device's
+// inventory was stored after the last report. host is the host that speaks for the device. It reports whether it
+// recorded the event.
+func (s *InventorySync) ReportInventoryRejected(ctx context.Context, device uuid.UUID, host ports.HostRef, reason string,
+	now time.Time) (bool, error) {
+	code := audit.CodeDeviceTamperInventoryRejected
+	due := false
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		v, err := q.InventoryRejectionDue(ctx, pgstore.InventoryRejectionDueParams{DeviceID: device, Code: string(code)})
+		if db.IsNoRows(err) {
+			return nil
+		}
+		due = v != nil && *v
+		return err
+	})
+	if err != nil || !due {
+		return false, err
+	}
+	spec := ActionSpec{Code: code, Target: &audit.Target{Type: "device", ID: device.String()},
+		Params: map[string]any{"reason": reason, "fleet_host": string(host)}}
+	err = s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		org, err := orgOf(ctx)
+		if err != nil {
+			return err
+		}
+		return UpsertTamperFinding(ctx, q, org, device, code, "", rec.ActionID(), now)
+	})
+	return err == nil, err
+}
+
 // PublishedAgentHashes returns the SHA-256 of every artifact of every published agent release, all architectures:
 // the hash set of the agent binary policy (plan M5a amendment 2026-11-16, A2).
 func (s *InventorySync) PublishedAgentHashes(ctx context.Context) ([]string, error) {

@@ -1032,3 +1032,17 @@ func TestInOrgSnapshot(t *testing.T) {
 		t.Fatalf("%d groups after the snapshot, want 2", n)
 	}
 }
+
+// TestIsDataError (PDK-1122k): PostgreSQL's refusals of a statement's data are data errors; a lost connection, a
+// timeout, a serialization failure and errors that are not PostgreSQL's are not.
+func TestIsDataError(t *testing.T) {
+	for code, want := range map[string]bool{"22021": true, "22001": true, "23503": true, "23505": true, "54000": true,
+		"54001": false, "40001": false, "57014": false, "08006": false, "25P04": false, "42501": false} {
+		if got := db.IsDataError(fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: code})); got != want {
+			t.Errorf("SQLSTATE %s: %v, want %v", code, got, want)
+		}
+	}
+	if db.IsDataError(errors.New("connection reset")) || db.IsDataError(context.Canceled) || db.IsDataError(nil) {
+		t.Error("an error that is not PostgreSQL's counts as a data error")
+	}
+}

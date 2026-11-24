@@ -98,10 +98,11 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 	}
 	var res ports.HostPage
 	for _, h := range out.Hosts {
-		if h.UUID == "" {
+		hw := text(h.UUID)
+		if hw == "" {
 			continue
 		}
-		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: text(h.UUID), EnrolledAt: h.LastEnrolledAt}
+		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, EnrolledAt: h.LastEnrolledAt}
 		if h.SeenTime != nil {
 			seen.SeenAt = *h.SeenTime
 		}
@@ -109,7 +110,7 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 		if h.changedAt().Before(since) {
 			continue
 		}
-		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: text(h.UUID), ChangedAt: h.changedAt()})
+		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, ChangedAt: h.changedAt()})
 	}
 	if len(out.Hosts) == hostsPerPage {
 		res.Next = strconv.Itoa(page + 1)
@@ -151,11 +152,12 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		DiskTotalBytes: int64(math.Round(max(h.GigsTotalDiskSpace, 0) * 1e9)),
 	}
 	for _, s := range h.Software {
-		p := ports.SoftwarePackage{Name: text(s.Name), Version: text(s.Version), Source: text(s.Source)}
+		p := ports.SoftwarePackage{Name: keyText(s.Name, maxKeyRunes), Version: keyText(s.Version, maxKeyRunes),
+			Source: keyText(s.Source, maxSourceRunes)}
 		for _, v := range s.Vulnerabilities {
-			vuln := ports.Vulnerability{CVE: text(v.CVE), CVSSScore: v.CVSSScore}
+			vuln := ports.Vulnerability{CVE: keyText(v.CVE, maxSourceRunes), CVSSScore: v.CVSSScore}
 			if v.ResolvedInVersion != nil {
-				vuln.FixedVersion = text(*v.ResolvedInVersion)
+				vuln.FixedVersion = keyText(*v.ResolvedInVersion, maxKeyRunes)
 			}
 			p.Vulnerabilities = append(p.Vulnerabilities, vuln)
 		}
@@ -163,9 +165,9 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	for _, p := range h.Policies {
 		if p.Response == "pass" || p.Response == "fail" {
-			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: text(p.Name), Passing: p.Response == "pass"})
+			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: keyText(p.Name, maxKeyRunes), Passing: p.Response == "pass"})
 		} else {
-			inv.UnansweredPolicies = append(inv.UnansweredPolicies, text(p.Name))
+			inv.UnansweredPolicies = append(inv.UnansweredPolicies, keyText(p.Name, maxKeyRunes))
 		}
 	}
 	return inv, nil
@@ -296,12 +298,24 @@ func isFleetErrorBody(body string) bool {
 // maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).
 const maxHardwareRunes = 128
 
-func hardwareText(s string) string {
-	s = strings.TrimSpace(text(s))
-	if utf8.RuneCountInString(s) <= maxHardwareRunes {
+func hardwareText(s string) string { return keyText(strings.TrimSpace(text(s)), maxHardwareRunes) }
+
+// maxKeyRunes and maxSourceRunes bound the software, vulnerability and policy strings Paddock stores to the widths of
+// Fleet's own columns (255 for names and versions, 64 for sources): they are parts of btree keys, and PostgreSQL
+// refuses a key over about 2.7 kB, which would fail the host's store (PDK-1122k). At these widths a key stays below
+// that even with 4-byte runes.
+const (
+	maxKeyRunes    = 255
+	maxSourceRunes = 64
+)
+
+// keyText is text cut to at most n runes.
+func keyText(s string, n int) string {
+	s = text(s)
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return string([]rune(s)[:maxHardwareRunes])
+	return string([]rune(s)[:n])
 }
 
 // text removes the NUL bytes PostgreSQL refuses in text from a string a host reported: Fleet's JSON may carry them,

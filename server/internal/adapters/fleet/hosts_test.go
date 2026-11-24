@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,36 @@ func TestHostInventoryNULBytes(t *testing.T) {
 	}
 	page, err := c.ListHostsChangedSince(context.Background(), time.Time{}, "")
 	if err != nil || page.Hosts[0].HardwareUUID != "abcd" || page.Seen[0].HardwareUUID != "abcd" {
+		t.Fatalf("host list %+v, %v", page, err)
+	}
+}
+
+// TestHostInventoryBoundsKeyStrings (PDK-1122k, review 1): software, vulnerability and policy strings are cut to
+// Fleet's column widths, so that they fit PostgreSQL's btree keys; a hardware UUID of NUL bytes only counts as none.
+func TestHostInventoryBoundsKeyStrings(t *testing.T) {
+	long := strings.Repeat("ü", 300)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest/fleet/hosts" {
+			_, _ = w.Write([]byte(`{"hosts":[{"id":1,"uuid":"\u0000\u0000"},{"id":2,"uuid":"ab"}]}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"host":{"id":1,"software":[{"name":%q,"version":%[1]q,"source":%[1]q,
+			"vulnerabilities":[{"cve":%[1]q,"resolved_in_version":%[1]q}]}],"policies":[{"name":%[1]q,"response":"pass"}]}}`, long)
+	}))
+	t.Cleanup(srv.Close)
+	c := client(srv.URL)
+	inv, err := c.HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw, v := inv.Software[0], inv.Software[0].Vulnerabilities[0]
+	got := []int{len([]rune(sw.Name)), len([]rune(sw.Version)), len([]rune(sw.Source)), len([]rune(v.CVE)),
+		len([]rune(v.FixedVersion)), len([]rune(inv.Policies[0].Key))}
+	if !slices.Equal(got, []int{255, 255, 64, 64, 255, 255}) {
+		t.Fatalf("rune lengths %v", got)
+	}
+	page, err := c.ListHostsChangedSince(context.Background(), time.Time{}, "")
+	if err != nil || len(page.Hosts) != 1 || len(page.Seen) != 1 || page.Hosts[0].Ref != "2" {
 		t.Fatalf("host list %+v, %v", page, err)
 	}
 }

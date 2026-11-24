@@ -489,6 +489,7 @@
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "tamper_agent_binary_changed": "fleetd reports an agent binary on {target} that matches no published release",
       "tamper_fleet_host_claimed": "Another inventory enrollment claims {target}",
+      "tamper_inventory_rejected": "Paddock could not take over the inventory of {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
       "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",
