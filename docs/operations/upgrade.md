@@ -218,6 +218,16 @@ Never edit the shipped files of a bundle to change behaviour: `./paddock verify`
 One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what B changes for A's installation. The
 older notes are in the *Archive*.
 
+### 0.1.0-alpha.11, from 0.1.0-alpha.10
+
+**Inventory hosts bound to their device (ADR 0057).** Upgrade the server first, then the agents through a staged
+rollout. Each device enrolls its fleetd once more after its agent updates; a new Fleet host appears per device, and
+the previous one stays in Fleet without data being stored for it. Inventory of a device pauses for up to about 10
+minutes around its re-enrollment.
+Keep each rollout wave below about 1,500 agent updates per hour; a larger wave can leave a device's new host unbound
+for longer than 60 minutes, which raises one false `second_host` report for it. Upgrade all roles together
+(`./paddock up` does). A `PaddockDLQ` alert during the upgrade window can come from heartbeats; they need no replay.
+
 ### 0.1.0-alpha.10, from 0.1.0-alpha.9
 
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):

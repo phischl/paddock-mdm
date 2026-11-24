@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
@@ -660,6 +661,232 @@ func TestInventoryAgentAbsentWhileCheckingIn(t *testing.T) {
 		q := url.Values{"device_id": {devices[name].DeviceID}, "kind": {"tamper"}}
 		if got := listFindings(t, alice, q); len(got) != 0 {
 			t.Errorf("%s: tamper findings %+v", name, got)
+		}
+	}
+}
+
+// fleetHostClaimedCode is the audit code of a claim on a device's inventory host (ADR 0057).
+const fleetHostClaimedCode = "device.tamper_fleet_host_claimed"
+
+// TestInventoryHostBinding is the gate of plan M5a amendment 2026-11-17 e (PDK-1123, AC-H1 to AC-H5, AC-H8): simulated
+// hosts answer Fleet for acme devices while the devices check in.
+//  1. bound: a host enrolled first with D1's hardware UUID fails the agent binary policy; D1 reports the token of its
+//     own host, which passes. D1 is bound to its host, stores only its data, and the other host is reported as
+//     second_host with binding device.
+//  2. reenrolled: D2's bound host is enrolled again under its identifier and fails the binary policy; the org admin sees
+//     one reenrolled claim and no agent binary event, which waits 60 minutes.
+//  3. first: D3 reports no token; the host enrolled first is stored, a later one is reported with binding first.
+//  4. refused: D4 reports D1's token, whose host has another hardware UUID; D4 stays unbound.
+//  5. same_uuid: D5 shares D1's hardware UUID; D1's inventory keeps syncing, and nothing is stored for D5.
+//
+// Claim episodes are seeded 16 minutes back instead of waited for; WatchClaims' unit tests prove the confirmation.
+// carol (globex) sees none of the events.
+func TestInventoryHostBinding(t *testing.T) {
+	root, alice, carol := login(t, env.PlatformAdmin), login(t, env.Alice), login(t, env.Carol)
+	suffix := uniqueSuffix()
+	published := publishAgentBinary(t, root)
+	sum := sha256.Sum256([]byte("another paddockd " + suffix))
+	unknown := hex.EncodeToString(sum[:])
+	start := time.Now()
+	db := ownerDB(t)
+	value := func(query string, args ...any) string {
+		t.Helper()
+		var v *string
+		if err := db.QueryRow(testContext(t, time.Minute), query, args...).Scan(&v); err != nil || v == nil {
+			return ""
+		}
+		return *v
+	}
+	hostOf := func(d *devicesim.Device) string {
+		return value("SELECT host_id FROM device_fleet_binding WHERE device_id = $1", d.DeviceID)
+	}
+	storedOf := func(d *devicesim.Device) string {
+		return value("SELECT external_id FROM device_inventory_ref WHERE device_id = $1", d.DeviceID)
+	}
+	syncedOf := func(d *devicesim.Device) string {
+		return value("SELECT synced_at::text FROM device_inventory_ref WHERE device_id = $1", d.DeviceID)
+	}
+
+	var devices []*devicesim.Device
+	var hosts []*devicesim.FleetHost
+	var extra []string
+	t.Cleanup(func() {
+		for _, id := range fleetHostIDs(t, extra...) {
+			deleteFleetHost(t, id)
+		}
+	})
+	device := func(name string) *devicesim.Device {
+		d := activeDevice(t, alice, "", "acc-bind-"+name+"-"+suffix)
+		devices = append(devices, d)
+		return d
+	}
+	host := func(h *devicesim.FleetHost, binary string) *devicesim.FleetHost {
+		h.AgentBinarySHA256 = binary
+		hosts = append(hosts, h)
+		extra = append(extra, h.Identifier)
+		return h
+	}
+	tick := func() {
+		for _, d := range devices {
+			if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
+				t.Logf("%s: check-in: %v", d.DeviceID, err)
+			}
+		}
+		for _, h := range hosts {
+			if _, err := h.Answer(testContext(t, time.Minute)); err != nil && strings.Contains(err.Error(), "node_invalid") {
+				if err := h.EnrollAgain(testContext(t, time.Minute)); err != nil {
+					t.Logf("%s: enroll again: %v", h.Identifier, err)
+				} else if _, err := h.Answer(testContext(t, time.Minute)); err != nil {
+					t.Logf("%s: answer after enrolling again: %v", h.Identifier, err)
+				}
+			}
+		}
+	}
+	deadline := time.Now().Add(20 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 20 minutes: %s", what)
+			}
+			tick()
+			time.Sleep(10 * time.Second)
+		}
+	}
+	rounds := func(what string, n int, ds ...*devicesim.Device) {
+		t.Helper()
+		last, seen := map[string]string{}, map[string]int{}
+		for _, d := range ds {
+			last[d.DeviceID] = syncedOf(d)
+		}
+		waitFor(what, func() bool {
+			done := true
+			for _, d := range ds {
+				if at := syncedOf(d); at != last[d.DeviceID] {
+					last[d.DeviceID] = at
+					seen[d.DeviceID]++
+				}
+				done = done && seen[d.DeviceID] >= n
+			}
+			return done
+		})
+	}
+	claims := func(p *env.Portal, d *devicesim.Device) []env.AuditEvent {
+		all, err := p.AuditEventsSince(testContext(t, time.Minute), fleetHostClaimedCode, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []env.AuditEvent
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == d.DeviceID {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	events := func(code string, d *devicesim.Device) int {
+		all, err := alice.AuditEventsSince(testContext(t, time.Minute), code, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == d.DeviceID {
+				n++
+			}
+		}
+		return n
+	}
+	seedClaim := func(d *devicesim.Device) {
+		t.Helper()
+		waitFor("a claim episode of "+d.DeviceID, func() bool {
+			return value("SELECT fleet_claim_since::text FROM device_inventory_ref WHERE device_id = $1", d.DeviceID) != ""
+		})
+		if _, err := db.Exec(testContext(t, time.Minute), "UPDATE device_inventory_ref SET fleet_claim_since = now() - interval '16 minutes' WHERE device_id = $1",
+			d.DeviceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed := func(d *devicesim.Device, kind, binding, bound string) {
+		t.Helper()
+		var got []env.AuditEvent
+		waitFor(fleetHostClaimedCode+" for "+d.DeviceID, func() bool { got = claims(alice, d); return len(got) > 0 })
+		p := got[0].Params
+		if len(got) != 1 || p["kind"] != kind || p["binding"] != binding || p["bound_host"] != bound {
+			t.Errorf("%s: claims %+v, want one %s/%s/%s", d.DeviceID, got, kind, binding, bound)
+		}
+	}
+
+	d1 := device("d1")
+	host(enrollFleetHostAs(t, "acc-bind-early-"+suffix, d1.HardwareUUID(), "acc-bind-early-"+suffix), unknown)
+	b1 := host(enrollFleetHostBound(t, d1.HardwareUUID(), "acc-bind-d1-"+suffix), published)
+	d1.FleetDeviceToken = b1.Token
+	b1ID := fmt.Sprint(fleetHostIDs(t, b1.Identifier)[0])
+	waitFor("D1 bound to and storing its host "+b1ID, func() bool { return hostOf(d1) == b1ID && storedOf(d1) == b1ID })
+	rounds("two further rounds of D1", 2, d1)
+	if storedOf(d1) != b1ID || value(`SELECT passing::text FROM inventory_policy_result WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, d1.DeviceID) != "true" {
+		t.Errorf("D1 stores %s, binary policy %s", storedOf(d1), value(`SELECT passing::text FROM inventory_policy_result WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, d1.DeviceID))
+	}
+	if n := events(agentBinaryCode, d1); n != 0 {
+		t.Errorf("D1: %d %s events", n, agentBinaryCode)
+	}
+	seedClaim(d1)
+	claimed(d1, "second_host", "device", b1ID)
+
+	d2 := device("d2")
+	b2 := host(enrollFleetHostBound(t, d2.HardwareUUID(), "acc-bind-d2-"+suffix), published)
+	d2.FleetDeviceToken = b2.Token
+	b2ID := fmt.Sprint(fleetHostIDs(t, b2.Identifier)[0])
+	waitFor("D2 bound and its enrollment time recorded", func() bool {
+		return hostOf(d2) == b2ID && value("SELECT fleet_enrolled_at::text FROM device_inventory_ref WHERE device_id = $1", d2.DeviceID) != ""
+	})
+	host(enrollFleetHostAs(t, b2.Identifier, d2.HardwareUUID(), "acc-bind-d2-"+suffix), unknown)
+	claimed(d2, "reenrolled", "device", b2ID)
+	rounds("two further rounds of D2", 2, d2)
+	if n := events(agentBinaryCode, d2); n != 0 {
+		t.Errorf("D2: %d %s events during the hold", n, agentBinaryCode)
+	}
+
+	d3 := device("d3")
+	host(enrollFleetHost(t, d3.HardwareUUID(), "acc-bind-d3-"+suffix, nil), published)
+	host(enrollFleetHostAs(t, "acc-first-late-"+suffix, d3.HardwareUUID(), "acc-first-late-"+suffix), unknown)
+	f3ID := fmt.Sprint(fleetHostIDs(t, d3.HardwareUUID())[0])
+	waitFor("D3 stores its first host", func() bool { return storedOf(d3) == f3ID })
+	rounds("two further rounds of D3", 2, d3)
+	if storedOf(d3) != f3ID || value(`SELECT passing::text FROM inventory_policy_result WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, d3.DeviceID) != "true" {
+		t.Errorf("D3 stores %s", storedOf(d3))
+	}
+	seedClaim(d3)
+	claimed(d3, "second_host", "first", f3ID)
+
+	d4 := device("d4")
+	d4.FleetDeviceToken = b1.Token
+	rounds("two rounds of D1 after D4 checked in", 2, d1)
+	if got := hostOf(d4); got != "" {
+		t.Errorf("D4 bound to %s", got)
+	}
+
+	tok := createTokenWith(t, alice, tokenOptions{autoApprove: true}, true)
+	d5 := newSim(t, tok.EnrollmentConfig)
+	d5.HardwareUUIDOverride = d1.HardwareUUID()
+	if res, err := d5.Enroll(testContext(t, time.Minute), "acc-bind-d5-"+suffix); err != nil || res.Status != http.StatusAccepted {
+		t.Fatalf("enroll D5: %v HTTP %d", err, res.Status)
+	}
+	if s, err := d5.WaitEnrollment(testContext(t, 30*time.Second), func(s protocol.EnrollStatus) bool { return s.Status != protocol.EnrollProcessing }); err != nil || s.Status != protocol.EnrollActive {
+		t.Fatalf("D5: %+v %v", s, err)
+	}
+	devices = append(devices, d5)
+	rounds("two rounds of D1 beside D5", 2, d1)
+	if got := storedOf(d5); got != "" {
+		t.Errorf("D5 stores host %s although its hardware UUID is D1's", got)
+	}
+
+	for _, d := range devices {
+		if got := claims(carol, d); len(got) != 0 {
+			t.Errorf("carol sees %d claims of %s", len(got), d.DeviceID)
+		}
+		if n := events(agentNotRunningCode, d); n != 0 {
+			t.Errorf("%s: %d %s events", d.DeviceID, n, agentNotRunningCode)
 		}
 	}
 }

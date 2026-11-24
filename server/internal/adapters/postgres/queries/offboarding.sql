@@ -58,8 +58,11 @@ SELECT id FROM escrow_secret ORDER BY id;
 -- One page of the Fleet hosts the context organization's devices reference after after_external_id, for the step fleet
 -- (decision 11, amendment 2026-11-16 s point 1.3): every host once, with one of the devices that reference it.
 -- name: ListOffboardingInventoryRefsPage :many
-SELECT DISTINCT ON (external_id) external_id, device_id FROM device_inventory_ref
-WHERE external_id <> '' AND external_id > @after_external_id::text ORDER BY external_id, device_id LIMIT @max_hosts;
+SELECT DISTINCT ON (external_id) external_id, device_id FROM (
+  SELECT external_id, device_id FROM device_inventory_ref WHERE external_id <> ''
+  UNION ALL
+  SELECT host_id, device_id FROM device_inventory_left_host WHERE removed_at IS NULL) h
+WHERE external_id > @after_external_id::text ORDER BY external_id, device_id LIMIT @max_hosts;
 
 -- Locks the devices of the context organization that may still contact the server, disarms their dead man's switch and
 -- gives each without a usable open uninstall a fresh one (plan M17 decision 15, amendments e, m and n, migration

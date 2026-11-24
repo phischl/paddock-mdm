@@ -430,8 +430,11 @@ func (q *Queries) ListOffboardingHandoverCommands(ctx context.Context, deviceIds
 }
 
 const listOffboardingInventoryRefsPage = `-- name: ListOffboardingInventoryRefsPage :many
-SELECT DISTINCT ON (external_id) external_id, device_id FROM device_inventory_ref
-WHERE external_id <> '' AND external_id > $1::text ORDER BY external_id, device_id LIMIT $2
+SELECT DISTINCT ON (external_id) external_id, device_id FROM (
+  SELECT external_id, device_id FROM device_inventory_ref WHERE external_id <> ''
+  UNION ALL
+  SELECT host_id, device_id FROM device_inventory_left_host WHERE removed_at IS NULL) h
+WHERE external_id > $1::text ORDER BY external_id, device_id LIMIT $2
 `
 
 type ListOffboardingInventoryRefsPageParams struct {

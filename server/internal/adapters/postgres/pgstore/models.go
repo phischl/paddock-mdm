@@ -481,6 +481,17 @@ type DeviceEventSeen struct {
 	ReceivedAt     *time.Time
 }
 
+type DeviceFleetBinding struct {
+	DeviceID         uuid.UUID
+	OrganizationID   uuid.UUID
+	PendingToken     *string
+	TokenReportedAt  *time.Time
+	HostID           *string
+	BoundAt          *time.Time
+	ResetAnnouncedAt *time.Time
+	SuspendedAt      *time.Time
+}
+
 type DeviceGroup struct {
 	ID                 uuid.UUID
 	OrganizationID     uuid.UUID
@@ -521,22 +532,36 @@ type DeviceIdentityKey struct {
 	CreatedAt      time.Time
 }
 
+type DeviceInventoryLeftHost struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	HostID         string
+	Reason         string
+	LeftAt         time.Time
+	AttemptedAt    *time.Time
+	RemovedAt      *time.Time
+}
+
 type DeviceInventoryRef struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	ExternalID      string
-	LastSeenAt      *time.Time
-	OsVersion       string
-	FleetdVersion   string
-	SyncedAt        time.Time
-	HardwareVendor  string
-	HardwareModel   string
-	HardwareSerial  string
-	CpuBrand        string
-	CpuCores        int32
-	MemoryBytes     int64
-	DiskTotalBytes  int64
-	PolicyUpdatedAt *time.Time
+	DeviceID             uuid.UUID
+	OrganizationID       uuid.UUID
+	ExternalID           string
+	LastSeenAt           *time.Time
+	OsVersion            string
+	FleetdVersion        string
+	SyncedAt             time.Time
+	HardwareVendor       string
+	HardwareModel        string
+	HardwareSerial       string
+	CpuBrand             string
+	CpuCores             int32
+	MemoryBytes          int64
+	DiskTotalBytes       int64
+	PolicyUpdatedAt      *time.Time
+	FleetEnrolledAt      *time.Time
+	FleetReenrolledAt    *time.Time
+	FleetClaimSince      *time.Time
+	FleetClaimReportedAt *time.Time
 }
 
 type DeviceLoginAssignment struct {

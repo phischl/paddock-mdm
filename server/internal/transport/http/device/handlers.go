@@ -244,7 +244,8 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		// Without a cached delivery (upgrade, Valkey loss) nothing is flagged: a counter restored from last_seq can
 		// include published but undelivered numbers, and a real clone is caught on the next round (contract 8, PDK-590).
 		CloneSuspected: known && dev.headers.Seq < expected-1, DeliveredCommands: delivered,
-		ClockOffsetS: received.Unix() - dev.headers.Timestamp,
+		ClockOffsetS:     received.Unix() - dev.headers.Timestamp,
+		FleetDeviceToken: boundedFleetDeviceToken(req.FleetDeviceToken), FleetEnrollmentResetAt: boundedResetAt(req.FleetEnrollmentResetAt, received),
 	}
 	body, err := json.Marshal(hb)
 	if err != nil {
@@ -620,4 +621,24 @@ func boundedSchemaVersions(in []int) []int {
 		}
 	}
 	return out
+}
+
+// boundedFleetDeviceToken keeps a device token of the documented format only; anything else is dropped so that the
+// check-in still succeeds (ADR 0057).
+func boundedFleetDeviceToken(token string) string {
+	if protocol.ValidFleetDeviceToken(token) {
+		return token
+	}
+	return ""
+}
+
+// boundedResetAt keeps an announced enrollment reset no later than 5 minutes after the receive time and no older than
+// 24 hours, the agent's announcement window (ADR 0057, H14); anything else is dropped so that the check-in still
+// succeeds.
+func boundedResetAt(at *time.Time, received time.Time) *time.Time {
+	if at == nil || at.After(received.Add(5*time.Minute)) || at.Before(received.Add(-24*time.Hour)) {
+		return nil
+	}
+	v := at.UTC()
+	return &v
 }

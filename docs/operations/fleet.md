@@ -54,7 +54,9 @@ section of every v2 bundle. The agent of an amd64 device then:
 1. writes `/opt/orbit/secret.txt` (the enroll secret, 0600), `/etc/paddock/orbit.env` (Fleet URL, path of the secret,
    the system trust store `/etc/ssl/certs/ca-certificates.crt`, updates, scripts and Fleet Desktop off; 0600) and the
    drop-in `/etc/systemd/system/orbit.service.d/90-paddock.conf`, which makes `orbit.service` read `orbit.env` after
-   the package's `/etc/default/orbit`;
+   the package's `/etc/default/orbit`. `orbit.env` also sets `ORBIT_HOST_IDENTIFIER=instance`. On a device whose fleetd
+   was enrolled before, the agent re-enrolls fleetd once (it stops `orbit.service` and removes orbit's node key, device
+   token and osquery database);
 2. downloads the package from `https://bundles.<domain>/<path>` (derived from the agent's `device.<domain>` server
    URL), checks its SHA-256 and installs it with `dpkg -i` (killed after 15 minutes like every package run of the
    agent, then retried after a back-off);
@@ -77,10 +79,26 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
    start, whenever Fleet's set of vulnerable software versions changed (Fleet matches vulnerabilities on its own
    schedule, about hourly, without marking hosts as changed) and every 12th round;
-3. maps each host to a device by hardware UUID: a host maps only if exactly one active or quarantined device in any
-   organization has its UUID. Hosts that map to no device or to several are never stored and are counted in the metric
-   `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A reinstalled device that enrolled again keeps its
-   hardware UUID: retire the old device so that its host maps again;
+3. binds each device to the host its agent named (fleetd's device token, resolved through Fleet's device endpoint) and
+   stores only that host for the device. A device whose agent has not named a host yet keeps the host Paddock already
+   stores for it while Fleet lists it with the device's hardware UUID (the lowest Fleet ID when none is stored yet). A
+   host that already speaks for another device is never bound to a device (`result="host_in_use"`); retire a device's
+   previous record before you enroll the machine again. A host a device no longer speaks from (its previous stored
+   host, or a stored host Fleet lists with another hardware UUID) stays reserved for that device and is removed from
+   Fleet in the same or the next round (`device.inventory_host_removed`, `paddock_inventory_previous_hosts_total`).
+   After a Fleet rebuild or restore, such a host ID can name another machine's record; the record is removed and the
+   machine's fleetd enrolls again under a new ID. Retiring a device reserves its stored host in the same way; the next
+   inventory round removes it from Fleet. Paddock's copy of the retired device's inventory follows the retention
+   period. Hosts that do not speak for a device are counted in the log attribute `ignored`;
+   `paddock_inventory_host_bindings_total` counts the binding decisions by `result`. Hosts that map to no device are
+   never stored and are counted in the metric `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A retired
+   device keeps its hardware UUID until retention has purged its inventory (`retired_inventory_days`) or it was retired
+   as uninstalled. Meanwhile, a device with the same UUID whose agent has not named its inventory host yet stores
+   nothing. That includes a machine enrolled again, in the same or another organization. A device whose agent runs
+   0.1.0-alpha.11 or later binds its own host and is not affected. To release the UUID earlier, uninstall the old
+   device before you retire it (`POST /api/v1/devices/{id}/uninstall`), or let its organization lower
+   `retired_inventory_days` (`PUT /api/v1/settings/privacy`, minimum 1 day; this applies to all of its retired devices,
+   and the retention round runs every 6 hours);
 4. stores, per mapped device and under its organization, the OS version, the fleetd (or osquery) version, the last
    time Fleet saw the host, its hardware facts (manufacturer, model, serial number, processor and physical cores,
    memory size, total disk size; ADR 0037 decision 7), the installed packages, the matched CVEs and the policy results;
@@ -108,7 +126,15 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    as a warning. A device
    installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
    policy as soon as any release is published; publish that build or install a published release. The worker logs the
-   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query.
+   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query;
+6. reports, once per episode, `device.tamper_fleet_host_claimed` when another host reports a device's hardware UUID
+   and keeps contacting Fleet for 15 minutes, or when the device's host was enrolled again. After a re-enrollment, agent
+   reports from Fleet wait 60 minutes. A Fleet database restore re-enrolls many hosts at once; the worker then holds
+   the re-enrollment reports of the affected binding mode (`claim_majority`, label `binding`). A bound host that Fleet
+   no longer lists with the device's hardware UUID suspends the device's binding until the device names its new host
+   (`paddock_inventory_bindings_suspended`). The worker resolves at most 200 device tokens per round: more than about
+   1,500 agent updates per hour can leave a device unresolved for longer than 60 minutes, which then raises one false
+   `second_host` report, so keep rollout waves below that rate.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings
@@ -160,6 +186,9 @@ ssh -N -L 127.0.0.1:8412:"$ip":8080 docker-host
 The development stack publishes the port on `127.0.0.1:8412` of the development host (`compose.dev.yaml`). Changes
 made in the UI to the settings below are reset by `paddock-worker` within one round.
 
+Fleet's logs can contain device-token URLs of failed lookups (RR-151): give access to Fleet's logs only to platform
+operators.
+
 ## Bootstrap
 
 `deploy/compose/scripts/fleet-bootstrap.sh` sets Fleet up; development runs it in `make up` (also
@@ -173,6 +202,20 @@ made in the UI to the settings below are reset by `paddock-worker` within one ro
    and a new one is created. Restart `paddock-worker` after a new token.
 3. The global enroll secret from `.secrets/fleet_enroll_secret`.
 
+## When the inventory claim watch is suppressed
+
+The alert `PaddockInventoryClaimWatchSuppressed` and the log message `inventory claim watch suppressed`
+(`reason=claim_majority`, `binding`) mean that more than half of the devices of one binding mode (`device` or `first`)
+have an open episode with a re-enrollment, so the worker reports no re-enrollment of that mode. Claims of another host
+are reported, except for a device whose agent has not named its inventory host yet and whose open episode also saw a
+re-enrollment: that claim counts as a re-enrollment and is held as well (RR-22). The gauge
+`paddock_inventory_claim_watch_suppressed{binding}` counts the claims held.
+
+1. Check whether Fleet was restored or upgraded. The episodes end 60 minutes after the last re-enrollment, and the
+   alert clears.
+2. Otherwise list the Fleet hosts per hardware UUID. Several live hosts per UUID without such a cause need a security
+   review of the devices concerned.
+
 ## Settings Paddock enforces
 
 `paddock-worker` (`PADDOCK_FLEET_URL`, `PADDOCK_FLEET_TOKEN_FILE`, `PADDOCK_FLEET_PUBLIC_URL`) checks Fleet's
@@ -185,6 +228,7 @@ settings at start and every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, 
   (see `docs/compliance/privacy.md`): Linux software from the system package managers only, no network interfaces,
   no last-use times of packages, no software from users' home directories.
 - `webhook_settings`: every webhook off (activities, host status, failing policies, vulnerabilities).
+- `FLEET_OSQUERY_HOST_IDENTIFIER=provided` (compose): Fleet identifies a host by the identifier fleetd provides.
 - No scheduled queries and no query packs: they are deleted. Saved queries without a schedule stay; they could only
   run live, and live queries are off.
 

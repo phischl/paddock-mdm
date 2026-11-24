@@ -869,6 +869,47 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 	return i, err
 }
 
+const recordFleetDeviceToken = `-- name: RecordFleetDeviceToken :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, pending_token, token_reported_at)
+SELECT d.id, d.organization_id, $1::text, $2::timestamptz FROM device d
+WHERE d.id = $3 AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE
+  SET pending_token = EXCLUDED.pending_token, token_reported_at = EXCLUDED.token_reported_at
+  WHERE device_fleet_binding.token_reported_at IS NULL
+     OR device_fleet_binding.token_reported_at < EXCLUDED.token_reported_at
+`
+
+type RecordFleetDeviceTokenParams struct {
+	Token      string
+	ReportedAt time.Time
+	DeviceID   uuid.UUID
+}
+
+// The device token and the announced enrollment reset the agent reported (ADR 0057), for active devices only; an older
+// report never overwrites a newer one.
+func (q *Queries) RecordFleetDeviceToken(ctx context.Context, arg RecordFleetDeviceTokenParams) error {
+	_, err := q.db.Exec(ctx, recordFleetDeviceToken, arg.Token, arg.ReportedAt, arg.DeviceID)
+	return err
+}
+
+const recordFleetEnrollmentReset = `-- name: RecordFleetEnrollmentReset :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+SELECT d.id, d.organization_id, $1::timestamptz FROM device d WHERE d.id = $2 AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE SET reset_announced_at = EXCLUDED.reset_announced_at
+  WHERE device_fleet_binding.reset_announced_at IS NULL
+     OR device_fleet_binding.reset_announced_at < EXCLUDED.reset_announced_at
+`
+
+type RecordFleetEnrollmentResetParams struct {
+	ResetAt  time.Time
+	DeviceID uuid.UUID
+}
+
+func (q *Queries) RecordFleetEnrollmentReset(ctx context.Context, arg RecordFleetEnrollmentResetParams) error {
+	_, err := q.db.Exec(ctx, recordFleetEnrollmentReset, arg.ResetAt, arg.DeviceID)
+	return err
+}
+
 const revokeDeviceIdentityKeys = `-- name: RevokeDeviceIdentityKeys :exec
 UPDATE device_identity_key SET status = 'revoked' WHERE device_id = $1 AND status = 'active'
 `

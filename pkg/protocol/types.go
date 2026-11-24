@@ -92,6 +92,34 @@ type CheckinRequest struct {
 	// OSRelease is the os-release identification of the device (keys id and version_id, as at enrollment); an agent
 	// of an earlier release leaves it out and the server keeps the enrollment value (plan M13a decision 14, M2).
 	OSRelease map[string]string `json:"os_release,omitempty"`
+	// FleetDeviceToken is fleetd's current device token (/opt/orbit/identifier), sent when it changed since the last
+	// successful check-in (ADR 0057). Agents before 0.1.0-alpha.11 leave it out.
+	FleetDeviceToken string `json:"fleet_device_token,omitempty"`
+	// FleetEnrollmentResetAt is when the agent reset fleetd's enrollment to enroll it under its instance identifier,
+	// sent until a check-in with the new device token succeeded, at most 24 hours (ADR 0057). Agents before
+	// 0.1.0-alpha.11 leave it out.
+	FleetEnrollmentResetAt *time.Time `json:"fleet_enrollment_reset_at,omitempty"`
+}
+
+// ValidFleetDeviceToken reports whether s has the format of fleetd's device token, a lower-case UUID (ADR 0057).
+func ValidFleetDeviceToken(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Agent architectures of CheckinRequest.Arch.

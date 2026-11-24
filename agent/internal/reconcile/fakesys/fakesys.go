@@ -25,6 +25,8 @@ type File struct {
 	Mode     fs.FileMode
 	UID, GID int
 	Symlink  bool
+	// ModTime is the modification time ReadFile reports.
+	ModTime time.Time
 }
 
 // Unit is a fake systemd unit; State is the `systemctl is-enabled` answer.
@@ -164,7 +166,7 @@ func (i info) Mode() fs.FileMode {
 	}
 	return i.f.Mode
 }
-func (i info) ModTime() time.Time { return time.Time{} }
+func (i info) ModTime() time.Time { return i.f.ModTime }
 func (i info) IsDir() bool        { return false }
 func (i info) Sys() any           { return i.f }
 
@@ -200,6 +202,19 @@ func (s *System) Remove(path string) error {
 	}
 	s.Calls = append(s.Calls, "remove "+path)
 	delete(s.Files, path)
+	return nil
+}
+
+// RemoveAll implements reconcile.System.
+func (s *System) RemoveAll(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Calls = append(s.Calls, "removeall "+path)
+	for p := range s.Files {
+		if p == path || strings.HasPrefix(p, path+"/") {
+			delete(s.Files, p)
+		}
+	}
 	return nil
 }
 

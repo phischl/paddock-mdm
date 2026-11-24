@@ -283,3 +283,42 @@ whatever `drift_interval_s` says. A pass runs at every agent start. The suspensi
 `state.json`, so restarts, a held lock or an unwritable baseline no longer reset it. Root who edits the agent state
 resets it, the same residual as the joint reset in point 5. Plan M5a R15 holds the detail.
 
+## Amendment 2026-11-16 d (architect, PDK-1122d) — osquery that stops evaluating, and a failing agent-running query
+
+Status: **accepted** as reduced (2026-11-17, main, `decisions-alpha11.md` §159). Details, texts and tests: plan
+`docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 d (architect, PDK-1122d)". Builds on ADR
+0057 (inventory hosts bound to their device, PDK-1123), which lands first.
+
+**Context.** The PDK-1122c review found two cases that the mutual watch and amendment c do not report:
+- an `osqueryd` that stops storing policy results while orbit keeps talking to Fleet;
+- a `paddock_agent_running` query that stops answering on the device. Its empty result is dropped every round.
+
+Amendment c also judged a device by the newest contact of every host with its hardware UUID. After ADR 0057, the
+device's bound host is the one that counts.
+
+**Options.**
+
+1. **Server-side, from Fleet's host list (chosen).**
+   - A device whose bound host's policy results are 30 minutes older than the newest host's is a silent fleetd
+     (`reason` `policies`).
+   - An unanswered `paddock_agent_running` on a host that evaluates its policies counts as a failing evaluation. Its
+     query never changes (D7), so an empty answer means that the query failed.
+   - Pro: no device or protocol change.
+   - Con: `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL` must stay at 15 minutes or less.
+2. **A separate code for each case.** Not chosen: the operator needs to know that fleetd cannot confirm the agent,
+   and the description names the cause.
+
+**Decision.** Option 1, report only.
+
+- Amendment c's `seen(d)` becomes the `seen_time` of the device's bound host (ADR 0057). For a device without a
+  binding, it is the host Fleet enrolled first.
+- `device.tamper_fleetd_silent` (unreleased) gains the params `policy_updated_at` and `reason`.
+- The released `device.tamper_agent_not_running` gains one additive sentence in its description.
+- Amendment c's migration becomes `00164` (PDK-1123 takes `00163`).
+
+**Consequences.**
+
+- Positive: the two cases of the review are reported; amendment c's watch follows the bound host.
+- Negative: a longer description of a released code; an operator who raises the policy interval above 15 minutes
+  gets false `policies` reports (documented).
+- Follow-up: none beyond amendment c's.

@@ -15,13 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // TestInventoryGates runs the device gates of plan M5a on the VMs in parallel, each from a fresh base-installed: F1
 // (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device), F4 (an old package
 // version shows its CVEs), F2 (mutual watch of agent and fleetd), F5 (the agent binary policy, plan M5a amendment
-// 2026-11-16, A6) and F6 (an impostor checks in while the genuine agent is stopped, amendment 2026-11-16 b). Over all
+// 2026-11-16, A6), F6 (an impostor checks in while the genuine agent is stopped, amendment 2026-11-16 b) and F8 (the
+// device's inventory host binding, amendment 2026-11-17 e). Over all
 // gates exactly two device.tamper_agent_not_running are recorded per VM, F2's and F6's: the restarts of orbit and the
 // supervisor in F1, F4 and F5 raise none. The fleetd package of this run (make fleetd-deb) is published once, as a release without rollout,
 // for both VMs; Install publishes the installed paddockd the same way, so the genuine agent passes F5's policy.
@@ -38,6 +40,7 @@ func TestInventoryGates(t *testing.T) {
 		f2 := t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
 		t.Run("F5 agent binary policy", func(t *testing.T) { d.Bind(t); gateF5(t, d) })
 		f6 := t.Run("F6 agent absent while checking in", func(t *testing.T) { d.Bind(t); gateF6(t, d) })
+		t.Run("F8 inventory host binding", func(t *testing.T) { d.Bind(t); gateF8(t, d) })
 		// A failed F2 or F6 already fails the gate; their missing event would only repeat it as a count error.
 		if !f2 || !f6 {
 			return
@@ -455,11 +458,12 @@ func supervisorChild(t *testing.T, d *Device, exe, notPID string) string {
 
 // fleetHost is a host as Fleet's API returns it.
 type fleetHost struct {
-	ID             int    `json:"id"`
-	UUID           string `json:"uuid"`
-	Hostname       string `json:"hostname"`
-	OsqueryVersion string `json:"osquery_version"`
-	OrbitVersion   string `json:"orbit_version"`
+	ID             int        `json:"id"`
+	UUID           string     `json:"uuid"`
+	Hostname       string     `json:"hostname"`
+	OsqueryVersion string     `json:"osquery_version"`
+	OrbitVersion   string     `json:"orbit_version"`
+	SeenTime       *time.Time `json:"seen_time"`
 }
 
 // fleetAPI sends a request to Fleet's API on the development host (portal.FleetAdminURL) as Paddock's API-only user; the
@@ -484,13 +488,29 @@ func fleetAPI(t *testing.T, method, path string, body io.Reader) (*http.Response
 	return http.DefaultClient.Do(req)
 }
 
-// fleetHostByUUID looks a host up through Fleet's API.
+// fleetHostByUUID looks a host up through Fleet's API: the most recently seen of the hosts with the hardware UUID, since
+// earlier runs and the re-enrollment of F8 leave previous hosts behind.
 func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
+	hosts := fleetHostsByUUID(t, uuid)
+	if len(hosts) == 0 {
+		return fleetHost{}, false
+	}
+	best := hosts[0]
+	for _, h := range hosts[1:] {
+		if h.SeenTime != nil && (best.SeenTime == nil || h.SeenTime.After(*best.SeenTime)) {
+			best = h
+		}
+	}
+	return best, true
+}
+
+// fleetHostsByUUID lists every host with the hardware UUID through Fleet's API.
+func fleetHostsByUUID(t *testing.T, uuid string) []fleetHost {
 	t.Helper()
 	resp, err := fleetAPI(t, http.MethodGet, "/api/latest/fleet/hosts?query="+url.QueryEscape(uuid), nil)
 	if err != nil {
 		t.Logf("fleet hosts: %v", err)
-		return fleetHost{}, false
+		return nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var page struct {
@@ -498,14 +518,15 @@ func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil || resp.StatusCode != http.StatusOK {
 		t.Logf("fleet hosts: HTTP %d %v", resp.StatusCode, err)
-		return fleetHost{}, false
+		return nil
 	}
+	var out []fleetHost
 	for _, h := range page.Hosts {
 		if strings.EqualFold(h.UUID, uuid) {
-			return h, true
+			out = append(out, h)
 		}
 	}
-	return fleetHost{}, false
+	return out
 }
 
 // agentNotRunningCode is the audit code of the mutual watch's policy paddock_agent_running.
@@ -582,4 +603,153 @@ func gateF6(t *testing.T, d *Device) {
 
 	restore()
 	Until(t, d.Name+": paddock_agent_running passes again", 25*time.Minute, 15*time.Second, d.Checkin, func() bool { return query(passing) == "t" })
+}
+
+// fleetHostClaimedCode is the audit code of a claim on a device's inventory host (ADR 0057).
+const fleetHostClaimedCode = "device.tamper_fleet_host_claimed"
+
+// gateF8 is the inventory host binding on the device (plan M5a amendment 2026-11-17 e, section 8):
+//  1. orbit.env names the instance identifier, and fleetd's device token is readable and well formed;
+//  2. the device is bound to its most recently seen Fleet host and stores it;
+//  3. upgrade path: an orbit.env of an earlier agent makes the agent reset fleetd's enrollment once, announced before
+//     the new host is bound; the new host is bound, the previous one falls silent, and nothing is reported;
+//  4. another host enrolled with the VM's hardware UUID and a failing agent binary policy is reported once as a second
+//     host, and its data never reaches the device.
+func gateF8(t *testing.T, d *Device) {
+	query := func(sql string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, sql)
+		if err != nil {
+			t.Logf("%s: %v", d.Name, err)
+		}
+		return out
+	}
+	binding := func() string {
+		return query(fmt.Sprintf("SELECT host_id FROM device_fleet_binding WHERE device_id = '%s'", d.ID))
+	}
+	stored := func() string {
+		return query(fmt.Sprintf("SELECT external_id FROM device_inventory_ref WHERE device_id = '%s'", d.ID))
+	}
+	hw := strings.ToLower(d.MustRoot("cat /sys/class/dmi/id/product_uuid"))
+	claims0, files0 := len(d.s.Events(t, fleetHostClaimedCode, d.ID)), len(d.s.Events(t, "device.tamper_protected_file_changed", d.ID))
+	binary0 := len(d.s.Events(t, agentBinaryCode, d.ID))
+
+	if env := d.Must("sudo cat /etc/paddock/orbit.env"); !strings.Contains(env, "\nORBIT_HOST_IDENTIFIER=instance\n") {
+		t.Errorf("orbit.env:\n%s", env)
+	}
+	if out := d.Must("stat -c '%a' /opt/orbit/identifier"); out != "644" {
+		t.Errorf("/opt/orbit/identifier mode %q", out)
+	}
+	if token := d.Must("cat /opt/orbit/identifier"); !fleetTokenFormat(token) {
+		t.Errorf("device token of %d characters does not match the format", len(token))
+	}
+
+	var current fleetHost
+	Until(t, d.Name+": bound to its most recently seen Fleet host", 10*time.Minute, 15*time.Second, d.Checkin, func() bool {
+		h, ok := fleetHostByUUID(t, hw)
+		current = h
+		return ok && binding() == fmt.Sprint(h.ID) && stored() == fmt.Sprint(h.ID)
+	})
+
+	d.MustRoot("systemctl stop paddock-supervisor && sed -i '/^ORBIT_HOST_IDENTIFIER=/d' /etc/paddock/orbit.env && systemctl start paddock-supervisor")
+	var next fleetHost
+	Until(t, d.Name+": re-enrolled under a new Fleet host and bound to it", 15*time.Minute, 15*time.Second, d.Checkin, func() bool {
+		h, ok := fleetHostByUUID(t, hw)
+		next = h
+		return ok && h.ID > current.ID && binding() == fmt.Sprint(h.ID)
+	})
+	if got := query(fmt.Sprintf(`SELECT reset_announced_at IS NOT NULL AND reset_announced_at <= bound_at FROM device_fleet_binding
+		WHERE device_id = '%s'`, d.ID)); got != "t" {
+		t.Errorf("the enrollment reset was not announced before the new host was bound (%q)", got)
+	}
+	synced := query(fmt.Sprintf("SELECT synced_at FROM device_inventory_ref WHERE device_id = '%s'", d.ID))
+	Until(t, d.Name+": the new host's inventory synced", 10*time.Minute, 15*time.Second, d.Checkin, func() bool {
+		return stored() == fmt.Sprint(next.ID) &&
+			query(fmt.Sprintf("SELECT synced_at FROM device_inventory_ref WHERE device_id = '%s'", d.ID)) != synced
+	})
+	for _, h := range fleetHostsByUUID(t, hw) {
+		if h.ID == current.ID && h.SeenTime != nil && next.SeenTime != nil && !h.SeenTime.Before(*next.SeenTime) {
+			t.Errorf("the previous host %d is still seen (%s)", h.ID, h.SeenTime)
+		}
+	}
+	if n := len(d.s.Events(t, fleetHostClaimedCode, d.ID)) - claims0; n != 0 {
+		t.Errorf("%d %s events for the device's own re-enrollment", n, fleetHostClaimedCode)
+	}
+	if n := len(d.s.Events(t, "device.tamper_protected_file_changed", d.ID)) - files0; n != 0 {
+		t.Errorf("%d device.tamper_protected_file_changed events for the agent's own orbit.env", n)
+	}
+
+	dir, err := portal.SecretsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := os.ReadFile(filepath.Join(dir, "fleet_enroll_secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifier := fmt.Sprintf("pdk-f8-%s-%d", d.Name, time.Now().UnixNano())
+	other, err := devicesim.EnrollFleetAs(context.Background(), http.DefaultClient, strings.TrimRight(portal.FleetAdminURL(), "/"),
+		strings.TrimSpace(string(secret)), identifier, hw, identifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.AgentBinarySHA256 = strings.Repeat("0", 64)
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			_, _ = other.Answer(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+		for _, h := range fleetHostsByUUID(t, hw) {
+			if h.Hostname == identifier {
+				if resp, err := fleetAPI(t, http.MethodDelete, fmt.Sprintf("/api/latest/fleet/hosts/%d", h.ID), nil); err == nil {
+					_ = resp.Body.Close()
+				}
+			}
+		}
+	})
+	var claim []portal.AuditEvent
+	Until(t, d.Name+": the second host is reported", 30*time.Minute, 30*time.Second, d.Checkin, func() bool {
+		claim = d.s.Events(t, fleetHostClaimedCode, d.ID)[claims0:]
+		if stored() != fmt.Sprint(next.ID) {
+			t.Errorf("the device stores host %s, not its bound host %d", stored(), next.ID)
+		}
+		return len(claim) > 0
+	})
+	p := claim[0].Params
+	if len(claim) != 1 || p["kind"] != "second_host" || p["binding"] != "device" || p["bound_host"] != fmt.Sprint(next.ID) {
+		t.Errorf("claims %+v, want one second_host/device/%d", claim, next.ID)
+	}
+	if n := len(d.s.Events(t, agentBinaryCode, d.ID)) - binary0; n != 0 {
+		t.Errorf("%d %s events from the second host", n, agentBinaryCode)
+	}
+}
+
+// fleetTokenFormat reports whether s is a lower-case UUID, the format of fleetd's device token.
+func fleetTokenFormat(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case (c < '0' || c > '9') && (c < 'a' || c > 'f'):
+			return false
+		}
+	}
+	return true
 }

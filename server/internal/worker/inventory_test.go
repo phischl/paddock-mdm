@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -83,16 +85,32 @@ type fakeSource struct {
 	applyErr    error
 	// perHost replaces the policy answers and evaluation time for the hosts it lists.
 	perHost map[ports.HostRef]ports.HostInventory
+	// seenAt and enrolledAt are the listed hosts' last contact and latest enrollment (zero and nil when absent).
+	seenAt     map[ports.HostRef]time.Time
+	enrolledAt map[ports.HostRef]*time.Time
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
 
 func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, cursor string) (ports.HostPage, error) {
 	s.since = append(s.since, since)
-	if cursor == "" { // two pages of one host each
-		return ports.HostPage{Hosts: s.hosts[:1], Next: "1"}, nil
+	if cursor == "" { // two pages, the first of one host
+		return ports.HostPage{Hosts: s.hosts[:1], Seen: s.seen(s.hosts[:1]), Next: "1"}, nil
 	}
-	return ports.HostPage{Hosts: s.hosts[1:]}, nil
+	return ports.HostPage{Hosts: s.hosts[1:], Seen: s.seen(s.hosts[1:])}, nil
+}
+
+// uniqueRef is a host ID no other test uses: the inventory system's IDs are unique, and the shared database keeps
+// every test's stored hosts.
+func uniqueRef() ports.HostRef { return ports.HostRef(strconv.FormatInt(rand.Int64N(1e15), 10)) }
+
+// seen lists hosts as the adapter does: every host with a hardware UUID, in list order.
+func (s *fakeSource) seen(hosts []ports.InventoryHost) []ports.HostSeen {
+	out := []ports.HostSeen{}
+	for _, h := range hosts {
+		out = append(out, ports.HostSeen{Ref: h.Ref, HardwareUUID: h.HardwareUUID, SeenAt: s.seenAt[h.Ref], EnrolledAt: s.enrolledAt[h.Ref]})
+	}
+	return out
 }
 
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
@@ -145,7 +163,8 @@ func TestInventoryRound(t *testing.T) {
 		dev, f.org, hw); err != nil {
 		t.Fatal(err)
 	}
-	src := &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: strings.ToUpper(hw)}, {Ref: "2", HardwareUUID: uuid.NewString()}}}
+	one := uniqueRef()
+	src := &fakeSource{hosts: []ports.InventoryHost{{Ref: one, HardwareUUID: strings.ToUpper(hw)}, {Ref: uniqueRef(), HardwareUUID: uuid.NewString()}}}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform),
 		app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
@@ -158,7 +177,7 @@ func TestInventoryRound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if src.policies != 3 || !slices.Equal(src.read[:2], []ports.HostRef{"1", "1"}) {
+	if src.policies != 3 || !slices.Equal(src.read[:2], []ports.HostRef{one, one}) {
 		t.Fatalf("policies %d, read %v", src.policies, src.read)
 	}
 	var n int
@@ -303,7 +322,7 @@ func newBinaryRig(t *testing.T, hashes ...string) *binaryRig {
 		t.Fatal(err)
 	}
 	r := &binaryRig{f: f, dev: dev, hashes: &fakeHashes{hashes: hashes}, clock: time.Now().UTC().Truncate(time.Second),
-		src: &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: hw}, {Ref: "2", HardwareUUID: uuid.NewString()}}},
+		src: &fakeSource{hosts: []ports.InventoryHost{{Ref: uniqueRef(), HardwareUUID: hw}, {Ref: uniqueRef(), HardwareUUID: uuid.NewString()}}},
 		sys: principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	r.inv = NewInventory(nil, r.src, app.NewInventorySync(runner, f.pool, platform), app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
@@ -610,8 +629,8 @@ func TestInventoryRoundPolicyUnansweredMetric(t *testing.T) {
 
 	// The first round is full and applies every definition at r.clock.
 	r.src.perHost = map[ports.HostRef]ports.HostInventory{
-		"1": unanswered("disk_encrypted", at(3*time.Minute)),
-		"2": unanswered("disk_encrypted", at(time.Minute)),
+		r.src.hosts[0].Ref: unanswered("disk_encrypted", at(3*time.Minute)),
+		r.src.hosts[1].Ref: unanswered("disk_encrypted", at(time.Minute)),
 	}
 	r.round(t)
 	if g, n := gauge("disk_encrypted"), warns(); g != 1 || n != 1 || !strings.Contains(logs.String(), "policy=disk_encrypted hosts=1") {
@@ -619,7 +638,7 @@ func TestInventoryRoundPolicyUnansweredMetric(t *testing.T) {
 	}
 
 	r.clock = r.clock.Add(5 * time.Minute)
-	r.src.perHost["2"] = unanswered("disk_encrypted", at(-time.Minute))
+	r.src.perHost[r.src.hosts[1].Ref] = unanswered("disk_encrypted", at(-time.Minute))
 	r.round(t)
 	if g, n := gauge("disk_encrypted"), warns(); g != 1 || n != 1 {
 		t.Fatalf("changed-host round: gauge %v, %d warnings, want 1 and still 1", g, n)
@@ -629,8 +648,8 @@ func TestInventoryRoundPolicyUnansweredMetric(t *testing.T) {
 	r.src.vulnState = "changed" // a full round
 	r.clock = r.clock.Add(5 * time.Minute)
 	r.src.perHost = map[ports.HostRef]ports.HostInventory{
-		"1": unanswered(inventory.PolicyAgentBinaryKnown, at(time.Minute)),
-		"2": {PolicyUpdatedAt: at(time.Minute)},
+		r.src.hosts[0].Ref: unanswered(inventory.PolicyAgentBinaryKnown, at(time.Minute)),
+		r.src.hosts[1].Ref: {PolicyUpdatedAt: at(time.Minute)},
 	}
 	r.round(t)
 	if g, b, n := gauge("disk_encrypted"), gauge(inventory.PolicyAgentBinaryKnown), warns(); g != 0 || b != 0 || n != 1 {

@@ -17,7 +17,10 @@ ON CONFLICT (device_id) DO UPDATE
       hardware_vendor = EXCLUDED.hardware_vendor, hardware_model = EXCLUDED.hardware_model,
       hardware_serial = EXCLUDED.hardware_serial, cpu_brand = EXCLUDED.cpu_brand, cpu_cores = EXCLUDED.cpu_cores,
       memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes,
-      policy_updated_at = EXCLUDED.policy_updated_at;
+      policy_updated_at = EXCLUDED.policy_updated_at,
+      -- Another stored host is a rebinding, not a re-enrollment: its enrollment time is first observed anew (ADR 0057).
+      fleet_enrolled_at = CASE WHEN device_inventory_ref.external_id = EXCLUDED.external_id
+                               THEN device_inventory_ref.fleet_enrolled_at END;
 
 -- name: GetDeviceHardware :one
 SELECT hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes
@@ -82,6 +85,7 @@ FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
 WHERE d.state = 'active' AND r.policy_key = @policy_key AND NOT r.passing AND r.alerted_at IS NULL
   AND (s.last_contact_at IS NULL OR s.last_contact_at < @before::timestamptz
        OR i.policy_updated_at >= r.failing_since + make_interval(secs => @absent_for_s::double precision))
+  AND (i.fleet_reenrolled_at IS NULL OR i.fleet_reenrolled_at < @held_before::timestamptz)
 ORDER BY r.device_id;
 
 -- name: MarkAgentNotRunningReported :exec
@@ -95,6 +99,7 @@ FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
      JOIN device_inventory_ref i ON i.device_id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
 WHERE d.state = 'active' AND r.policy_key = @policy_key AND NOT r.passing AND r.alerted_at IS NULL
   AND i.policy_updated_at >= @evaluated_after::timestamptz
+  AND (i.fleet_reenrolled_at IS NULL OR i.fleet_reenrolled_at < @held_before::timestamptz)
 ORDER BY r.device_id;
 
 -- List queries of the admin API (plan M5a decision 9, ADR 0018); see device_group.sql.
@@ -335,3 +340,102 @@ SELECT paddock_fleet_host_in_use(@retired_device::uuid, @host::text)::text;
 -- organization's reference or hardware keeps the host (platform pool, plan M17 amendment l point 1).
 -- name: FleetHostInUseOutside :one
 SELECT paddock_fleet_host_in_use_outside(@org::uuid, @host::text)::text;
+
+-- Inventory host bindings and the claim watch (ADR 0057; plan M5a amendment 2026-11-17 e).
+
+-- The platform functions' columns are not typed for sqlc: 'epoch' stands for NULL (never a real time here).
+-- name: InventoryBindings :many
+SELECT b.device_id::uuid AS device_id, b.organization_id::uuid AS organization_id, coalesce(b.hardware_uuid, '')::text AS hardware_uuid,
+       coalesce(b.host_id, '')::text AS host_id, coalesce(b.pending_token, '')::text AS pending_token,
+       coalesce(b.token_reported_at, 'epoch')::timestamptz AS token_reported_at,
+       coalesce(b.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
+       coalesce(b.bound_at, 'epoch')::timestamptz AS bound_at,
+       coalesce(b.suspended_at, 'epoch')::timestamptz AS suspended_at
+FROM paddock_inventory_bindings() b ORDER BY b.token_reported_at NULLS LAST, b.device_id;
+
+-- name: BindInventoryHost :execrows
+UPDATE device_fleet_binding SET host_id = @host_id, bound_at = @at::timestamptz, pending_token = NULL, suspended_at = NULL
+WHERE device_id = @device_id AND token_reported_at = @token_reported_at::timestamptz;
+
+-- name: ClearFleetDeviceToken :execrows
+UPDATE device_fleet_binding SET pending_token = NULL
+WHERE device_id = @device_id AND token_reported_at = @token_reported_at::timestamptz;
+
+-- name: ExpireFleetDeviceTokens :one
+SELECT paddock_expire_fleet_device_tokens(@before::timestamptz)::bigint AS expired;
+
+-- name: InventoryClaimDevices :many
+SELECT c.device_id::uuid AS device_id, c.organization_id::uuid AS organization_id, coalesce(c.hardware_uuid, '')::text AS hardware_uuid,
+       c.external_id::text AS external_id, coalesce(c.bound_host, '')::text AS bound_host,
+       coalesce(c.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
+       coalesce(c.bound_at, 'epoch')::timestamptz AS bound_at,
+       coalesce(c.fleet_enrolled_at, 'epoch')::timestamptz AS fleet_enrolled_at,
+       coalesce(c.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at,
+       coalesce(c.fleet_claim_since, 'epoch')::timestamptz AS fleet_claim_since,
+       coalesce(c.fleet_claim_reported_at, 'epoch')::timestamptz AS fleet_claim_reported_at,
+       coalesce(c.suspended_at, 'epoch')::timestamptz AS suspended_at, c.active::boolean AS active
+FROM paddock_inventory_claim_devices() c ORDER BY c.device_id;
+
+-- name: SetFleetEnrolledAt :exec
+UPDATE device_inventory_ref SET fleet_enrolled_at = @enrolled_at WHERE device_id = @device_id;
+
+-- name: MarkFleetReenrolled :exec
+UPDATE device_inventory_ref SET fleet_reenrolled_at = @at::timestamptz WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: StartFleetClaim :exec
+UPDATE device_inventory_ref SET fleet_claim_since = @at::timestamptz
+WHERE device_id = ANY(@device_ids::uuid[]) AND fleet_claim_since IS NULL;
+
+-- name: ClearFleetClaim :exec
+UPDATE device_inventory_ref SET fleet_claim_since = NULL, fleet_claim_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: MarkFleetClaimReported :execrows
+UPDATE device_inventory_ref SET fleet_claim_reported_at = @at::timestamptz
+WHERE device_id = @device_id AND fleet_claim_reported_at IS NULL;
+
+-- name: SuspendInventoryBindings :exec
+UPDATE device_fleet_binding SET suspended_at = @at::timestamptz
+WHERE device_id = ANY(@device_ids::uuid[]) AND suspended_at IS NULL;
+
+-- name: ResumeInventoryBindings :exec
+UPDATE device_fleet_binding SET suspended_at = NULL WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- Hosts a device left (review round 2).
+
+-- name: RecordReplacedInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+SELECT r.device_id, r.organization_id, r.external_id, 'replaced', now() FROM device_inventory_ref r
+WHERE r.device_id = @device_id AND r.external_id <> '' AND r.external_id <> @external_id::text
+ON CONFLICT (device_id, host_id) DO NOTHING;
+
+-- name: RecordRelistedInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+VALUES (@device_id, @organization_id, @host_id, 'relisted', @left_at)
+ON CONFLICT (device_id, host_id) DO NOTHING;
+
+-- name: ForgetLeftInventoryHost :exec
+DELETE FROM device_inventory_left_host WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: LockLeftInventoryHost :one
+SELECT host_id FROM device_inventory_left_host
+WHERE device_id = @device_id AND host_id = @host_id AND removed_at IS NULL FOR UPDATE;
+
+-- name: MarkLeftInventoryHostRemoved :exec
+UPDATE device_inventory_left_host SET removed_at = now() WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: MarkLeftInventoryHostAttempted :exec
+UPDATE device_inventory_left_host SET attempted_at = now() WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: InventoryLeftHosts :many
+SELECT l.device_id::uuid AS device_id, l.organization_id::uuid AS organization_id, l.host_id::text AS host_id,
+       l.reason::text AS reason, l.left_at::timestamptz AS left_at,
+       coalesce(l.attempted_at, 'epoch')::timestamptz AS attempted_at, l.hostname::text AS hostname,
+       l.org_active::boolean AS org_active
+FROM paddock_inventory_left_hosts() l;
+
+-- name: RecordRetiredInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+SELECT r.device_id, r.organization_id, r.external_id, 'retired', now() FROM device_inventory_ref r
+WHERE r.device_id = @device_id AND r.external_id <> ''
+ON CONFLICT (device_id, host_id) DO NOTHING;

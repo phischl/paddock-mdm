@@ -74,6 +74,9 @@ type State struct {
 	// PendingUninstall is the accepted uninstall command whose removal the agent starts once its result was accepted
 	// (plan M8d decision 39).
 	PendingUninstall *PendingUninstall `json:"pending_uninstall,omitempty"`
+	// FleetResetAt is when the agent reset fleetd's enrollment (ADR 0057, H14); the check-in announces it until a
+	// check-in with the new device token succeeded, at most fleetResetAnnounce.
+	FleetResetAt *time.Time `json:"fleet_reset_at,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`
 	// LocalAdmin is the managed local administrator (plan M4a decision 15).

@@ -212,3 +212,21 @@ WHERE agent_update_requested_at < @before::timestamptz;
 -- name: ListAgentUpdateRequests :many
 SELECT id, agent_update_requested_version, agent_update_requested_at FROM device
 WHERE agent_update_requested_at IS NOT NULL ORDER BY id;
+
+-- The device token and the announced enrollment reset the agent reported (ADR 0057), for active devices only; an older
+-- report never overwrites a newer one.
+-- name: RecordFleetDeviceToken :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, pending_token, token_reported_at)
+SELECT d.id, d.organization_id, @token::text, @reported_at::timestamptz FROM device d
+WHERE d.id = @device_id AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE
+  SET pending_token = EXCLUDED.pending_token, token_reported_at = EXCLUDED.token_reported_at
+  WHERE device_fleet_binding.token_reported_at IS NULL
+     OR device_fleet_binding.token_reported_at < EXCLUDED.token_reported_at;
+
+-- name: RecordFleetEnrollmentReset :exec
+INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+SELECT d.id, d.organization_id, @reset_at::timestamptz FROM device d WHERE d.id = @device_id AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE SET reset_announced_at = EXCLUDED.reset_announced_at
+  WHERE device_fleet_binding.reset_announced_at IS NULL
+     OR device_fleet_binding.reset_announced_at < EXCLUDED.reset_announced_at;

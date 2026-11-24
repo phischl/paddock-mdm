@@ -519,6 +519,21 @@ components:
             record when they differ from the stored values and recompiles the device; values that are not plain
             identifiers (letters, digits, `.`, `_`, `-`, at most 64 characters) are ignored without failing the check-in.
             Optional; agents of earlier releases leave it out and the enrollment value stays.
+        fleet_device_token:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: |
+            fleetd's current device token (the content of /opt/orbit/identifier), sent when it changed since the last
+            successful check-in. The server resolves it through the inventory system to the device's inventory host
+            and stores only that host's data for the device (ADR 0057). A value that does not match the pattern is
+            ignored without failing the check-in. Optional; agents before 0.1.0-alpha.11 leave it out.
+        fleet_enrollment_reset_at:
+          type: string
+          format: date-time
+          description: |
+            When the agent reset fleetd's enrollment to enroll it under its instance identifier (ADR 0057), sent until a
+            check-in with the new device token succeeded, at most 24 hours. Optional; agents before 0.1.0-alpha.11 leave
+            it out.
     BundleRef:
       type: object
       required: [version, sha256, url]

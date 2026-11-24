@@ -269,7 +269,7 @@ func TestReportAgentBinaryUnknown(t *testing.T) {
 	h.binaryResult(t, other, foreign, false, evaluated)
 
 	for range 2 {
-		got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), gate, 3)
+		got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), time.Now(), gate, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -305,7 +305,7 @@ func TestReportAgentBinaryUnknown(t *testing.T) {
 			t.Fatalf("device %s reported %d times", dev, n)
 		}
 	}
-	got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(other), gate, 3)
+	got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(other), time.Now(), gate, 3)
 	if err != nil || !slices.Equal(got, []uuid.UUID{foreign}) {
 		t.Fatalf("organization B in its own context: %v, %v", got, err)
 	}
@@ -314,11 +314,11 @@ func TestReportAgentBinaryUnknown(t *testing.T) {
 	if n := h.count(t, "SELECT count(*) FROM inventory_policy_result WHERE device_id = $1 AND alerted_at IS NOT NULL", failing); n != 0 {
 		t.Fatal("a passing result keeps alerted_at")
 	}
-	if got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), gate, 3); err != nil || len(got) != 0 {
+	if got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), time.Now(), gate, 3); err != nil || len(got) != 0 {
 		t.Fatalf("a passing result reported: %v, %v", got, err)
 	}
 	h.binaryResult(t, org, failing, false, evaluated.Add(2*time.Minute))
-	if got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), gate, 3); err != nil || !slices.Equal(got, []uuid.UUID{failing}) {
+	if got, err := h.sync.ReportAgentBinaryUnknown(systemCtx(org), time.Now(), gate, 3); err != nil || !slices.Equal(got, []uuid.UUID{failing}) {
 		t.Fatalf("second failure %v, %v", got, err)
 	}
 }

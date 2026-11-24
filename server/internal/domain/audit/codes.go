@@ -163,6 +163,10 @@ const (
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
 	// Agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part A).
 	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
+	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
+	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
+	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
 	// Update management (plan M5b decisions 1–3 and 6).
 	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
 	CodePackageHoldCreated        Code = "package_hold.created"
@@ -1304,6 +1308,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+	},
+	CodeDeviceInventoryHostRemoved: {
+		Code: CodeDeviceInventoryHostRemoved, Emitted: true,
+		Description: "The inventory round removed from Fleet a host that the device no longer speaks from (actor: system). reason replaced: the host Paddock stores for the device changed and fleet_host was the previous one; reason relisted: Fleet lists fleet_host, the host stored for the device, with another hardware UUID; reason retired: the device was retired and fleet_host is the host Paddock stored for it. Until it is removed, the host is reserved for the device: no other device is bound to it or stores it. left_at is when it was left. fleet_host_deleted is true when Fleet deleted the host or no longer knew it. A host that another device stores, is bound to or holds reserved is not removed and records no event. A failure keeps the reservation: upstream_unavailable when Fleet failed or could not be reached (retried next round), invalid_state when Fleet refused this host (retried after an hour). After a Fleet rebuild, the removed host can be another machine's record; that machine's fleetd enrolls again under a new ID.",
+		Params:      []string{"hostname", "fleet_host", "reason", "left_at", "fleet_host_deleted"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0057.",
+	},
+	CodeDeviceTamperFleetHostClaimed: {
+		Code: CodeDeviceTamperFleetHostClaimed, Emitted: true,
+		Description: "An inventory host other than the one that speaks for a device claims it (actor: system). kind second_host: another host reported the device's hardware UUID and kept contacting the inventory system for 15 minutes; kind reenrolled: the host that speaks for the device was enrolled again, which also happens when fleetd's local state on the device is lost, or, for a device that has not named its host, another host took the place of the one stored for it. binding is device when the device named its inventory host over its device connection, first when it has not named one yet and the host already stored for it (else the one with the lowest ID) speaks for it. Only the speaking host's data is stored for the device; after a re-enrollment, agent reports derived from the inventory system wait 60 minutes. bound_host is the inventory system's ID of the speaking host, other_hosts the IDs of the other live claimants (at most 10, ascending, comma-separated; absent when none), hosts the number of live claimants including the speaking host, enrolled_at the inventory system's time of the latest enrollment of the speaking host (absent when unknown), claim_since when the worker first saw the claim.",
+		Params:      []string{"kind", "binding", "bound_host", "other_hosts", "hosts", "enrolled_at", "claim_since"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per claim episode; the episode ends when no other live host claims the device and no re-enrollment was seen for 60 minutes.",
 	},
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,

@@ -401,6 +401,14 @@ groups:
         annotations:
           summary: "The certificate of {{ $labels.host }} cannot be read or does not verify"
           description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails, or the certificate is expired, untrusted or issued for another name."
+      - alert: PaddockInventoryClaimWatchSuppressed
+        expr: max(paddock_inventory_claim_watch_suppressed) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Inventory claim reports are held: most watched devices have an open claim"
+          description: "More than half of the devices with inventory have an open claim episode, so no claim is reported. A Fleet database restore causes this for up to 60 minutes; otherwise follow docs/operations/fleet.md, \"When the inventory claim watch is suppressed\"."
 
   - name: paddock-notifications
     rules:

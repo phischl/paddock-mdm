@@ -16,13 +16,15 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
-	_ ports.Inventory      = (*Client)(nil)
-	_ ports.InventoryAdmin = (*Client)(nil)
+	_ ports.Inventory       = (*Client)(nil)
+	_ ports.InventoryAdmin  = (*Client)(nil)
+	_ ports.InventoryBinder = (*Client)(nil)
 )
 
 // hostsPerPage is the page size of the host list.
@@ -35,6 +37,7 @@ type host struct {
 	OsqueryVersion    string     `json:"osquery_version"`
 	OrbitVersion      *string    `json:"orbit_version"`
 	SeenTime          *time.Time `json:"seen_time"`
+	LastEnrolledAt    *time.Time `json:"last_enrolled_at"`
 	DetailUpdatedAt   time.Time  `json:"detail_updated_at"`
 	SoftwareUpdatedAt time.Time  `json:"software_updated_at"`
 	PolicyUpdatedAt   time.Time  `json:"policy_updated_at"`
@@ -95,7 +98,15 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 	}
 	var res ports.HostPage
 	for _, h := range out.Hosts {
-		if h.UUID == "" || h.changedAt().Before(since) {
+		if h.UUID == "" {
+			continue
+		}
+		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: h.UUID, EnrolledAt: h.LastEnrolledAt}
+		if h.SeenTime != nil {
+			seen.SeenAt = *h.SeenTime
+		}
+		res.Seen = append(res.Seen, seen)
+		if h.changedAt().Before(since) {
 			continue
 		}
 		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: h.UUID, ChangedAt: h.changedAt()})
@@ -198,6 +209,42 @@ func (c *Client) HostSeenAt(ctx context.Context, ref ports.HostRef) (time.Time, 
 		return time.Time{}, nil
 	}
 	return time.Time{}, hostError(err, fmt.Sprintf("get fleet host %d", id))
+}
+
+// ResolveDeviceToken implements ports.InventoryBinder with GET /api/latest/fleet/device/{token}?exclude_software=true,
+// one attempt: the next round retries. It refuses a token that does not match the device token format without a
+// request. 401 and 404 are problem.NotFound; a 200 without host.id is problem.UpstreamUnavailable. The token is a
+// credential for Fleet's device endpoints, so no error carries the request URL or Fleet's answer (ADR 0057, H12).
+func (c *Client) ResolveDeviceToken(ctx context.Context, token string) (ports.HostRef, string, error) {
+	if !protocol.ValidFleetDeviceToken(token) {
+		return "", "", fmt.Errorf("%w: fleet: the device token has an invalid format", problem.NotFound)
+	}
+	var out struct {
+		Host *struct {
+			ID   int    `json:"id"`
+			UUID string `json:"uuid"`
+		} `json:"host"`
+	}
+	_, err := c.once(ctx, http.MethodGet, "/api/latest/fleet/device/"+token+"?exclude_software=true", nil, &out)
+	st := (*errStatus)(nil)
+	ue := (*url.Error)(nil)
+	switch {
+	case err == nil && out.Host != nil && out.Host.ID > 0:
+		return ports.HostRef(strconv.Itoa(out.Host.ID)), strings.ToLower(out.Host.UUID), nil
+	case err == nil:
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: the answer has no host", problem.UpstreamUnavailable)
+	case errors.As(err, &st) && (st.code == http.StatusUnauthorized || st.code == http.StatusNotFound):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: HTTP %d", problem.NotFound, st.code)
+	case errors.As(err, &st):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: HTTP %d", problem.UpstreamUnavailable, st.code)
+	case errors.Is(err, context.Canceled):
+		return "", "", fmt.Errorf("resolve a fleet device token: %w", context.Canceled)
+	case errors.As(err, &ue):
+		return "", "", fmt.Errorf("%w: resolve a fleet device token: %s", problem.UpstreamUnavailable,
+			strings.ReplaceAll(ue.Err.Error(), token, "[token]"))
+	}
+	return "", "", fmt.Errorf("%w: resolve a fleet device token: %s", problem.UpstreamUnavailable,
+		strings.ReplaceAll(err.Error(), token, "[token]"))
 }
 
 // hostError classifies a failed request about one host: Fleet's refusal of this one host (hostRefused) is

@@ -21,6 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/inventory"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -39,6 +40,33 @@ type DeviceReports struct {
 // NewDeviceReports creates the use cases.
 func NewDeviceReports(runner *ActionRunner, org *db.OrgPool) *DeviceReports {
 	return &DeviceReports{runner: runner, org: org, now: time.Now}
+}
+
+// RecordFleetReport records the device token and the announced enrollment reset a heartbeat carries for the active
+// device of the organization in ctx (ADR 0057); an older report never overwrites a newer one. A token received
+// inventory.TokenMaxAge or longer ago, such as one of a heartbeat that waited in the queue, is not recorded: it is no
+// longer decided.
+func (d *DeviceReports) RecordFleetReport(ctx context.Context, hb ingest.Heartbeat) error {
+	token := hb.FleetDeviceToken
+	if d.now().Sub(hb.ReceivedAt) >= inventory.TokenMaxAge {
+		token = ""
+	}
+	if token == "" && hb.FleetEnrollmentResetAt == nil {
+		return nil
+	}
+	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if token != "" {
+			if err := q.RecordFleetDeviceToken(ctx, pgstore.RecordFleetDeviceTokenParams{Token: token,
+				ReportedAt: hb.ReceivedAt, DeviceID: hb.DeviceID}); err != nil {
+				return err
+			}
+		}
+		if hb.FleetEnrollmentResetAt == nil {
+			return nil
+		}
+		return q.RecordFleetEnrollmentReset(ctx, pgstore.RecordFleetEnrollmentResetParams{ResetAt: *hb.FleetEnrollmentResetAt,
+			DeviceID: hb.DeviceID})
+	})
 }
 
 // RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one. A heartbeat

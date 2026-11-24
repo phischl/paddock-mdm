@@ -17,9 +17,21 @@ type InventoryHost struct {
 	ChangedAt time.Time
 }
 
-// HostPage is one page of hosts; Next is the cursor of the next page, "" after the last one.
+// HostSeen is one listed host of the inventory system that has a hardware UUID (ADR 0057).
+type HostSeen struct {
+	Ref          HostRef
+	HardwareUUID string
+	// SeenAt is the host's last contact in the inventory system's clock; zero when it reports none.
+	SeenAt time.Time
+	// EnrolledAt is the host's latest enrollment; nil when unknown.
+	EnrolledAt *time.Time
+}
+
+// HostPage is one page of hosts; Next is the cursor of the next page, "" after the last one. Seen holds every host of
+// the page with a hardware UUID, changed or not, in list order.
 type HostPage struct {
 	Hosts []InventoryHost
+	Seen  []HostSeen
 	Next  string
 }
 
@@ -86,6 +98,14 @@ type Inventory interface {
 	VulnerabilityState(ctx context.Context) (string, error)
 	// ApplyPolicies creates or updates Paddock's policies (idempotent).
 	ApplyPolicies(ctx context.Context, policies []PolicyDefinition) error
+}
+
+// InventoryBinder resolves a device token to the host that registered it (ADR 0057).
+type InventoryBinder interface {
+	// ResolveDeviceToken returns the host the token identifies and its hardware UUID. An error wrapping
+	// problem.NotFound means the inventory system knows no host for the token (unknown or older than its lifetime);
+	// problem.UpstreamUnavailable that it failed or could not be reached. Errors never contain the token.
+	ResolveDeviceToken(ctx context.Context, token string) (HostRef, string, error)
 }
 
 // InventoryAdmin deletes hosts from the inventory system (retention of retired devices, ADR 0032).

@@ -2,17 +2,20 @@ package app
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/inventory"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // AgentSilence is how long a device must have been without check-in before a failing agent-running policy is reported
@@ -43,7 +46,8 @@ type MappedDevice struct {
 }
 
 // MapHosts maps hardware UUIDs to devices across organizations: a UUID maps only if exactly one active or quarantined
-// device has it (case-insensitive). Unknown and ambiguous UUIDs are missing from the result.
+// device has it (case-insensitive) and no retired device still holds it (ADR 0057 decision 4). Unknown and ambiguous
+// UUIDs are missing from the result.
 func (s *InventorySync) MapHosts(ctx context.Context, uuids []string) (map[string]MappedDevice, error) {
 	out := map[string]MappedDevice{}
 	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -62,6 +66,14 @@ func (s *InventorySync) MapHosts(ctx context.Context, uuids []string) (map[strin
 func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref ports.HostRef, inv ports.HostInventory) error {
 	return s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		org := mustOrg(ctx)
+		// The previous host is reserved before the reference moves, so that a restart cannot lose it (review round 2).
+		if err := q.RecordReplacedInventoryHost(ctx, pgstore.RecordReplacedInventoryHostParams{DeviceID: device,
+			ExternalID: string(ref)}); err != nil {
+			return err
+		}
+		if err := q.ForgetLeftInventoryHost(ctx, pgstore.ForgetLeftInventoryHostParams{DeviceID: device, HostID: string(ref)}); err != nil {
+			return err
+		}
 		if err := q.UpsertInventoryRef(ctx, pgstore.UpsertInventoryRefParams{
 			DeviceID: device, OrganizationID: org, ExternalID: string(ref), LastSeenAt: inv.LastSeenAt,
 			OsVersion: inv.OSVersion, FleetdVersion: inv.AgentVersion,
@@ -155,7 +167,8 @@ func flatten(software []ports.SoftwarePackage) (softwareColumns, findingColumns)
 // ReportAgentNotRunning records device.tamper_agent_not_running for every active device of the organization in ctx
 // whose agent-running policy fails (the mutual watch, plan M5a decision 8 as amended 2026-11-16 b) and that either
 // has not checked in for AgentSilence, or whose policy failed in evaluations at least AgentAbsence apart in the
-// inventory system's clock although the device may keep checking in. It reports once per failure: the event and the
+// inventory system's clock although the device may keep checking in. A device whose inventory host was enrolled again
+// within inventory.ClaimQuiet waits (ADR 0057, H8). It reports once per failure: the event and the
 // mark are one transaction. It returns the reported devices.
 func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
 	var rows []pgstore.ListAgentNotRunningRow
@@ -163,7 +176,7 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 		var err error
 		rows, err = q.ListAgentNotRunning(ctx, pgstore.ListAgentNotRunningParams{
 			PolicyKey: inventory.PolicyAgentRunning, Before: now.Add(-AgentSilence),
-			AbsentForS: AgentAbsence.Seconds(),
+			AbsentForS: AgentAbsence.Seconds(), HeldBefore: now.Add(-inventory.ClaimQuiet),
 		})
 		return err
 	})
@@ -222,13 +235,15 @@ func (s *InventorySync) PublishedAgentHashes(ctx context.Context) ([]string, err
 // ctx whose agent binary policy fails and whose host evaluated its policies at or after evaluatedAfter (plan M5a
 // amendment 2026-11-16, A3), once per failure: the event, the mark and the tamper finding are one transaction. There
 // is no check-in silence rule, because a replaced agent keeps checking in. knownHashes is the size of the hash set the
-// policy accepts. It returns the reported devices.
-func (s *InventorySync) ReportAgentBinaryUnknown(ctx context.Context, evaluatedAfter time.Time, knownHashes int) ([]uuid.UUID, error) {
+// policy accepts. A device whose inventory host was enrolled again within inventory.ClaimQuiet before now waits (ADR
+// 0057, H8). It returns the reported devices.
+func (s *InventorySync) ReportAgentBinaryUnknown(ctx context.Context, now, evaluatedAfter time.Time, knownHashes int) ([]uuid.UUID, error) {
 	var rows []pgstore.ListAgentBinaryUnknownRow
 	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		rows, err = q.ListAgentBinaryUnknown(ctx, pgstore.ListAgentBinaryUnknownParams{
 			PolicyKey: inventory.PolicyAgentBinaryKnown, EvaluatedAfter: evaluatedAfter,
+			HeldBefore: now.Add(-inventory.ClaimQuiet),
 		})
 		return err
 	})
@@ -267,4 +282,245 @@ func (s *InventorySync) ReportAgentBinaryUnknown(ctx context.Context, evaluatedA
 		reported = append(reported, r.DeviceID)
 	}
 	return reported, nil
+}
+
+// nullTime turns the 'epoch' that the binding queries return for NULL back into nil.
+func nullTime(t time.Time) *time.Time {
+	if t.Unix() == 0 {
+		return nil
+	}
+	return &t
+}
+
+// InventoryBindings returns the bindings of the active and quarantined devices across organizations (platform), oldest
+// pending token first (ADR 0057, H5).
+func (s *InventorySync) InventoryBindings(ctx context.Context) ([]inventory.Binding, error) {
+	var out []inventory.Binding
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.InventoryBindings(ctx)
+		for _, r := range rows {
+			out = append(out, inventory.Binding{DeviceID: r.DeviceID, OrganizationID: r.OrganizationID,
+				HardwareUUID: r.HardwareUuid, Host: ports.HostRef(r.HostID), PendingToken: r.PendingToken,
+				TokenReportedAt: nullTime(r.TokenReportedAt), ResetAnnouncedAt: nullTime(r.ResetAnnouncedAt),
+				BoundAt: nullTime(r.BoundAt), SuspendedAt: nullTime(r.SuspendedAt)})
+		}
+		return err
+	})
+	return out, err
+}
+
+// ExpireFleetDeviceTokens clears every device token reported before before, of devices in any state (platform; ADR
+// 0057, H13), and returns how many it cleared.
+func (s *InventorySync) ExpireFleetDeviceTokens(ctx context.Context, before time.Time) (int64, error) {
+	var n int64
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		n, err = q.ExpireFleetDeviceTokens(ctx, before)
+		return err
+	})
+	return n, err
+}
+
+// BindInventoryHost binds a device of the organization in ctx to host and clears its token, unless a newer token was
+// reported after reportedAt; it reports whether it bound.
+func (s *InventorySync) BindInventoryHost(ctx context.Context, device uuid.UUID, reportedAt time.Time, host ports.HostRef,
+	now time.Time) (bool, error) {
+	var n int64
+	hostID := string(host)
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		n, err = q.BindInventoryHost(ctx, pgstore.BindInventoryHostParams{HostID: &hostID, At: now,
+			DeviceID: device, TokenReportedAt: reportedAt})
+		if err != nil || n == 0 {
+			return err
+		}
+		return q.ForgetLeftInventoryHost(ctx, pgstore.ForgetLeftInventoryHostParams{DeviceID: device, HostID: hostID})
+	})
+	return n == 1, err
+}
+
+// ClearFleetDeviceToken clears the decided token of a device of the organization in ctx, unless a newer token was
+// reported after reportedAt.
+func (s *InventorySync) ClearFleetDeviceToken(ctx context.Context, device uuid.UUID, reportedAt time.Time) error {
+	return s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.ClearFleetDeviceToken(ctx, pgstore.ClearFleetDeviceTokenParams{DeviceID: device, TokenReportedAt: reportedAt})
+		return err
+	})
+}
+
+// SuspendInventoryBindings suspends the bindings of suspend that are not suspended yet and resumes those of resume, in
+// the organization of ctx (review round 1, F1).
+func (s *InventorySync) SuspendInventoryBindings(ctx context.Context, suspend, resume []uuid.UUID, now time.Time) error {
+	return s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.SuspendInventoryBindings(ctx, pgstore.SuspendInventoryBindingsParams{At: now, DeviceIds: nonNilIDs(suspend)}); err != nil {
+			return err
+		}
+		return q.ResumeInventoryBindings(ctx, nonNilIDs(resume))
+	})
+}
+
+// InventoryClaimDevices returns the active and quarantined devices with a stored host across organizations (platform;
+// ADR 0057, H7).
+func (s *InventorySync) InventoryClaimDevices(ctx context.Context) ([]inventory.ClaimDevice, error) {
+	var out []inventory.ClaimDevice
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.InventoryClaimDevices(ctx)
+		for _, r := range rows {
+			out = append(out, inventory.ClaimDevice{DeviceID: r.DeviceID, OrganizationID: r.OrganizationID,
+				HardwareUUID: r.HardwareUuid, ExternalID: ports.HostRef(r.ExternalID), BoundHost: ports.HostRef(r.BoundHost),
+				ResetAnnouncedAt: nullTime(r.ResetAnnouncedAt), BoundAt: nullTime(r.BoundAt),
+				EnrolledAt: nullTime(r.FleetEnrolledAt), ReenrolledAt: nullTime(r.FleetReenrolledAt),
+				ClaimSince: nullTime(r.FleetClaimSince), ClaimReportedAt: nullTime(r.FleetClaimReportedAt),
+				SuspendedAt: nullTime(r.SuspendedAt), Active: r.Active})
+		}
+		return err
+	})
+	return out, err
+}
+
+// ApplyClaimWatch applies the organization's part of a claim watch round in one transaction, then records
+// device.tamper_fleet_host_claimed with a tamper finding for each claim, once per episode: the mark and the event are one
+// transaction, and a claim already marked records nothing. It returns the reported devices.
+func (s *InventorySync) ApplyClaimWatch(ctx context.Context, w inventory.ClaimWatch, now time.Time) ([]uuid.UUID, error) {
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		for device, at := range w.Enrolled {
+			if err := q.SetFleetEnrolledAt(ctx, pgstore.SetFleetEnrolledAtParams{EnrolledAt: at, DeviceID: device}); err != nil {
+				return err
+			}
+		}
+		if err := q.MarkFleetReenrolled(ctx, pgstore.MarkFleetReenrolledParams{At: now, DeviceIds: nonNilIDs(w.Reenrolled)}); err != nil {
+			return err
+		}
+		if err := q.StartFleetClaim(ctx, pgstore.StartFleetClaimParams{At: now, DeviceIds: nonNilIDs(w.ClaimStart)}); err != nil {
+			return err
+		}
+		return q.ClearFleetClaim(ctx, nonNilIDs(w.ClaimClear))
+	})
+	if err != nil {
+		return nil, err
+	}
+	var reported []uuid.UUID
+	for _, c := range w.Claims {
+		params := map[string]any{"kind": c.Kind, "binding": c.Binding, "bound_host": string(c.Bound), "hosts": c.Hosts,
+			"claim_since": audit.Timestamp(c.Since).Format(time.RFC3339Nano)}
+		if len(c.Others) > 0 {
+			others := make([]string, 0, inventory.ClaimHostsInParam)
+			for _, h := range c.Others[:min(len(c.Others), inventory.ClaimHostsInParam)] {
+				others = append(others, string(h))
+			}
+			params["other_hosts"] = strings.Join(others, ",")
+		}
+		if c.SpeakingEnrolledAt != nil {
+			params["enrolled_at"] = audit.Timestamp(*c.SpeakingEnrolledAt).Format(time.RFC3339Nano)
+		}
+		spec := ActionSpec{Code: audit.CodeDeviceTamperFleetHostClaimed,
+			Target: &audit.Target{Type: "device", ID: c.DeviceID.String()}, Params: params}
+		device := c.DeviceID
+		recorded, err := s.runner.RecordOnce(ctx, spec, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			n, err := q.MarkFleetClaimReported(ctx, pgstore.MarkFleetClaimReportedParams{At: now, DeviceID: device})
+			return n == 1, err
+		}, func(ctx context.Context, q *pgstore.Queries, eventID uuid.UUID) error {
+			return UpsertTamperFinding(ctx, q, mustOrg(ctx), device, audit.CodeDeviceTamperFleetHostClaimed, "", eventID, now)
+		})
+		if err != nil {
+			return reported, err
+		}
+		if recorded {
+			reported = append(reported, device)
+		}
+	}
+	return reported, nil
+}
+
+// nonNilIDs keeps a nil slice from becoming a NULL array.
+func nonNilIDs(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
+}
+
+// SpecDeviceInventoryHostRemoved records the removal of a left host; system principal only.
+var SpecDeviceInventoryHostRemoved = ActionSpec{Code: audit.CodeDeviceInventoryHostRemoved}
+
+// LeftHostOutcome is the result of RemoveLeftInventoryHost.
+type LeftHostOutcome int
+
+// Outcomes of RemoveLeftInventoryHost.
+const (
+	LeftHostRemoved LeftHostOutcome = iota // deleted from the inventory system (or unknown to it)
+	LeftHostInUse                          // another device uses it; the reservation was deleted, nothing recorded
+)
+
+// InventoryLeftHosts returns the reservations of every organization, oldest first (platform pool).
+func (s *InventorySync) InventoryLeftHosts(ctx context.Context) ([]inventory.LeftHost, error) {
+	var out []inventory.LeftHost
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.InventoryLeftHosts(ctx)
+		for _, r := range rows {
+			out = append(out, inventory.LeftHost{DeviceID: r.DeviceID, OrganizationID: r.OrganizationID,
+				Host: ports.HostRef(r.HostID), Reason: r.Reason, Hostname: r.Hostname, LeftAt: r.LeftAt,
+				AttemptedAt: nullTime(r.AttemptedAt), OrgActive: r.OrgActive})
+		}
+		return err
+	})
+	return out, err
+}
+
+// RecordLeftInventoryHosts records relisted stored hosts of devices of the organization in ctx as left hosts.
+func (s *InventorySync) RecordLeftInventoryHosts(ctx context.Context, hosts []inventory.LeftHost, now time.Time) error {
+	return s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		for _, h := range hosts {
+			if err := q.RecordRelistedInventoryHost(ctx, pgstore.RecordRelistedInventoryHostParams{DeviceID: h.DeviceID,
+				OrganizationID: h.OrganizationID, HostID: string(h.Host), LeftAt: now}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveLeftInventoryHost removes one reserved left host of a device of the organization in ctx from the inventory
+// system, recorded as device.inventory_host_removed, unless another device uses it: then only the reservation goes,
+// and nothing is recorded, so that the device's organization does not learn of the other device. It returns
+// problem.UpstreamUnavailable or problem.InvalidState from DeleteHost wrapped.
+func (s *InventorySync) RemoveLeftInventoryHost(ctx context.Context, h inventory.LeftHost,
+	admin ports.InventoryAdmin) (LeftHostOutcome, error) {
+	key := pgstore.ForgetLeftInventoryHostParams{DeviceID: h.DeviceID, HostID: string(h.Host)}
+	use, err := s.platform.FleetHostInUse(ctx, h.DeviceID, string(h.Host))
+	if err != nil {
+		return 0, err
+	}
+	if use == db.FleetHostUsedByRef {
+		return LeftHostInUse, s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			return q.ForgetLeftInventoryHost(ctx, key)
+		})
+	}
+	spec := SpecDeviceInventoryHostRemoved
+	spec.Target = &audit.Target{Type: "device", ID: h.DeviceID.String(), Display: h.Hostname}
+	spec.Params = map[string]any{"hostname": h.Hostname, "fleet_host": string(h.Host), "reason": h.Reason,
+		"left_at": audit.Timestamp(h.LeftAt).Format(time.RFC3339Nano), "fleet_host_deleted": false}
+	err = s.runner.RunExternal(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+		if _, err := q.LockLeftInventoryHost(ctx, pgstore.LockLeftInventoryHostParams(key)); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return problem.NotFound
+			}
+			return err
+		}
+		return nil
+	}, func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return admin.DeleteHost(ctx, h.Host)
+	}, func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
+		switch {
+		case externalErr == nil:
+			rec.SetParam("fleet_host_deleted", true)
+			return q.MarkLeftInventoryHostRemoved(ctx, pgstore.MarkLeftInventoryHostRemovedParams(key))
+		case errors.Is(externalErr, problem.InvalidState):
+			return q.MarkLeftInventoryHostAttempted(ctx, pgstore.MarkLeftInventoryHostAttemptedParams(key))
+		}
+		return nil
+	})
+	return LeftHostRemoved, err
 }

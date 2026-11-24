@@ -56,6 +56,10 @@ type Device struct {
 	// EnrollmentMethod is sent with the enrollment (autoinstall or adopted); empty sends none, as agents before
 	// plan M11 did, so the device enrolls unknown and enforced.
 	EnrollmentMethod string
+	// FleetDeviceToken is reported in check-ins when set, as the agent reports fleetd's device token (ADR 0057).
+	FleetDeviceToken string
+	// HardwareUUIDOverride replaces the hardware UUID the device enrolls with (devices sharing one UUID).
+	HardwareUUIDOverride string
 }
 
 func (d *Device) schemaVersions() []int {
@@ -149,7 +153,12 @@ func (d *Device) Do(ctx context.Context, rq Request) (Response, error) {
 }
 
 // HardwareUUID is the hardware UUID the device enrolls with.
-func (d *Device) HardwareUUID() string { return "sim-" + d.KeyID[:12] }
+func (d *Device) HardwareUUID() string {
+	if d.HardwareUUIDOverride != "" {
+		return d.HardwareUUIDOverride
+	}
+	return "sim-" + d.KeyID[:12]
+}
 
 // Enroll sends the enrollment request and remembers the enrollment ID.
 func (d *Device) Enroll(ctx context.Context, hostname string) (Response, error) {
@@ -212,7 +221,7 @@ func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Respons
 	}
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
 		AppliedBundleVersion: d.Applied, AgentVersion: d.agentVersion(), SchemaVersions: d.schemaVersions(),
-		Health: health, Arch: d.Arch, EventSeqHigh: d.EventSeqHigh, OSRelease: d.OSRelease,
+		Health: health, Arch: d.Arch, EventSeqHigh: d.EventSeqHigh, OSRelease: d.OSRelease, FleetDeviceToken: d.FleetDeviceToken,
 	}})
 	if err != nil || res.Status != http.StatusOK {
 		return protocol.CheckinResponse{}, res, err

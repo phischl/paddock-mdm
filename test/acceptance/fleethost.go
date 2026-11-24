@@ -2,12 +2,14 @@ package acceptance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -223,3 +225,97 @@ func storeInventory(t *testing.T, device string, packages [][2]string, findings 
 
 // uniqueCVE is a random CVE ID no feed knows (year 2099).
 func uniqueCVE() string { return fmt.Sprintf("CVE-2099-%012d", rand.Int64N(1_000_000_000_000)) }
+
+// fleetSecret returns the HTTP client and the enroll secret for simulated hosts.
+func fleetSecret(t *testing.T) (*http.Client, string) {
+	t.Helper()
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := stack.Secret("fleet_enroll_secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, strings.TrimSpace(secret)
+}
+
+// enrollFleetHostAs enrolls a simulated osquery host under identifier whose hardware UUID is uuid.
+func enrollFleetHostAs(t *testing.T, identifier, uuid, hostname string) *devicesim.FleetHost {
+	t.Helper()
+	client, secret := fleetSecret(t)
+	h, err := devicesim.EnrollFleetAs(testContext(t, time.Minute), client, stack.FleetURL(), secret, identifier, uuid, hostname, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// enrollFleetHostBound enrolls a simulated host the way fleetd does under its instance identifier, with a device token
+// the device reports (ADR 0057).
+func enrollFleetHostBound(t *testing.T, uuid, hostname string) *devicesim.FleetHost {
+	t.Helper()
+	client, secret := fleetSecret(t)
+	h, err := devicesim.EnrollFleetBound(testContext(t, time.Minute), client, stack.FleetURL(), secret, uuid, hostname, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// fleetAdmin sends a request to Fleet's admin API on the development host as Paddock's API-only user; the caller closes
+// the response.
+func fleetAdmin(t *testing.T, method, path string) *http.Response {
+	t.Helper()
+	dir, err := stack.SecretsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := os.ReadFile(filepath.Join(dir, "fleet_api_token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(testContext(t, time.Minute), method, stack.FleetAdminURL()+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// fleetHostIDs returns Fleet's host ID of each identifier (0 when Fleet knows none).
+func fleetHostIDs(t *testing.T, identifiers ...string) []int {
+	t.Helper()
+	ids := make([]int, len(identifiers))
+	for n, identifier := range identifiers {
+		resp := fleetAdmin(t, http.MethodGet, "/api/latest/fleet/hosts/identifier/"+url.PathEscape(identifier))
+		var out struct {
+			Host struct {
+				ID int `json:"id"`
+			} `json:"host"`
+		}
+		if resp.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(resp.Body).Decode(&out)
+		}
+		_ = resp.Body.Close()
+		ids[n] = out.Host.ID
+	}
+	return ids
+}
+
+// deleteFleetHost removes a host the gate enrolled.
+func deleteFleetHost(t *testing.T, id int) {
+	t.Helper()
+	if id == 0 {
+		return
+	}
+	resp := fleetAdmin(t, http.MethodDelete, "/api/latest/fleet/hosts/"+strconv.Itoa(id))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		t.Errorf("delete Fleet host %d: HTTP %d", id, resp.StatusCode)
+	}
+}

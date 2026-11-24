@@ -513,8 +513,9 @@ services:
       FLEET_SERVER_ADDRESS: 0.0.0.0:8080
       # Caddy terminates TLS.
       FLEET_SERVER_TLS: "false"
-      # Hosts enroll with their hardware UUID, which Paddock maps to devices (plan M5a decision 6).
-      FLEET_OSQUERY_HOST_IDENTIFIER: uuid
+      # Hosts enroll under the identifier fleetd provides, osquery's per-installation instance ID (ADR 0057); Paddock maps
+      # hosts to devices through the binding the device reports.
+      FLEET_OSQUERY_HOST_IDENTIFIER: provided
       FLEET_OSQUERY_STATUS_LOG_PLUGIN: stdout
       FLEET_OSQUERY_RESULT_LOG_PLUGIN: stdout
       # Policy results (mutual watch, plan M5a decision 8) at most this old.

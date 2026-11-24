@@ -333,6 +333,12 @@ func TransitionDevice(ctx context.Context, q *pgstore.Queries, rec Recorder, act
 			return pgstore.Device{}, err
 		}
 	}
+	// The retired device's host stays reserved for it until the inventory round removed it from Fleet (ADR 0057).
+	if to == device.StateRetired {
+		if err := q.RecordRetiredInventoryHost(ctx, id); err != nil {
+			return pgstore.Device{}, err
+		}
+	}
 	rec.StateChanged(statechange.ScopeDevice, id)
 	return out, nil
 }

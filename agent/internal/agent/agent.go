@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,6 +138,9 @@ type Agent struct {
 	// updateRequested is whether the last check-in's offer was requested by an administrator (plan M8d decision 23):
 	// under the manual policy it allows the fleetd and supervisor upgrades of that check-in.
 	updateRequested bool
+	// fleetTokenSent is fleetd's device token of the last check-in that returned HTTP 200; memory only, so a restarted
+	// agent sends the token once more (ADR 0057, H3).
+	fleetTokenSent string
 	// policySkipped is the last offered version the manual policy declined, so that it is logged once per version.
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
@@ -272,6 +276,7 @@ func New(d Deps) (*Agent, error) {
 		diagnosticsJobs: make(chan diagnosticsJob, diagnosticsQueue), diagnosticsDone: make(chan diagnosticsDone, diagnosticsQueue)}
 	if d.Inventory != nil {
 		d.Inventory.UpdatesAllowed = a.updatesAllowed
+		d.Inventory.AnnounceReset = a.announceFleetReset
 	}
 	if d.Software != nil {
 		d.Software.ServerReachable = a.serverReachable
@@ -528,7 +533,8 @@ func (a *Agent) waitActive(ctx context.Context) error {
 // Cycle runs one check-in and returns the time until the next one.
 func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	a.lastAttempt = a.d.Now()
-	resp, err := a.d.Client.Checkin(ctx, a.st.DeviceID, a.st.Seq, a.checkinRequest(ctx))
+	req := a.checkinRequest(ctx)
+	resp, err := a.d.Client.Checkin(ctx, a.st.DeviceID, a.st.Seq, req)
 	if err != nil {
 		a.failures++
 		var retryAfter time.Duration
@@ -546,6 +552,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		return d
 	}
 	a.failures = 0
+	a.fleetCheckedIn(req)
 	a.softwareDelivered()
 	if err := a.checkedIn(resp); err != nil {
 		slog.ErrorContext(ctx, "storing check-in state failed", "error", err)
@@ -585,8 +592,59 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	return protocol.CheckinRequest{
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
 		SchemaVersions: apply.SchemaVersions, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
-		OSRelease: a.osRelease(ctx),
+		OSRelease: a.osRelease(ctx), FleetDeviceToken: a.fleetDeviceToken(), FleetEnrollmentResetAt: a.fleetResetAnnounced(),
 	}
+}
+
+// fleetResetAnnounce bounds how long the agent announces fleetd's enrollment reset (ADR 0057, H14).
+const fleetResetAnnounce = 24 * time.Hour
+
+// fleetDeviceToken returns fleetd's device token when it has the documented format and differs from the token of the
+// last successful check-in, else "". The token is a credential for the inventory system's device endpoints: it is
+// never logged or stored.
+func (a *Agent) fleetDeviceToken() string {
+	if a.d.Sys == nil {
+		return ""
+	}
+	data, _, err := a.d.Sys.ReadFile(reconcile.FleetdDeviceTokenFile)
+	token := strings.Trim(string(data), " \t\r\n")
+	if err != nil || !protocol.ValidFleetDeviceToken(token) || token == a.fleetTokenSent {
+		return ""
+	}
+	return token
+}
+
+// fleetResetAnnounced returns the announced enrollment reset while it is younger than fleetResetAnnounce, and drops it
+// afterwards.
+func (a *Agent) fleetResetAnnounced() *time.Time {
+	if a.st.FleetResetAt != nil && a.d.Now().Sub(*a.st.FleetResetAt) >= fleetResetAnnounce {
+		a.st.FleetResetAt = nil
+	}
+	return a.st.FleetResetAt
+}
+
+// fleetCheckedIn records what a check-in that returned HTTP 200 reported about fleetd: its token is not sent again, and
+// the announced reset ends once a token written after it was reported. checkedIn persists the state.
+func (a *Agent) fleetCheckedIn(req protocol.CheckinRequest) {
+	if req.FleetDeviceToken == "" {
+		return
+	}
+	a.fleetTokenSent = req.FleetDeviceToken
+	if a.st.FleetResetAt == nil || a.d.Sys == nil {
+		return
+	}
+	if _, info, err := a.d.Sys.ReadFile(reconcile.FleetdDeviceTokenFile); err == nil && info != nil &&
+		info.ModTime().After(*a.st.FleetResetAt) {
+		a.st.FleetResetAt = nil
+	}
+}
+
+// announceFleetReset persists the time of fleetd's enrollment reset before the reset removes anything
+// (reconcile.Inventory.AnnounceReset).
+func (a *Agent) announceFleetReset(at time.Time) error {
+	at = at.UTC()
+	a.st.FleetResetAt = &at
+	return state.Save(a.d.Layout.State(), a.st)
 }
 
 // osRelease reports ID and VERSION_ID of the system with each check-in, so that the server follows a distribution
