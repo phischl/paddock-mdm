@@ -239,7 +239,7 @@ volumes. Both hold rebuildable data only. After B's `down` and before A's final 
    `./paddock rollback <old dir>` stops B itself, restores and starts A, whose `valkey` and `fleet-redis` then fail
    their health check on the 9.2 data; run `./paddock down` in A's directory then.
 2. Remove the two volumes: `docker volume rm "${PADDOCK_PROJECT}_valkey-data" "${PADDOCK_PROJECT}_fleet-redis-data"`,
-   with the `PADDOCK_PROJECT` of `.env` (`docker volume ls` lists them).
+   with the `PADDOCK_PROJECT` of `.env`, default `paddock` (`docker volume ls` lists them).
 3. Start A: `<old dir>/paddock up`. `valkey` and `fleet-redis` start empty.
 4. Rebuild the device caches from PostgreSQL: `<old dir>/paddock compose run --rm --no-deps paddock-worker admin
    rebuild-cache`. Fleet's Redis refills by itself.
