@@ -74,3 +74,11 @@ targetRules = ["generic-api-key"]
 paths = ['''^(b/)?test/system/autoinstall\.go$''']
 regexTarget = "secret"
 regexes = ['''^id_ed25519\.pub$''']
+
+[[allowlists]]
+description = "Inventory host binding tests: the Fleet device tokens are fixed, made-up UUIDs, not credentials"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^(b/)?(agent/internal/agent/fleet_test\.go|server/internal/adapters/fleet/binding_test\.go|server/internal/app/inventory_binding_integration_test\.go|server/internal/worker/inventory_binding_test\.go|test/acceptance/devicesim/binding_test\.go)$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
