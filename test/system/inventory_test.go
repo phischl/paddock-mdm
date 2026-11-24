@@ -358,7 +358,9 @@ func gateF5Evasions(t *testing.T, d *Device, query string) {
 	link := d.MustRoot("readlink " + current)
 	active := d.MustRoot("readlink -f " + current)
 	sleep := d.MustRoot("readlink -f /usr/bin/sleep")
-	reset := "rm -f " + dropIn + " && systemctl daemon-reload && ln -sfn " + link + " " + current + " && systemctl restart paddock-supervisor"
+	// Six restarts in a few seconds exceed systemd's start limit (5 per 10 s) and would leave the supervisor down.
+	const restart = "systemctl reset-failed paddock-supervisor; systemctl restart paddock-supervisor"
+	reset := "rm -f " + dropIn + " && systemctl daemon-reload && ln -sfn " + link + " " + current + " && " + restart
 	const startOrbit = "systemctl unmask --runtime orbit.service && systemctl start orbit.service"
 	done := false
 	t.Cleanup(func() {
@@ -371,11 +373,11 @@ func gateF5Evasions(t *testing.T, d *Device, query string) {
 		" && chmod 755 /var/lib/paddock-f5/paddockd && printf '#!/bin/sh\\nexec sleep infinity\\n' > /var/lib/paddock-f5s/paddockd" +
 		" && chmod 755 /var/lib/paddock-f5s/paddockd")
 	for _, c := range []struct{ name, setup, exe string }{
-		{"redirected current", "ln -sfn /var/lib/paddock-f5 " + current + " && systemctl restart paddock-supervisor", "/var/lib/paddock-f5/paddockd"},
+		{"redirected current", "ln -sfn /var/lib/paddock-f5 " + current + " && " + restart, "/var/lib/paddock-f5/paddockd"},
 		// The path a bind-mounted executable shows depends on the reader's mount namespace, so any child counts.
 		{"bind mount", "mkdir -p $(dirname " + dropIn + ") && printf '[Service]\\nBindReadOnlyPaths=/var/lib/paddock-f5/paddockd:" + active +
-			"/paddockd\\n' > " + dropIn + " && systemctl daemon-reload && systemctl restart paddock-supervisor", ""},
-		{"renamed child", "ln -sfn /var/lib/paddock-f5s " + current + " && systemctl restart paddock-supervisor", sleep},
+			"/paddockd\\n' > " + dropIn + " && systemctl daemon-reload && " + restart, ""},
+		{"renamed child", "ln -sfn /var/lib/paddock-f5s " + current + " && " + restart, sleep},
 	} {
 		d.MustRoot(c.setup)
 		supervisorChild(t, d, c.exe, "")
@@ -412,7 +414,7 @@ func gateF5Evasions(t *testing.T, d *Device, query string) {
 func gateF5ReplacedSupervisor(t *testing.T, d *Device, query, active, sleep, reset string) {
 	const supervisor, current = "/usr/sbin/paddock-supervisor", "/opt/paddock/agent/current"
 	d.MustRoot("cp " + supervisor + " " + supervisor + ".new && mv " + supervisor + ".new " + supervisor)
-	t.Cleanup(func() { d.MustRoot("systemctl restart paddock-supervisor") })
+	t.Cleanup(func() { d.MustRoot("systemctl reset-failed paddock-supervisor; systemctl restart paddock-supervisor") })
 	pid := supervisorChild(t, d, active+"/paddockd", "")
 	d.MustRoot("kill " + pid)
 	supervisorChild(t, d, active+"/paddockd", pid)
@@ -635,7 +637,7 @@ func gateF8(t *testing.T, d *Device) {
 	claims0, files0 := len(d.s.Events(t, fleetHostClaimedCode, d.ID)), len(d.s.Events(t, "device.tamper_protected_file_changed", d.ID))
 	binary0 := len(d.s.Events(t, agentBinaryCode, d.ID))
 
-	if env := d.Must("sudo cat /etc/paddock/orbit.env"); !strings.Contains(env, "\nORBIT_HOST_IDENTIFIER=instance\n") {
+	if env := d.Must("sudo cat /etc/paddock/orbit.env"); !slices.Contains(strings.Split(env, "\n"), "ORBIT_HOST_IDENTIFIER=instance") {
 		t.Errorf("orbit.env:\n%s", env)
 	}
 	if out := d.Must("stat -c '%a' /opt/orbit/identifier"); out != "644" {
