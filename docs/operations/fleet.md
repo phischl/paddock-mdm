@@ -20,8 +20,13 @@ token (60 requests per hour and address). Development and CI stacks skip that lo
 `FLEET_CPE_TRANSLATIONS_URL` in the development and CI section at the end of `deploy/compose/versions.env`, which
 the operator bundle does not ship) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
 latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's limit still gets the data the
-inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
-API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
+inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, Windows Office, Go vulnerability
+database, OVAL and OSV syncs still use the API; Fleet logs each failure (`"cron":"vulnerabilities"`, for example
+`updating OSV artifacts` with `github http status error: 403`) and continues its run with the data already on disk.
+Fleet matches Ubuntu packages only through its OSV artifacts, not through the CPE dictionary, so a Fleet that has never
+downloaded the artifact for an Ubuntu release reports no package findings for its hosts until a later run gets past
+the limit; once the artifact is on disk, a failed sync leaves the last one in use. Gate F3 therefore seeds an
+artifact with its two findings into Fleet's volume before it waits (PDK-1093). When upgrading `FLEET_IMAGE`, check that the three
 variables still exist and move the pin to a current `fleetdm/nvd` release (its asset `cpe-<sha256>.sqlite.gz` and
 `cpe_translations.json`). Fleet skips its once-a-day check when the CPE URL is set and downloads the database on
 every vulnerability run, which is why the development period stays at 1 hour (see the round intervals below); if the
