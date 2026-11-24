@@ -172,14 +172,18 @@ func holdOf(d WatchedDevice, now time.Time) (bool, time.Time) {
 	return now.Before(end), e
 }
 
-// heldReset returns the reset announcement that may hold d: not followed by a binding, and the one whose hold was granted
-// last or at least 24 hours after it, so that one reset per day holds the watch (F-15.1); nil otherwise.
+// heldReset returns the reset announcement that may hold d: not followed by a binding, and either the one whose hold
+// was granted last, or, in the round that starts the episode and records the grant, one at least 24 hours after it, so
+// that one reset per day holds the watch (F-15.1); nil otherwise. An announcement that arrives after the start round is
+// never recorded, so it never holds.
 func heldReset(d WatchedDevice) *time.Time {
 	r := d.ResetAnnouncedAt
 	switch {
 	case r == nil || d.BoundAt != nil && !d.BoundAt.Before(*r):
 		return nil
-	case d.ResetHoldAt == nil || r.Equal(*d.ResetHoldAt) || !r.Before(d.ResetHoldAt.Add(24*time.Hour)):
+	case d.ResetHoldAt != nil && r.Equal(*d.ResetHoldAt):
+		return r
+	case d.SilentSince == nil && (d.ResetHoldAt == nil || !r.Before(d.ResetHoldAt.Add(24*time.Hour))):
 		return r
 	}
 	return nil

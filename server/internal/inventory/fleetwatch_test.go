@@ -120,7 +120,7 @@ func TestWatchFleet(t *testing.T) {
 		c.contactAgo, c.sinceAgo, c.checkinAgo = live, m(15), m(10)
 		return c
 	}
-	heldStale := watchCase{host: stale25, contactAgo: live, resetAgo: m(35), sinceAgo: m(20), checkinAgo: m(10)}
+	heldStale := watchCase{host: stale25, contactAgo: live, resetAgo: m(35), resetHoldAgo: m(35), sinceAgo: m(20), checkinAgo: m(10)}
 	reportedStale := watchCase{host: stale25, contactAgo: live, sinceAgo: m(60), checkinAgo: m(50), reportedAgo: m(30)}
 	policyStale := watchCase{host: &watchHost{policyAgo: 40 * time.Minute}, contactAgo: live}
 	type want struct {
@@ -199,10 +199,14 @@ func TestWatchFleet(t *testing.T) {
 			want{live: 3}},
 		{"announced reset, bound since to the stale host: reported", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(35), boundAgo: m(30),
 			bound: true, sinceAgo: m(20), checkinAgo: m(10)}}, peers(3)...), want{report: []int{0}, reason: SilentContact}},
-		{"hold end boundary: not yet due", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(74), sinceAgo: m(55), checkinAgo: m(13)}}, peers(3)...),
+		{"hold end boundary: not yet due", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(74), resetHoldAgo: m(74), sinceAgo: m(55), checkinAgo: m(13)}}, peers(3)...),
 			want{}},
-		{"hold end boundary: due", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(75), sinceAgo: m(55), checkinAgo: m(13)}}, peers(3)...),
+		{"hold end boundary: due", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(75), resetHoldAgo: m(75), sinceAgo: m(55), checkinAgo: m(13)}}, peers(3)...),
 			want{report: []int{0}, reason: SilentContact}},
+		{"an announcement recorded after the start round does not hold (M-1)", append([]watchCase{{host: stale25, contactAgo: live,
+			resetAgo: m(30), sinceAgo: m(20), checkinAgo: m(10)}}, peers(3)...), want{report: []int{0}, reason: SilentContact}},
+		{"an announcement older than ClaimQuiet: a plain start", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(61)}}, peers(3)...),
+			want{start: []int{0}}},
 		{"an announcement after the episode start does not hold", append([]watchCase{{host: stale25, contactAgo: live, resetAgo: m(2), sinceAgo: m(20), checkinAgo: m(10)}}, peers(3)...),
 			want{report: []int{0}, reason: SilentContact}},
 		{"suspended binding: held (regression H1-b)", append([]watchCase{{storedSeenAgo: m(30), bound: true, boundHost: "999", suspendedAgo: m(25),
@@ -262,6 +266,8 @@ type timelineDevice struct {
 	bindAt  int
 	// resets are further reset announcements of a device bound to its own host before minute 0 (F-15).
 	resets []int
+	// late are announcements {arrival, value} that arrive after the round of their value, backdated (review 4, M-1).
+	late [][2]int
 }
 
 // every checks in every interval minutes at offset off, also before minute 0; none during the gaps.
@@ -292,7 +298,7 @@ func runTimeline(d timelineDevice) []int {
 	if d.bindAt != 0 {
 		dev.ResetAnnouncedAt = minute(0)
 	}
-	if d.resets != nil {
+	if d.resets != nil || d.late != nil {
 		dev.BoundHost, dev.BoundAt = "100", minute(-60)
 	}
 	var reports []int
@@ -315,6 +321,11 @@ func runTimeline(d timelineDevice) []int {
 		for _, a := range d.resets {
 			if a <= m {
 				dev.ResetAnnouncedAt = minute(a)
+			}
+		}
+		for _, a := range d.late {
+			if a[0] <= m {
+				dev.ResetAnnouncedAt = minute(a[1])
 			}
 		}
 		dev.LastContactAt = nil
@@ -378,6 +389,8 @@ func TestWatchFleetTimeline(t *testing.T) {
 		{"announced reset, bound at 80", timelineDevice{seen: frozen, contact: every(5, 1), bindAt: 80}, []int{75}},
 		{"a reset announced per check-in period (regression L-1)", timelineDevice{seen: func(int) int { return -300 },
 			contact: every(5, 1, [2]int{-1000, 1}, [2]int{51, 121}, [2]int{171, 1000}), resets: []int{0, 120}}, []int{140}},
+		{"backdated announcements arriving after each start round (regression M-1)", timelineDevice{seen: func(int) int { return -300 },
+			contact: every(5, 1, [2]int{-1000, 1}, [2]int{51, 121}, [2]int{171, 1000}), late: [][2]int{{10, 0}, {130, 120}}}, []int{20}},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
