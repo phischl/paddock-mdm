@@ -25,6 +25,9 @@ type HostSeen struct {
 	SeenAt time.Time
 	// EnrolledAt is the host's latest enrollment; nil when unknown.
 	EnrolledAt *time.Time
+	// PolicyUpdatedAt is when the host last stored policy results, in the inventory system's clock; nil when it never
+	// did (plan M5a amendment 2026-11-16 d, F5).
+	PolicyUpdatedAt *time.Time
 }
 
 // HostPage is one page of hosts; Next is the cursor of the next page, "" after the last one. Seen holds every host of

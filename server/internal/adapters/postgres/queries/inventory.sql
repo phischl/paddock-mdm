@@ -394,6 +394,33 @@ WHERE device_id = ANY(@device_ids::uuid[]);
 UPDATE device_inventory_ref SET fleet_claim_reported_at = @at::timestamptz
 WHERE device_id = @device_id AND fleet_claim_reported_at IS NULL;
 
+-- The fleetd silence watch (plan M5a amendments 2026-11-16 c and d).
+-- name: FleetWatchDevices :many
+SELECT w.device_id::uuid AS device_id, w.organization_id::uuid AS organization_id,
+       coalesce(w.hardware_uuid, '')::text AS hardware_uuid, w.external_id::text AS external_id,
+       coalesce(w.bound_host, '')::text AS bound_host,
+       coalesce(w.last_contact_at, 'epoch')::timestamptz AS last_contact_at,
+       coalesce(w.last_seen_at, 'epoch')::timestamptz AS last_seen_at,
+       coalesce(w.policy_updated_at, 'epoch')::timestamptz AS policy_updated_at,
+       coalesce(w.fleet_silent_since, 'epoch')::timestamptz AS fleet_silent_since,
+       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at
+FROM paddock_fleet_watch_devices() w ORDER BY w.device_id;
+
+-- name: StartFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = @at::timestamptz
+WHERE device_id = ANY(@device_ids::uuid[]) AND fleet_silent_since IS NULL;
+
+-- name: ResetFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: ClearFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: MarkFleetSilentReported :execrows
+UPDATE device_inventory_ref SET fleet_silent_reported_at = @at::timestamptz
+WHERE device_id = @device_id AND fleet_silent_reported_at IS NULL;
+
 -- name: SuspendInventoryBindings :exec
 UPDATE device_fleet_binding SET suspended_at = @at::timestamptz
 WHERE device_id = ANY(@device_ids::uuid[]) AND suspended_at IS NULL;

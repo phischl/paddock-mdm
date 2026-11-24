@@ -165,6 +165,9 @@ const (
 	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
 	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
 	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+	// CodeDeviceTamperFleetdSilent: fleetd stopped working with the inventory system while the device kept checking in
+	// (plan M5a amendments 2026-11-16 c and d, ADR 0056).
+	CodeDeviceTamperFleetdSilent Code = "device.tamper_fleetd_silent"
 	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
 	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
 	// Update management (plan M5b decisions 1–3 and 6).
@@ -1297,7 +1300,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
-		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
+		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, or its query stopped answering on a host that evaluates its policies, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
 		Params:      []string{"policy", "last_contact_at", "failing_since", "evaluated_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
@@ -1308,6 +1311,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+	},
+	CodeDeviceTamperFleetdSilent: {
+		Code: CodeDeviceTamperFleetdSilent, Emitted: true,
+		Description: "fleetd on a device stopped working with the inventory system for at least 15 minutes while the device kept checking in with Paddock, confirmed for 15 more minutes while most other devices reached the inventory system (actor: system). reason contact: the inventory system has not heard from the device's fleetd for 15 minutes longer than from the most recent host; reason policies: fleetd still talks to it, but osquery has stored no policy results for 30 minutes longer than the most recent host (osquery stopped, frozen or broken while orbit runs). fleetd was stopped, frozen, removed or cut off from the inventory system's address only, or something other than the genuine agent checks in for the device. fleetd_seen_at and policy_updated_at are the device's last contact and last stored policy results in the inventory system's clock (absent when unknown); last_contact_at is the device's last check-in; silent_since is when the worker first found the silence.",
+		Params:      []string{"fleetd_seen_at", "policy_updated_at", "last_contact_at", "silent_since", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per silence; fleetd working with the inventory system again ends it.",
 	},
 	CodeDeviceInventoryHostRemoved: {
 		Code: CodeDeviceInventoryHostRemoved, Emitted: true,

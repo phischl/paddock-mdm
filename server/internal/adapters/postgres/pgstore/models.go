@@ -543,25 +543,27 @@ type DeviceInventoryLeftHost struct {
 }
 
 type DeviceInventoryRef struct {
-	DeviceID             uuid.UUID
-	OrganizationID       uuid.UUID
-	ExternalID           string
-	LastSeenAt           *time.Time
-	OsVersion            string
-	FleetdVersion        string
-	SyncedAt             time.Time
-	HardwareVendor       string
-	HardwareModel        string
-	HardwareSerial       string
-	CpuBrand             string
-	CpuCores             int32
-	MemoryBytes          int64
-	DiskTotalBytes       int64
-	PolicyUpdatedAt      *time.Time
-	FleetEnrolledAt      *time.Time
-	FleetReenrolledAt    *time.Time
-	FleetClaimSince      *time.Time
-	FleetClaimReportedAt *time.Time
+	DeviceID              uuid.UUID
+	OrganizationID        uuid.UUID
+	ExternalID            string
+	LastSeenAt            *time.Time
+	OsVersion             string
+	FleetdVersion         string
+	SyncedAt              time.Time
+	HardwareVendor        string
+	HardwareModel         string
+	HardwareSerial        string
+	CpuBrand              string
+	CpuCores              int32
+	MemoryBytes           int64
+	DiskTotalBytes        int64
+	PolicyUpdatedAt       *time.Time
+	FleetEnrolledAt       *time.Time
+	FleetReenrolledAt     *time.Time
+	FleetClaimSince       *time.Time
+	FleetClaimReportedAt  *time.Time
+	FleetSilentSince      *time.Time
+	FleetSilentReportedAt *time.Time
 }
 
 type DeviceLoginAssignment struct {

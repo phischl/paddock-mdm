@@ -115,6 +115,7 @@ export const auditCodes = [
   'device.tamper_agent_binary_changed',
   'device.tamper_agent_not_running',
   'device.tamper_fleet_host_claimed',
+  'device.tamper_fleetd_silent',
   'device.tamper_keyslot_changed',
   'device.tamper_local_admin_changed',
   'device.tamper_protected_file_changed',

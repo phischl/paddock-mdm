@@ -43,6 +43,12 @@ func TestListHostsSeen(t *testing.T) {
 		!s.EnrolledAt.Equal(time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)) || s.HardwareUUID != "u-7" {
 		t.Fatalf("host 7 %+v", s)
 	}
+	if s.PolicyUpdatedAt == nil || !s.PolicyUpdatedAt.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("host 7 policy_updated_at %v", s.PolicyUpdatedAt)
+	}
+	if page.Seen[1].PolicyUpdatedAt == nil || !page.Seen[1].PolicyUpdatedAt.Equal(time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("host 9 policy_updated_at %v", page.Seen[1].PolicyUpdatedAt)
+	}
 	if !page.Seen[1].SeenAt.IsZero() || page.Seen[1].EnrolledAt != nil {
 		t.Fatalf("host 9 %+v", page.Seen[1])
 	}

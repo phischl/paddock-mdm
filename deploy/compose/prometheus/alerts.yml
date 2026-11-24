@@ -236,6 +236,16 @@ groups:
         annotations:
           summary: "Ubuntu's vulnerability data is stale"
           description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      # Plan M5a amendment 2026-11-16 c, E8: the fleetd silence watch holds back due devices because no or too few
+      # live devices reach Fleet; the watch is blind until it clears.
+      - alert: PaddockFleetSilenceWatchSuppressed
+        expr: max(paddock_inventory_fleet_silent_suppressed{role="paddock-worker"}) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The fleetd silence watch holds back {{ $value }} devices"
+          description: "For 15 minutes the worker has held back reports of devices whose fleetd is silent while they check in, because no live device or fewer than half of them reach Fleet. Either devices cannot reach fleet.<domain> (certificate, DNS, proxy, Fleet's device endpoints) or more than half of the live devices were tampered with; until it clears, a silent fleetd is not reported (docs/operations/fleet.md, \"When the fleetd silence watch is suppressed\")."
       # ADR 0032: deletion that stops running keeps personal data beyond its retention period (GDPR Art. 5(1)(e)).
       - alert: PaddockRetentionPurgeStale
         expr: time() - max by (store) (paddock_retention_last_success_timestamp_seconds) > 48 * 3600

@@ -432,6 +432,69 @@ func (s *InventorySync) ApplyClaimWatch(ctx context.Context, w inventory.ClaimWa
 	return reported, nil
 }
 
+// FleetWatchDevices reads every active device with an inventory reference across organizations (platform pool; plan
+// M5a amendment 2026-11-16 c).
+func (s *InventorySync) FleetWatchDevices(ctx context.Context) ([]inventory.WatchedDevice, error) {
+	var out []inventory.WatchedDevice
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.FleetWatchDevices(ctx)
+		for _, r := range rows {
+			out = append(out, inventory.WatchedDevice{DeviceID: r.DeviceID, OrganizationID: r.OrganizationID,
+				HardwareUUID: r.HardwareUuid, ExternalID: ports.HostRef(r.ExternalID), BoundHost: ports.HostRef(r.BoundHost),
+				LastContactAt: nullTime(r.LastContactAt), LastSeenAt: nullTime(r.LastSeenAt),
+				PolicyUpdatedAt: nullTime(r.PolicyUpdatedAt), SilentSince: nullTime(r.FleetSilentSince),
+				ReportedAt: nullTime(r.FleetSilentReportedAt)})
+		}
+		return err
+	})
+	return out, err
+}
+
+// ApplyFleetWatch applies the decisions of w that concern the organization in ctx: Start, Reset and Clear in one
+// transaction, then each report as device.tamper_fleetd_silent with a tamper finding, once per silence: the mark and
+// the event are one transaction, and a device already marked records nothing. It returns the reported devices.
+func (s *InventorySync) ApplyFleetWatch(ctx context.Context, w inventory.FleetWatch, now time.Time) ([]uuid.UUID, error) {
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.StartFleetSilence(ctx, pgstore.StartFleetSilenceParams{At: now, DeviceIds: nonNilIDs(w.Start)}); err != nil {
+			return err
+		}
+		if err := q.ResetFleetSilence(ctx, nonNilIDs(w.Reset)); err != nil {
+			return err
+		}
+		return q.ClearFleetSilence(ctx, nonNilIDs(w.Clear))
+	})
+	if err != nil {
+		return nil, err
+	}
+	stamp := func(t *time.Time) string { return audit.Timestamp(*t).Format(time.RFC3339Nano) }
+	var reported []uuid.UUID
+	for _, d := range w.Report {
+		params := map[string]any{"reason": d.Reason, "silent_since": stamp(d.SilentSince)}
+		for key, at := range map[string]*time.Time{"fleetd_seen_at": d.FleetdSeenAt,
+			"policy_updated_at": d.FleetdPolicyUpdatedAt, "last_contact_at": d.LastContactAt} {
+			if at != nil {
+				params[key] = stamp(at)
+			}
+		}
+		spec := ActionSpec{Code: audit.CodeDeviceTamperFleetdSilent,
+			Target: &audit.Target{Type: "device", ID: d.DeviceID.String()}, Params: params}
+		device := d.DeviceID
+		recorded, err := s.runner.RecordOnce(ctx, spec, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			n, err := q.MarkFleetSilentReported(ctx, pgstore.MarkFleetSilentReportedParams{At: now, DeviceID: device})
+			return n == 1, err
+		}, func(ctx context.Context, q *pgstore.Queries, eventID uuid.UUID) error {
+			return UpsertTamperFinding(ctx, q, mustOrg(ctx), device, audit.CodeDeviceTamperFleetdSilent, "", eventID, now)
+		})
+		if err != nil {
+			return reported, err
+		}
+		if recorded {
+			reported = append(reported, device)
+		}
+	}
+	return reported, nil
+}
+
 // nonNilIDs keeps a nil slice from becoming a NULL array.
 func nonNilIDs(ids []uuid.UUID) []uuid.UUID {
 	if ids == nil {

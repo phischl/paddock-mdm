@@ -105,6 +105,10 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 		if h.SeenTime != nil {
 			seen.SeenAt = *h.SeenTime
 		}
+		if !h.PolicyUpdatedAt.IsZero() {
+			at := h.PolicyUpdatedAt
+			seen.PolicyUpdatedAt = &at
+		}
 		res.Seen = append(res.Seen, seen)
 		if h.changedAt().Before(since) {
 			continue

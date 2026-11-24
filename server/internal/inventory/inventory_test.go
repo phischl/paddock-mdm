@@ -3,8 +3,11 @@ package inventory
 import (
 	"bytes"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
 
 func TestPolicies(t *testing.T) {
@@ -95,5 +98,30 @@ func TestAgentBinaryPolicyDropsInvalidHash(t *testing.T) {
 	}
 	if got := AgentBinaryPolicy([]string{"x'; DROP"}); got.Query != "SELECT 1;" {
 		t.Fatalf("only invalid hashes: %s", got.Query)
+	}
+}
+
+// TestUnansweredAgentRunningAsFailing (plan M5a amendment 2026-11-16 d, F6): with the gate open the unanswered
+// agent-running policy becomes a failing result; with the gate closed nothing changes; other keys never move.
+func TestUnansweredAgentRunningAsFailing(t *testing.T) {
+	in := ports.HostInventory{Policies: []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}},
+		UnansweredPolicies: []string{PolicyAgentBinaryKnown, PolicyAgentRunning, "disk_encrypted"}}
+	out := UnansweredAgentRunningAsFailing(in, true)
+	if want := []string{PolicyAgentBinaryKnown, "disk_encrypted"}; !slices.Equal(out.UnansweredPolicies, want) {
+		t.Fatalf("unanswered %v, want %v", out.UnansweredPolicies, want)
+	}
+	if want := []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}, {Key: PolicyAgentRunning}}; !slices.Equal(out.Policies, want) {
+		t.Fatalf("policies %v, want %v", out.Policies, want)
+	}
+	if len(in.UnansweredPolicies) != 3 || len(in.Policies) != 1 {
+		t.Fatalf("input changed: %+v", in)
+	}
+	if closed := UnansweredAgentRunningAsFailing(in, false); !slices.Equal(closed.UnansweredPolicies, in.UnansweredPolicies) ||
+		!slices.Equal(closed.Policies, in.Policies) {
+		t.Fatalf("gate closed: %+v", closed)
+	}
+	other := ports.HostInventory{UnansweredPolicies: []string{PolicyAgentBinaryKnown, "disk_encrypted"}}
+	if got := UnansweredAgentRunningAsFailing(other, true); len(got.Policies) != 0 || len(got.UnansweredPolicies) != 2 {
+		t.Fatalf("other keys moved: %+v", got)
 	}
 }

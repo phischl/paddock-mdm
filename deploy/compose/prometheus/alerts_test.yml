@@ -1051,3 +1051,37 @@ tests:
             exp_annotations:
               summary: "Inventory claim reports are held: most watched devices have an open claim"
               description: "More than half of the devices with inventory have an open claim episode, so no claim is reported. A Fleet database restore causes this for up to 60 minutes; otherwise follow docs/operations/fleet.md, \"When the inventory claim watch is suppressed\"."
+
+  - name: a suppressed fleetd silence watch is critical after 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 3x30"
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The fleetd silence watch holds back 3 devices"
+              description: "For 15 minutes the worker has held back reports of devices whose fleetd is silent while they check in, because no live device or fewer than half of them reach Fleet. Either devices cannot reach fleet.<domain> (certificate, DNS, proxy, Fleet's device endpoints) or more than half of the live devices were tampered with; until it clears, a silent fleetd is not reported (docs/operations/fleet.md, \"When the fleetd silence watch is suppressed\")."
+
+  - name: a fleetd silence watch suppression that ends before 15 minutes and a zero gauge stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 3x8 0x30"
+      - series: 'paddock_inventory_fleet_silent_suppressed{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockFleetSilenceWatchSuppressed
+        exp_alerts: []
