@@ -153,6 +153,9 @@ unless the release notes of B say agents come first. Devices outside the window 
 
 ## Rollback
 
+A rollback across the Valkey 9.2 move (0.1.0-alpha.11) also needs fresh Valkey volumes: see *Per release*, 0.1.0-alpha.11,
+*Valkey 9.2*.
+
 `./paddock rollback <old dir> [--yes]`, in B's directory. `--yes` skips the terminal question `yes` (the restore's own
 confirmation is answered by it too); `<old dir>` is the directory the upgrade ran from. Migrations only move forward
 (`server/migrations/`; there is no down migration), so the rollback depends on B's `Schema:` line:
@@ -219,6 +222,27 @@ One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what
 older notes are in the *Archive*.
 
 ### 0.1.0-alpha.11, from 0.1.0-alpha.10
+
+**Third-party images (2026-11-24).** Fleet moves to v4.96.0; because `FLEET_IMAGE` changed, a rollback restores the
+Fleet dump of the pre-upgrade backup of the step `backup`. OpenBao moves to 2.7.3: the step `up` recreates OpenBao and
+it starts **sealed**, so have three custodians ready (or automatic unseal on). Authentik moves to 2026.8.6, RabbitMQ to
+4.4.1 and nginx (lab smoke test only) to 1.31.10. The AWS CLI image of the bucket bootstrap scripts moves to 2.42.2.
+`./paddock pull` does not fetch it, because it is no Compose service: on a host without registry access, load the image
+`AWS_CLI_IMAGE` of B's `versions.env` (`docker save` on a connected host, `docker load` here) before one of these
+commands runs. Devices install Himmelblau 4.0.9 with their current agent at the next login drift check.
+
+**Valkey 9.2.** Valkey (the control plane's cache and Fleet's Redis) moves from 9.1.3 to 9.2.0. The data files 9.2
+writes do not load in 9.1, and `./paddock rollback` keeps the volumes, so a rollback to 0.1.0-alpha.10 needs fresh Valkey
+volumes. Both hold rebuildable data only. After B's `down` and before A's final `up`:
+
+1. Stop the stack of this project: `./paddock down` in B's directory. A rollback that runs the command
+   `./paddock rollback <old dir>` stops B itself, restores and starts A, whose `valkey` and `fleet-redis` then fail
+   their health check on the 9.2 data; run `./paddock down` in A's directory then.
+2. Remove the two volumes: `docker volume rm "${PADDOCK_PROJECT}_valkey-data" "${PADDOCK_PROJECT}_fleet-redis-data"`,
+   with the `PADDOCK_PROJECT` of `.env` (`docker volume ls` lists them).
+3. Start A: `<old dir>/paddock up`. `valkey` and `fleet-redis` start empty.
+4. Rebuild the device caches from PostgreSQL: `<old dir>/paddock compose run --rm --no-deps paddock-worker admin
+   rebuild-cache`. Fleet's Redis refills by itself.
 
 **Inventory hosts bound to their device (ADR 0057).** Upgrade the server first, then the agents through a staged
 rollout. Each device enrolls its fleetd once more after its agent updates; a new Fleet host appears per device, and
