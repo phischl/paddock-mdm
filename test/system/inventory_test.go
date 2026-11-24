@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
@@ -23,10 +24,12 @@ import (
 // (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device), F4 (an old package
 // version shows its CVEs), F2 (mutual watch of agent and fleetd), F5 (the agent binary policy, plan M5a amendment
 // 2026-11-16, A6), F6 (an impostor checks in while the genuine agent is stopped, amendment 2026-11-16 b) and F8 (the
-// device's inventory host binding, amendment 2026-11-17 e). Over all
-// gates exactly two device.tamper_agent_not_running are recorded per VM, F2's and F6's: the restarts of orbit and the
-// supervisor in F1, F4 and F5 raise none. The fleetd package of this run (make fleetd-deb) is published once, as a release without rollout,
-// for both VMs; Install publishes the installed paddockd the same way, so the genuine agent passes F5's policy.
+// device's inventory host binding, amendment 2026-11-17 e); F7 (fleetd silent while the impostor checks in, amendment
+// 2026-11-16 c and d) runs inside F6. Over all gates per VM exactly two device.tamper_agent_not_running are recorded
+// (F2 and F6), one device.tamper_agent_binary_changed (F5) and one device.tamper_fleetd_silent (F7), and none for F7's
+// simulated peers: the restarts of orbit and the supervisor in F1, F2, F4 and F5 raise none of the others. The fleetd
+// package of this run (make fleetd-deb) is published once, as a release without rollout, for both VMs; Install
+// publishes the installed paddockd the same way, so the genuine agent passes F5's policy.
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "inventory")
@@ -36,17 +39,30 @@ func TestInventoryGates(t *testing.T) {
 		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { d.Bind(t); gateF1(t, d, fleetd) }) {
 			t.FailNow()
 		}
+		hw := strings.ToLower(d.MustRoot("cat /sys/class/dmi/id/product_uuid"))
+		enrolled0 := enrollmentProbe(t, hw)
 		t.Run("F4 old package version", func(t *testing.T) { d.Bind(t); gateF4(t, d) })
 		f2 := t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
 		t.Run("F5 agent binary policy", func(t *testing.T) { d.Bind(t); gateF5(t, d) })
-		f6 := t.Run("F6 agent absent while checking in", func(t *testing.T) { d.Bind(t); gateF6(t, d) })
+		var peers []string
+		f6 := t.Run("F6 agent absent while checking in, F7 fleetd silent", func(t *testing.T) { d.Bind(t); peers = gateF6(t, d) })
+		// F8 enrolls the host again on purpose, so the probe reads before it.
+		t.Logf("%s: probe enrollment stability: last_enrolled_at %s after F1, %s after F7", d.Name, enrolled0,
+			enrollmentProbe(t, hw))
 		t.Run("F8 inventory host binding", func(t *testing.T) { d.Bind(t); gateF8(t, d) })
 		// A failed F2 or F6 already fails the gate; their missing event would only repeat it as a count error.
 		if !f2 || !f6 {
 			return
 		}
-		if n := len(s.Events(t, agentNotRunningCode, d.ID)); n != 2 {
-			t.Errorf("%s: %d %s events over the inventory gates, want exactly 2 (F2 and F6)", d.Name, n, agentNotRunningCode)
+		for code, want := range map[string]int{agentNotRunningCode: 2, agentBinaryCode: 1, fleetdSilentCode: 1} {
+			if n := len(s.Events(t, code, d.ID)); n != want {
+				t.Errorf("%s: %d %s events over the inventory gates, want exactly %d", d.Name, n, code, want)
+			}
+			for _, p := range peers {
+				if n := len(s.Events(t, code, p)); n != 0 {
+					t.Errorf("%s: simulated peer %s has %d %s events", d.Name, p, n, code)
+				}
+			}
 		}
 	})
 }
@@ -464,6 +480,9 @@ type fleetHost struct {
 	OsqueryVersion string     `json:"osquery_version"`
 	OrbitVersion   string     `json:"orbit_version"`
 	SeenTime       *time.Time `json:"seen_time"`
+	// LastEnrolledAt and PolicyUpdatedAt feed the probes of plan M5a amendment 2026-11-16 d, section 8.
+	LastEnrolledAt  *time.Time `json:"last_enrolled_at"`
+	PolicyUpdatedAt *time.Time `json:"policy_updated_at"`
 }
 
 // fleetAPI sends a request to Fleet's API on the development host (portal.FleetAdminURL) as Paddock's API-only user; the
@@ -535,8 +554,9 @@ const agentNotRunningCode = "device.tamper_agent_not_running"
 // gateF6 is the mutual watch against an impostor (plan M5a amendment 2026-11-16 b, section 8): the genuine agent is
 // stopped and a copy of it runs under another name and unit, so it checks in with the device's credentials while
 // paddock_agent_running fails and paddock_agent_binary_known does not judge it. The org admin sees exactly one
-// device.tamper_agent_not_running with last_contact_at later than failing_since, and no agent binary event.
-func gateF6(t *testing.T, d *Device) {
+// device.tamper_agent_not_running with last_contact_at later than failing_since, and no agent binary event. F7 runs
+// before the restore; gateF6 returns F7's simulated peers.
+func gateF6(t *testing.T, d *Device) []string {
 	const dir, unit = "/var/lib/paddock-f6", "pdk-f6-impostor"
 	query := func(sql string) string {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -601,8 +621,11 @@ func gateF6(t *testing.T, d *Device) {
 		t.Errorf("%s: %d %s events during F6, want still %d", d.Name, n, agentBinaryCode, binary0)
 	}
 
+	peers := gateF7(t, d, unit)
+
 	restore()
 	Until(t, d.Name+": paddock_agent_running passes again", 25*time.Minute, 15*time.Second, d.Checkin, func() bool { return query(passing) == "t" })
+	return peers
 }
 
 // fleetHostClaimedCode is the audit code of a claim on a device's inventory host (ADR 0057).
@@ -752,4 +775,232 @@ func fleetTokenFormat(s string) bool {
 		}
 	}
 	return true
+}
+
+// fleetdSilentCode is the audit code of a fleetd that falls silent while its device checks in (plan M5a amendments
+// 2026-11-16 c and d).
+const fleetdSilentCode = "device.tamper_fleetd_silent"
+
+// enrollmentProbe returns the latest enrollment of the host Fleet saw last with the hardware UUID, for the
+// enrollment-stability probe of plan M5a amendment 2026-11-16 d (recorded, not a gate).
+func enrollmentProbe(t *testing.T, hw string) string {
+	if h, ok := fleetHostByUUID(t, hw); ok && h.LastEnrolledAt != nil {
+		return h.LastEnrolledAt.UTC().Format(time.RFC3339)
+	}
+	return "unknown"
+}
+
+// fleetEnrollSecret is the stack's global enroll secret for simulated hosts.
+func fleetEnrollSecret(t *testing.T) string {
+	t.Helper()
+	dir, err := portal.SecretsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := os.ReadFile(filepath.Join(dir, "fleet_enroll_secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(secret))
+}
+
+// answerEvery runs tick every 30 s in a goroutine until the test ends.
+func answerEvery(t *testing.T, tick func(ctx context.Context)) {
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			tick(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+	}()
+	t.Cleanup(func() { stop(); <-done })
+}
+
+// startFleetPeers enrolls n simulated devices in the device's organization, each with a simulated Fleet host, which
+// check in and answer Fleet every 30 s until the test ends (plan M5a amendment 2026-11-16 c, F7 step 1): each VM brings
+// its own fresh peers, so the fleetd silence watch's majority guard holds without the other VM. It returns their IDs.
+func startFleetPeers(t *testing.T, d *Device, n int) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	res, err := d.s.session().Do(ctx, http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
+		"name": "systest f7 " + unique(), "max_uses": n, "auto_approve": true,
+		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	})
+	if err != nil || res.Status != http.StatusCreated {
+		t.Fatalf("enrollment token: %v HTTP %d %s", err, res.Status, res.Body)
+	}
+	var created struct {
+		Token struct {
+			ID string `json:"id"`
+		} `json:"token"`
+		EnrollmentConfig protocol.EnrollmentConfig `json:"enrollment_config"`
+	}
+	if err := json.Unmarshal(res.Body, &created); err != nil {
+		t.Fatalf("enrollment token %s: %v", res.Body, err)
+	}
+	client, err := portal.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, ids := fleetEnrollSecret(t), []string{}
+	for k := range n {
+		dev, err := devicesim.New(created.EnrollmentConfig, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := fmt.Sprintf("systest-f7-peer%d-%s", k, unique())
+		if res, err := dev.Enroll(ctx, name); err != nil || res.Status != http.StatusAccepted {
+			t.Fatalf("enroll: %v HTTP %d %s", err, res.Status, res.Body)
+		}
+		s, err := dev.WaitEnrollment(ctx, func(s protocol.EnrollStatus) bool { return s.Status != protocol.EnrollProcessing })
+		if err != nil || s.Status != protocol.EnrollActive {
+			t.Fatalf("enrollment %+v, %v; want active", s, err)
+		}
+		host, err := devicesim.EnrollFleet(ctx, http.DefaultClient, strings.TrimRight(portal.FleetAdminURL(), "/"), secret,
+			dev.HardwareUUID(), name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answerEvery(t, func(ctx context.Context) {
+			_, _, _ = dev.Checkin(ctx)
+			_, _ = host.Answer(ctx)
+		})
+		ids = append(ids, dev.DeviceID)
+	}
+	if res, err := d.s.session().Do(ctx, http.MethodPost, "/api/v1/enrollment-tokens/"+created.Token.ID+"/revoke", nil); err != nil ||
+		res.Status != http.StatusOK {
+		t.Errorf("revoke enrollment token: %v HTTP %d %s", err, res.Status, res.Body)
+	}
+	return ids
+}
+
+// gateF7 is the fleetd silence watch (plan M5a amendments 2026-11-16 c and d, section 8), inside F6 while the impostor
+// unit checks in: two simulated peers keep reaching Fleet; orbit is stopped and nobody reports it (the supervisor is
+// stopped); a second simulated host with the VM's hardware UUID keeps answering. The org admin sees exactly one
+// device.tamper_fleetd_silent with reason contact, judged by the device's own host and not the second one (D-c1); the
+// second host is reported as a claim. After orbit starts again the silence ends. It returns the peers' IDs.
+func gateF7(t *testing.T, d *Device, impostor string) []string {
+	query := func(sql string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, sql)
+		if err != nil {
+			t.Logf("%s: %v", d.Name, err)
+		}
+		return out
+	}
+	hw := strings.ToLower(d.MustRoot("cat /sys/class/dmi/id/product_uuid"))
+	checkin := func() { d.Must("sudo pkill -HUP -x " + impostor + " || true") }
+	peers := startFleetPeers(t, d, 2)
+	if h, ok := fleetHostByUUID(t, hw); ok {
+		first := h
+		time.Sleep(3 * time.Minute)
+		if h, ok = fleetHostByUUID(t, hw); ok && first.SeenTime != nil && h.SeenTime != nil {
+			t.Logf("%s: probe seen_time %s -> %s over 3 minutes", d.Name, first.SeenTime, h.SeenTime)
+			if !h.SeenTime.After(*first.SeenTime) {
+				t.Fatalf("%s: Fleet's seen_time of the running fleetd did not advance in 3 minutes (stop condition)", d.Name)
+			}
+		}
+	}
+	gateF7FrozenOsquery(t, d, hw)
+
+	m0, claims0 := len(d.s.Events(t, fleetdSilentCode, d.ID)), len(d.s.Events(t, fleetHostClaimedCode, d.ID))
+	started := false
+	t.Cleanup(func() {
+		if started {
+			d.MustRoot("systemctl start orbit.service")
+		}
+	})
+	d.MustRoot("systemctl stop orbit.service")
+	started = true
+	stopped := time.Now()
+
+	identifier := fmt.Sprintf("pdk-f7-second-%s-%d", d.Name, time.Now().UnixNano())
+	second, err := devicesim.EnrollFleetAs(context.Background(), http.DefaultClient, strings.TrimRight(portal.FleetAdminURL(), "/"),
+		fleetEnrollSecret(t), identifier, hw, identifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCtx, stopSecond := context.WithCancel(context.Background())
+	answerEvery(t, func(ctx context.Context) {
+		if secondCtx.Err() == nil {
+			_, _ = second.Answer(ctx)
+		}
+	})
+	deleteSecond := func() {
+		stopSecond()
+		for _, h := range fleetHostsByUUID(t, hw) {
+			if h.Hostname == identifier {
+				if resp, err := fleetAPI(t, http.MethodDelete, fmt.Sprintf("/api/latest/fleet/hosts/%d", h.ID), nil); err == nil {
+					_ = resp.Body.Close()
+				}
+			}
+		}
+	}
+	t.Cleanup(deleteSecond)
+
+	stamp := func(p map[string]any, key string) (time.Time, bool) {
+		v, _ := p[key].(string)
+		at, err := time.Parse(time.RFC3339Nano, v)
+		return at, err == nil
+	}
+	var found map[string]any
+	Until(t, d.Name+": device.tamper_fleetd_silent", 50*time.Minute, 30*time.Second, checkin, func() bool {
+		for _, e := range d.s.Events(t, fleetdSilentCode, d.ID)[m0:] {
+			seen, ok := stamp(e.Params, "fleetd_seen_at")
+			last, okLast := stamp(e.Params, "last_contact_at")
+			if ok && okLast && last.After(seen) {
+				found = e.Params
+				return true
+			}
+		}
+		return false
+	})
+	t.Logf("%s: silent fleetd reported after %s", d.Name, time.Since(stopped).Round(time.Second))
+	if found["reason"] != "contact" {
+		t.Errorf("%s: reason %v, want contact", d.Name, found["reason"])
+	}
+	deleteSecond()
+
+	d.MustRoot("systemctl start orbit.service")
+	started = false
+	mark := fmt.Sprintf(`SELECT coalesce(fleet_silent_reported_at::text, '') FROM device_inventory_ref WHERE device_id = '%s'`, d.ID)
+	Until(t, d.Name+": the silence ends", 20*time.Minute, 15*time.Second, checkin, func() bool { return query(mark) == "" })
+	synced := fmt.Sprintf(`SELECT synced_at::text FROM device_inventory_ref WHERE device_id = '%s'`, d.ID)
+	last, further := query(synced), 0
+	Until(t, d.Name+": two further sync rounds", 20*time.Minute, 15*time.Second, checkin, func() bool {
+		if at := query(synced); at != "" && at != last {
+			last, further = at, further+1
+		}
+		return further >= 2
+	})
+	if n := len(d.s.Events(t, fleetdSilentCode, d.ID)); n != m0+1 {
+		t.Errorf("%s: %d %s events, want %d", d.Name, n, fleetdSilentCode, m0+1)
+	}
+	if n := len(d.s.Events(t, fleetHostClaimedCode, d.ID)); n != claims0+1 {
+		t.Errorf("%s: %d %s events, want %d (the second host)", d.Name, n, fleetHostClaimedCode, claims0+1)
+	}
+	return peers
+}
+
+// gateF7FrozenOsquery is probe F7c of plan M5a amendment 2026-11-16 d (recorded, not a gate): every osqueryd is
+// stopped with SIGSTOP for 4 minutes, and the host's seen_time and policy_updated_at are logged at the start and the
+// end, which shows whether orbit keeps seen_time fresh while osquery is frozen.
+func gateF7FrozenOsquery(t *testing.T, d *Device, hw string) {
+	resume := func() { d.MustRoot("pkill -CONT -x osqueryd || true") }
+	t.Cleanup(resume)
+	before, _ := fleetHostByUUID(t, hw)
+	d.MustRoot("pkill -STOP -x osqueryd")
+	time.Sleep(4 * time.Minute)
+	after, _ := fleetHostByUUID(t, hw)
+	resume()
+	t.Logf("%s: probe F7c: seen_time %v -> %v, policy_updated_at %v -> %v while osqueryd was stopped for 4 minutes",
+		d.Name, before.SeenTime, after.SeenTime, before.PolicyUpdatedAt, after.PolicyUpdatedAt)
 }

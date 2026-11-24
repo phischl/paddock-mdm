@@ -78,3 +78,24 @@ func TestFleetHostBinaryPolicyListedAt(t *testing.T) {
 		t.Fatal("a hash no policy listed is reported")
 	}
 }
+
+// TestFleetHostAgentRunningQueryFails (plan M5a amendment 2026-11-16 d, F6): the agent-running query gets status 1
+// and no rows; other queries are answered as before.
+func TestFleetHostAgentRunningQueryFails(t *testing.T) {
+	running := "SELECT 1 FROM processes WHERE name = 'paddockd' AND path LIKE '/opt/paddock/agent/%';"
+	other := "SELECT 1 FROM disk_encryption WHERE encrypted = 1;"
+	h := &FleetHost{AgentRunningQueryFails: true}
+	if s, rows := h.status("fleet_policy_query_3", running), h.rows("fleet_policy_query_3", running); s != 1 || len(rows) != 0 {
+		t.Fatalf("agent-running query: status %d, %d rows; want 1 and none", s, len(rows))
+	}
+	if s, rows := h.status("fleet_policy_query_4", other), h.rows("fleet_policy_query_4", other); s != 0 || len(rows) != 1 {
+		t.Fatalf("another policy: status %d, %d rows", s, len(rows))
+	}
+	if s := h.status("fleet_detail_query_os_version", running); s != 0 {
+		t.Fatalf("detail query status %d", s)
+	}
+	h.AgentRunningQueryFails = false
+	if s, rows := h.status("fleet_policy_query_3", running), h.rows("fleet_policy_query_3", running); s != 0 || len(rows) != 1 {
+		t.Fatalf("answering again: status %d, %d rows", s, len(rows))
+	}
+}
