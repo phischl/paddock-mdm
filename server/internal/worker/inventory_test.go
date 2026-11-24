@@ -89,11 +89,12 @@ type fakeSource struct {
 	// seenAt and enrolledAt are the listed hosts' last contact and latest enrollment (zero and nil when absent).
 	seenAt     map[ports.HostRef]time.Time
 	enrolledAt map[ports.HostRef]*time.Time
-	// hostErr fails the host detail of the hosts it lists; listErr fails the host list; onRead runs before a host
-	// detail is answered.
-	hostErr map[ports.HostRef]error
-	listErr error
-	onRead  func(ports.HostRef)
+	// policyAt is the listed hosts' last stored policy results (nil when absent); hostErr fails the host detail of the
+	// hosts it lists; listErr fails the host list; onRead runs before a host detail is answered.
+	policyAt map[ports.HostRef]*time.Time
+	hostErr  map[ports.HostRef]error
+	listErr  error
+	onRead   func(ports.HostRef)
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -117,7 +118,8 @@ func uniqueRef() ports.HostRef { return ports.HostRef(strconv.FormatInt(rand.Int
 func (s *fakeSource) seen(hosts []ports.InventoryHost) []ports.HostSeen {
 	out := []ports.HostSeen{}
 	for _, h := range hosts {
-		out = append(out, ports.HostSeen{Ref: h.Ref, HardwareUUID: h.HardwareUUID, SeenAt: s.seenAt[h.Ref], EnrolledAt: s.enrolledAt[h.Ref]})
+		out = append(out, ports.HostSeen{Ref: h.Ref, HardwareUUID: h.HardwareUUID, SeenAt: s.seenAt[h.Ref], EnrolledAt: s.enrolledAt[h.Ref],
+			PolicyUpdatedAt: s.policyAt[h.Ref]})
 	}
 	return out
 }

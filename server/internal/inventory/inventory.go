@@ -87,6 +87,19 @@ func AgentBinaryPolicy(hashes []string) ports.PolicyDefinition {
 	return def
 }
 
+// UnansweredAgentRunningAsFailing returns inv with PolicyAgentRunning moved from UnansweredPolicies to Policies as
+// failing when gateOpen, otherwise inv unchanged (plan M5a amendment 2026-11-16 d, F6): the policy's query text never
+// changes, so after the first evaluation of its definition an empty answer means the query failed on the host.
+func UnansweredAgentRunningAsFailing(inv ports.HostInventory, gateOpen bool) ports.HostInventory {
+	n := slices.Index(inv.UnansweredPolicies, PolicyAgentRunning)
+	if !gateOpen || n < 0 {
+		return inv
+	}
+	inv.UnansweredPolicies = slices.Delete(slices.Clone(inv.UnansweredPolicies), n, n+1)
+	inv.Policies = append(slices.Clone(inv.Policies), ports.PolicyResult{Key: PolicyAgentRunning, Passing: false})
+	return inv
+}
+
 // Policies returns Paddock's policies, sorted by key; the key is the file name, the description its leading comment.
 func Policies() ([]ports.PolicyDefinition, error) {
 	names, err := fs.Glob(policyFiles, "policies/*.sql")

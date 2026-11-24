@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -888,5 +889,240 @@ func TestInventoryHostBinding(t *testing.T) {
 		if n := events(agentNotRunningCode, d); n != 0 {
 			t.Errorf("%s: %d %s events", d.DeviceID, n, agentNotRunningCode)
 		}
+	}
+}
+
+// fleetdSilentCode is the audit code of a fleetd that falls silent while its device checks in (plan M5a amendments
+// 2026-11-16 c and d).
+const fleetdSilentCode = "device.tamper_fleetd_silent"
+
+// TestInventoryFleetdSilent is the acceptance gate of plan M5a amendment 2026-11-16 c (PDK-1122d, AC-D1, AC-D4):
+//  1. three peers check in and their simulated hosts answer Fleet every iteration, so that most live devices reach
+//     Fleet;
+//  2. silent checks in every iteration and has no host in Fleet; its inventory reference is seeded with a last contact
+//     20 minutes ago, a silence that started 16 minutes ago and a check-in noted 10 minutes ago (the branch of a host
+//     deleted in Fleet, confirmed);
+//  3. quiet is seeded alike without a silence start and stops checking in after the first iteration.
+//
+// alice sees exactly one device.tamper_fleetd_silent for silent with its params and a tamper finding; quiet gets a
+// silence start and no event; after two further sync rounds silent still has one event and the peers none; carol
+// (globex) sees none. The 15-minute thresholds are proven by TestInventoryRoundFleetSilence.
+func TestInventoryFleetdSilent(t *testing.T) {
+	alice := login(t, env.Alice)
+	suffix := uniqueSuffix()
+	start := time.Now()
+	peers := map[string]*devicesim.Device{}
+	hosts := []*devicesim.FleetHost{}
+	for _, name := range []string{"peer1", "peer2", "peer3"} {
+		hostname := "inv-silent-" + name + "-" + suffix
+		peers[name] = activeDevice(t, alice, "", hostname)
+		hosts = append(hosts, enrollFleetHost(t, peers[name].HardwareUUID(), hostname, nil))
+	}
+	silent := activeDevice(t, alice, "", "inv-silent-silent-"+suffix)
+	quiet := activeDevice(t, alice, "", "inv-silent-quiet-"+suffix)
+	db := ownerDB(t)
+	for _, d := range []*devicesim.Device{silent, quiet} {
+		if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(testContext(t, time.Minute), `INSERT INTO device_inventory_ref
+		(device_id, organization_id, external_id, last_seen_at, fleet_silent_since, fleet_silent_checkin_at)
+		SELECT id, organization_id, 'acceptance-missing', now() - interval '20 minutes',
+		       CASE WHEN id = $1 THEN now() - interval '16 minutes' END,
+		       CASE WHEN id = $1 THEN now() - interval '10 minutes' END
+		FROM device WHERE id = ANY($2::uuid[])`, silent.DeviceID, []string{silent.DeviceID, quiet.DeviceID}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM device_inventory_ref WHERE device_id = ANY($1::uuid[])",
+			[]string{silent.DeviceID, quiet.DeviceID})
+	})
+	deadline := time.Now().Add(10 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for {
+			for _, d := range append([]*devicesim.Device{silent}, peers["peer1"], peers["peer2"], peers["peer3"]) {
+				if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, h := range hosts {
+				if _, err := h.Answer(testContext(t, time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if cond() {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 10 minutes: %s", what)
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+	eventsOf := func(p *env.Portal, device string) []env.AuditEvent {
+		all, err := p.AuditEventsSince(testContext(t, time.Minute), fleetdSilentCode, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []env.AuditEvent
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == device {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	quietStarted := func() bool {
+		var n int
+		if err := db.QueryRow(testContext(t, time.Minute), `SELECT count(*) FROM device_inventory_ref
+			WHERE device_id = $1 AND fleet_silent_since IS NOT NULL`, quiet.DeviceID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	waitFor("alice sees device.tamper_fleetd_silent for silent and quiet has a silence start", func() bool {
+		return len(eventsOf(alice, silent.DeviceID)) > 0 && quietStarted()
+	})
+	t.Logf("%s after %s", fleetdSilentCode, time.Since(start).Round(time.Second))
+	ev := eventsOf(alice, silent.DeviceID)
+	if len(ev) != 1 {
+		t.Fatalf("silent: %d events, want 1", len(ev))
+	}
+	stamp := func(key string) time.Time {
+		s, _ := ev[0].Params[key].(string)
+		at, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("param %s %q: %v (params %v)", key, s, err, ev[0].Params)
+		}
+		return at
+	}
+	if contact, seen := stamp("last_contact_at"), stamp("fleetd_seen_at"); !contact.After(seen) {
+		t.Errorf("last_contact_at %v is not later than fleetd_seen_at %v", contact, seen)
+	}
+	stamp("silent_since")
+	if reason := ev[0].Params["reason"]; reason != "contact" {
+		t.Errorf("reason %v, want contact", reason)
+	}
+	if f := tamperFindingOf(t, alice, silent.DeviceID, 1); f.Code != fleetdSilentCode {
+		t.Errorf("tamper finding %+v", f)
+	}
+
+	ids := []string{}
+	for _, d := range peers {
+		ids = append(ids, d.DeviceID)
+	}
+	synced := func() map[string]time.Time {
+		rows, err := db.Query(testContext(t, time.Minute), "SELECT device_id::text, synced_at FROM device_inventory_ref WHERE device_id::text = ANY($1::text[])", ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]time.Time{}
+		for rows.Next() {
+			var id string
+			var at time.Time
+			if err := rows.Scan(&id, &at); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = at
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	last, rounds := synced(), map[string]int{}
+	waitFor("two further sync rounds of every peer", func() bool {
+		done := true
+		for id, at := range synced() {
+			if at.After(last[id]) {
+				last[id] = at
+				rounds[id]++
+			}
+			done = done && rounds[id] >= 2
+		}
+		return done && len(rounds) == len(ids)
+	})
+	carol := login(t, env.Carol)
+	all := map[string]*devicesim.Device{"silent": silent, "quiet": quiet, "peer1": peers["peer1"], "peer2": peers["peer2"],
+		"peer3": peers["peer3"]}
+	for name, d := range all {
+		want := 0
+		if name == "silent" {
+			want = 1
+		}
+		if n := len(eventsOf(alice, d.DeviceID)); n != want {
+			t.Errorf("%s: %d %s events, want %d", name, n, fleetdSilentCode, want)
+		}
+		if n := len(eventsOf(carol, d.DeviceID)); n != 0 {
+			t.Errorf("carol sees %d %s events of the acme device %s", n, fleetdSilentCode, name)
+		}
+	}
+}
+
+// TestInventoryAgentRunningQueryFails is the acceptance gate of plan M5a amendment 2026-11-16 d, F6 (AC-d3): a host
+// first passes paddock_agent_running, then its query fails on the device (status 1, no answer). The stored result
+// becomes failing with failing_since; seeded 16 minutes back, the next failing evaluation while the device checks in
+// records device.tamper_agent_not_running for alice.
+func TestInventoryAgentRunningQueryFails(t *testing.T) {
+	alice := login(t, env.Alice)
+	hostname := "inv-qfail-" + uniqueSuffix()
+	start := time.Now()
+	device := activeDevice(t, alice, "", hostname)
+	host := enrollFleetHost(t, device.HardwareUUID(), hostname, nil)
+	db := ownerDB(t)
+	deadline := time.Now().Add(10 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for {
+			if _, _, err := device.Checkin(testContext(t, time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := host.Answer(testContext(t, time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if cond() {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 10 minutes: %s", what)
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+	stored := func(passing bool) bool {
+		var n int
+		if err := db.QueryRow(testContext(t, time.Minute), `SELECT count(*) FROM inventory_policy_result
+			WHERE device_id = $1 AND policy_key = 'paddock_agent_running' AND passing = $2
+			  AND (passing OR failing_since IS NOT NULL)`, device.DeviceID, passing).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	waitFor("paddock_agent_running is stored as passing", func() bool { return stored(true) })
+	host.AgentRunningQueryFails = true
+	waitFor("the unanswered paddock_agent_running is stored as failing with failing_since", func() bool { return stored(false) })
+	if _, err := db.Exec(testContext(t, time.Minute), `UPDATE inventory_policy_result SET failing_since = failing_since - interval '16 minutes'
+		WHERE device_id = $1 AND policy_key = 'paddock_agent_running'`, device.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	events := func() int {
+		all, err := alice.AuditEventsSince(testContext(t, time.Minute), agentNotRunningCode, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == device.DeviceID {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor("alice sees device.tamper_agent_not_running", func() bool { return events() > 0 })
+	t.Logf("%s after %s", agentNotRunningCode, time.Since(start).Round(time.Second))
+	if n := events(); n != 1 {
+		t.Fatalf("%d events, want 1", n)
 	}
 }

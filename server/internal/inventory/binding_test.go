@@ -159,3 +159,53 @@ func TestHostTargetsLeftHosts(t *testing.T) {
 		t.Fatalf("reservations: %+v", got.InUse)
 	}
 }
+
+// TestDecideBindingResetting (plan M5a amendment f, F-15.2): a bound, valid and fresh host with a pending token is current
+// unless the device announced an enrollment reset that no binding followed; then its token is resolved.
+func TestDecideBindingResetting(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *time.Time { v := now.Add(-d); return &v }
+	seen := map[ports.HostRef]ports.HostSeen{"9": {Ref: "9", HardwareUUID: devUUID, SeenAt: now}}
+	b := func(reset, bound *time.Time) inventory.Binding {
+		return inventory.Binding{HardwareUUID: devUUID, Host: "9", PendingToken: "t", TokenReportedAt: at(time.Minute),
+			ResetAnnouncedAt: reset, BoundAt: bound}
+	}
+	for _, tc := range []struct {
+		name string
+		b    inventory.Binding
+		want inventory.Decision
+	}{
+		{"resetting", b(at(2*time.Minute), at(6*time.Hour)), inventory.DecideResolve},
+		{"not resetting", b(nil, at(6*time.Hour)), inventory.DecideCurrent},
+		{"reset older than ClaimQuiet", b(at(inventory.ClaimQuiet), at(6*time.Hour)), inventory.DecideCurrent},
+		{"bound after the announcement", b(at(10*time.Minute), at(5*time.Minute)), inventory.DecideCurrent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inventory.DecideBinding(tc.b, seen, now, now, nil, uuid.Nil); got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDecideBindingTokenAfterReset (plan M5a amendment f, F-15.2): a device bound to host 42 at 12:45:55 announces an
+// enrollment reset at 13:27:43; fleetd enrolls again as host 44 and the device reports its token at 13:38:14. In the
+// round at 13:38:55 host 42 is still listed and less than 15 minutes stale. The token is resolved through the
+// inventory system, not taken as current, and the device is rebound to host 44.
+func TestDecideBindingTokenAfterReset(t *testing.T) {
+	day := func(h, m, s int) *time.Time { v := time.Date(2026, 11, 24, h, m, s, 0, time.UTC); return &v }
+	now := *day(13, 38, 55)
+	seen := map[ports.HostRef]ports.HostSeen{
+		"42": {Ref: "42", HardwareUUID: devUUID, SeenAt: *day(13, 27, 44)},
+		"44": {Ref: "44", HardwareUUID: devUUID, SeenAt: *day(13, 38, 50)},
+	}
+	b := inventory.Binding{DeviceID: uuid.New(), HardwareUUID: devUUID, Host: "42", PendingToken: "t",
+		TokenReportedAt: day(13, 38, 14), ResetAnnouncedAt: day(13, 27, 43), BoundAt: day(12, 45, 55)}
+	if got := inventory.DecideBinding(b, seen, now, now, nil, uuid.Nil); got != inventory.DecideResolve {
+		t.Fatalf("before the inventory system answered: got %d, want DecideResolve", got)
+	}
+	resolved := seen["44"]
+	if got := inventory.DecideBinding(b, seen, now, now, &resolved, uuid.Nil); got != inventory.DecideRebind {
+		t.Fatalf("after it answered: got %d, want DecideRebind", got)
+	}
+}

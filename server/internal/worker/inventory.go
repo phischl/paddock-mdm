@@ -73,6 +73,11 @@ var metricBindingsSuspended = prometheus.NewGauge(prometheus.GaugeOpts{
 	Help: "Inventory host bindings whose bound host the last sync round did not list with the device's hardware UUID (ADR 0057).",
 })
 
+var metricFleetSilentSuppressed = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "paddock_inventory_fleet_silent_suppressed",
+	Help: "Devices whose silent fleetd the last sync round held back because no or too few live devices reached the inventory system (plan M5a amendment 2026-11-16 c).",
+})
+
 var metricPolicyUnanswered = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "paddock_inventory_policy_unanswered_hosts",
 	Help: "Mapped hosts of the last full sync round that evaluated a Paddock policy's current definition without an answer: the query failed there.",
@@ -203,6 +208,7 @@ func (i *Inventory) RunSync(ctx context.Context) error {
 			metricClaimWatchSuppressed.WithLabelValues(inventory.BindingDevice).Set(0)
 			metricClaimWatchSuppressed.WithLabelValues(inventory.BindingFirst).Set(0)
 			metricBindingsSuspended.Set(0)
+			metricFleetSilentSuppressed.Set(0)
 		}
 		if err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "inventory sync round failed; retrying next round", "error", err)
@@ -307,7 +313,8 @@ func (i *Inventory) Round(ctx context.Context) error {
 		inv, err := i.source.HostInventory(ctx, h.Ref)
 		reason, perHost := "fetch_refused", errors.Is(err, problem.NotFound) || errors.Is(err, problem.InvalidState)
 		if err == nil {
-			err = i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, inv)
+			stored := inventory.UnansweredAgentRunningAsFailing(inv, i.evaluatedCurrent(inv, inventory.PolicyAgentRunning))
+			err = i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, stored)
 			reason, perHost = "store_refused", db.IsDataError(err)
 		}
 		switch {
@@ -334,6 +341,9 @@ func (i *Inventory) Round(ctx context.Context) error {
 	}
 	claims, err := i.watchClaims(ctx, withBindings(devices, bindings), seen, targets, start)
 	if err != nil {
+		return err
+	}
+	if err := i.watchFleet(ctx, seen, targets, start); err != nil {
 		return err
 	}
 	if err := i.removeLeftHosts(ctx, start); err != nil {
@@ -663,6 +673,43 @@ func (i *Inventory) watchClaims(ctx context.Context, devices []inventory.ClaimDe
 	return reported, nil
 }
 
+// watchFleet runs the fleetd silence watch over the round's complete host list (plan M5a amendments 2026-11-16 c and
+// d) and sets the gauge to the due devices it held back.
+func (i *Inventory) watchFleet(ctx context.Context, seen []ports.HostSeen, t inventory.Targets, now time.Time) error {
+	devices, err := i.sync.FleetWatchDevices(ctx)
+	if err != nil {
+		return err
+	}
+	w := inventory.WatchFleet(devices, seen, t, now, app.AgentSilence)
+	held := 0
+	if w.Suppressed != "" {
+		held = w.Due
+		slog.WarnContext(ctx, "fleet silence watch suppressed", "reason", w.Suppressed, "due", w.Due, "live", w.Live,
+			"fresh", w.Fresh)
+	}
+	metricFleetSilentSuppressed.Set(float64(held))
+	var orgs []uuid.UUID
+	for _, d := range devices {
+		if !slices.Contains(orgs, d.OrganizationID) {
+			orgs = append(orgs, d.OrganizationID)
+		}
+	}
+	for _, org := range orgs {
+		part := w.ForOrganization(org, devices)
+		if len(part.Start)+len(part.Note)+len(part.Reset)+len(part.Clear)+len(part.Report) == 0 {
+			continue
+		}
+		ids, err := i.sync.ApplyFleetWatch(systemContext(ctx, org, "inventory-sync"), part, now)
+		if err != nil {
+			return fmt.Errorf("organization %s: %w", org, err)
+		}
+		for _, id := range ids {
+			slog.WarnContext(ctx, "fleetd is silent while the device checks in", "organization_id", org, "device_id", id)
+		}
+	}
+	return nil
+}
+
 // reportAgents runs the mutual watch of every organization.
 func (i *Inventory) reportAgents(ctx context.Context, now time.Time) error {
 	orgs, err := i.org.OrganizationIDs(ctx)
@@ -733,10 +780,17 @@ func (i *Inventory) countUnanswered(inv ports.HostInventory, counts map[string]i
 		return
 	}
 	for _, key := range inv.UnansweredPolicies {
-		if d, ok := i.defined[key]; ok && !inv.PolicyUpdatedAt.Before(d.at.Add(binaryEvaluationLag)) {
+		if i.evaluatedCurrent(inv, key) {
 			counts[key]++
 		}
 	}
+}
+
+// evaluatedCurrent reports whether the host evaluated its policies binaryEvaluationLag or more after this process
+// first applied the current definition of the policy key.
+func (i *Inventory) evaluatedCurrent(inv ports.HostInventory, key string) bool {
+	d, ok := i.defined[key]
+	return ok && inv.PolicyUpdatedAt != nil && !inv.PolicyUpdatedAt.Before(d.at.Add(binaryEvaluationLag))
 }
 
 // reportUnanswered sets the gauge of every Paddock policy and logs one warning per policy that did not run on some

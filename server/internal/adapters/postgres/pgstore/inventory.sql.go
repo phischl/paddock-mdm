@@ -65,6 +65,17 @@ func (q *Queries) ClearFleetDeviceToken(ctx context.Context, arg ClearFleetDevic
 	return result.RowsAffected(), nil
 }
 
+const clearFleetSilence = `-- name: ClearFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL,
+                                fleet_silent_reported_at = NULL
+WHERE device_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ClearFleetSilence(ctx context.Context, deviceIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearFleetSilence, deviceIds)
+	return err
+}
+
 const countDeviceInventory = `-- name: CountDeviceInventory :one
 SELECT coalesce((SELECT r.external_id FROM device_inventory_ref r WHERE r.device_id = $1), '')::text AS external_id,
        (SELECT count(*) FROM installed_software s WHERE s.device_id = $1)::bigint AS software,
@@ -419,6 +430,81 @@ func (q *Queries) FleetHostInUseOutside(ctx context.Context, arg FleetHostInUseO
 	var column_1 string
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const fleetWatchDevices = `-- name: FleetWatchDevices :many
+SELECT w.device_id::uuid AS device_id, w.organization_id::uuid AS organization_id,
+       coalesce(w.hardware_uuid, '')::text AS hardware_uuid, w.external_id::text AS external_id,
+       coalesce(w.bound_host, '')::text AS bound_host,
+       coalesce(w.last_contact_at, 'epoch')::timestamptz AS last_contact_at,
+       coalesce(w.last_seen_at, 'epoch')::timestamptz AS last_seen_at,
+       coalesce(w.policy_updated_at, 'epoch')::timestamptz AS policy_updated_at,
+       coalesce(w.fleet_silent_since, 'epoch')::timestamptz AS fleet_silent_since,
+       coalesce(w.fleet_silent_checkin_at, 'epoch')::timestamptz AS fleet_silent_checkin_at,
+       coalesce(w.fleet_silent_reported_at, 'epoch')::timestamptz AS fleet_silent_reported_at,
+       coalesce(w.reset_announced_at, 'epoch')::timestamptz AS reset_announced_at,
+       coalesce(w.bound_at, 'epoch')::timestamptz AS bound_at,
+       coalesce(w.suspended_at, 'epoch')::timestamptz AS suspended_at,
+       coalesce(w.fleet_reenrolled_at, 'epoch')::timestamptz AS fleet_reenrolled_at,
+       coalesce(w.fleet_reset_hold_at, 'epoch')::timestamptz AS fleet_reset_hold_at
+FROM paddock_fleet_watch_devices() w ORDER BY w.device_id
+`
+
+type FleetWatchDevicesRow struct {
+	DeviceID              uuid.UUID
+	OrganizationID        uuid.UUID
+	HardwareUuid          string
+	ExternalID            string
+	BoundHost             string
+	LastContactAt         time.Time
+	LastSeenAt            time.Time
+	PolicyUpdatedAt       time.Time
+	FleetSilentSince      time.Time
+	FleetSilentCheckinAt  time.Time
+	FleetSilentReportedAt time.Time
+	ResetAnnouncedAt      time.Time
+	BoundAt               time.Time
+	SuspendedAt           time.Time
+	FleetReenrolledAt     time.Time
+	FleetResetHoldAt      time.Time
+}
+
+// The fleetd silence watch (plan M5a amendments 2026-11-16 c and d).
+func (q *Queries) FleetWatchDevices(ctx context.Context) ([]FleetWatchDevicesRow, error) {
+	rows, err := q.db.Query(ctx, fleetWatchDevices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FleetWatchDevicesRow{}
+	for rows.Next() {
+		var i FleetWatchDevicesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.OrganizationID,
+			&i.HardwareUuid,
+			&i.ExternalID,
+			&i.BoundHost,
+			&i.LastContactAt,
+			&i.LastSeenAt,
+			&i.PolicyUpdatedAt,
+			&i.FleetSilentSince,
+			&i.FleetSilentCheckinAt,
+			&i.FleetSilentReportedAt,
+			&i.ResetAnnouncedAt,
+			&i.BoundAt,
+			&i.SuspendedAt,
+			&i.FleetReenrolledAt,
+			&i.FleetResetHoldAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const forgetLeftInventoryHost = `-- name: ForgetLeftInventoryHost :exec
@@ -1307,6 +1393,24 @@ func (q *Queries) MarkFleetReenrolled(ctx context.Context, arg MarkFleetReenroll
 	return err
 }
 
+const markFleetSilentReported = `-- name: MarkFleetSilentReported :execrows
+UPDATE device_inventory_ref SET fleet_silent_reported_at = $1::timestamptz
+WHERE device_id = $2 AND fleet_silent_reported_at IS NULL
+`
+
+type MarkFleetSilentReportedParams struct {
+	At       time.Time
+	DeviceID uuid.UUID
+}
+
+func (q *Queries) MarkFleetSilentReported(ctx context.Context, arg MarkFleetSilentReportedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markFleetSilentReported, arg.At, arg.DeviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markLeftInventoryHostAttempted = `-- name: MarkLeftInventoryHostAttempted :exec
 UPDATE device_inventory_left_host SET attempted_at = now() WHERE device_id = $1 AND host_id = $2
 `
@@ -1332,6 +1436,18 @@ type MarkLeftInventoryHostRemovedParams struct {
 
 func (q *Queries) MarkLeftInventoryHostRemoved(ctx context.Context, arg MarkLeftInventoryHostRemovedParams) error {
 	_, err := q.db.Exec(ctx, markLeftInventoryHostRemoved, arg.DeviceID, arg.HostID)
+	return err
+}
+
+const noteFleetSilenceCheckin = `-- name: NoteFleetSilenceCheckin :exec
+UPDATE device_inventory_ref i SET fleet_silent_checkin_at = s.last_contact_at
+FROM device_status s
+WHERE s.device_id = i.device_id AND i.device_id = ANY($1::uuid[])
+  AND i.fleet_silent_since IS NOT NULL AND i.fleet_silent_checkin_at IS NULL AND s.last_contact_at IS NOT NULL
+`
+
+func (q *Queries) NoteFleetSilenceCheckin(ctx context.Context, deviceIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, noteFleetSilenceCheckin, deviceIds)
 	return err
 }
 
@@ -1389,6 +1505,16 @@ func (q *Queries) RecordRetiredInventoryHost(ctx context.Context, deviceID uuid.
 	return err
 }
 
+const resetFleetSilence = `-- name: ResetFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL
+WHERE device_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ResetFleetSilence(ctx context.Context, deviceIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetFleetSilence, deviceIds)
+	return err
+}
+
 const resumeInventoryBindings = `-- name: ResumeInventoryBindings :exec
 UPDATE device_fleet_binding SET suspended_at = NULL WHERE device_id = ANY($1::uuid[])
 `
@@ -1442,6 +1568,26 @@ type StartFleetClaimParams struct {
 
 func (q *Queries) StartFleetClaim(ctx context.Context, arg StartFleetClaimParams) error {
 	_, err := q.db.Exec(ctx, startFleetClaim, arg.At, arg.DeviceIds)
+	return err
+}
+
+const startFleetSilence = `-- name: StartFleetSilence :exec
+UPDATE device_inventory_ref i SET fleet_silent_since = $1::timestamptz,
+       fleet_reset_hold_at = CASE WHEN i.device_id = ANY($2::uuid[])
+         THEN (SELECT b.reset_announced_at FROM device_fleet_binding b WHERE b.device_id = i.device_id)
+         ELSE i.fleet_reset_hold_at END
+WHERE i.device_id = ANY($3::uuid[]) AND i.fleet_silent_since IS NULL
+`
+
+type StartFleetSilenceParams struct {
+	At        time.Time
+	HeldIds   []uuid.UUID
+	DeviceIds []uuid.UUID
+}
+
+// A held Start records the reset announcement whose hold it grants (plan M5a amendment f, F-15.1).
+func (q *Queries) StartFleetSilence(ctx context.Context, arg StartFleetSilenceParams) error {
+	_, err := q.db.Exec(ctx, startFleetSilence, arg.At, arg.HeldIds, arg.DeviceIds)
 	return err
 }
 

@@ -45,6 +45,7 @@ var tamperFindingCodes = map[audit.Code]string{
 	audit.CodeDeviceTamperAgentNotRunning:      "",
 	audit.CodeDeviceTamperAgentBinaryChanged:   "",
 	audit.CodeDeviceTamperFleetHostClaimed:     "",
+	audit.CodeDeviceTamperFleetdSilent:         "",
 	audit.CodeDeviceTamperInventoryRejected:    "",
 }
 

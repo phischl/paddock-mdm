@@ -337,6 +337,52 @@ of these files, it checks the file against the baseline. A change found there or
 (`device.login_applied`). A missing `login-deny` after an enforced bundle is a change, because its absence unlocks
 every locked user. The remaining gaps are listed in RR-148.
 
+## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds and sparse check-ins in the fleetd silence watch
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). Details, texts and tests:
+plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-24 f (architect, PDK-1122d review 1)".
+
+**Context.** The review of amendment c's implementation found three problems:
+- ADR 0057 allows 60 minutes to re-bind a device's inventory host after an announced enrollment reset, a suspended
+  binding or a re-enrollment, but the silence watch reported after 30 minutes.
+- A device that checks in at intervals of 20 minutes or more was never confirmed.
+- Devices whose silence was already reported kept the installation-wide majority guard down.
+
+**Options.**
+
+1. **Hold, bounded by the episode, and confirmation by check-ins (chosen).**
+   - The confirmation counts only from 60 minutes after an ADR 0057 event that began no later than the silence
+     episode.
+   - A report needs two check-ins after the silence was found, plus 15 minutes.
+   - An episode ends only after 60 minutes without a check-in.
+   - Pro: a hold delays a report and never prevents it, even though the reset announcement comes from the device.
+     Sparse check-ins are reported, and suspend, boot and network loss still raise nothing.
+   - Con: one more column; for an episode opened in the seconds before a suspend, orbit's tolerance after the resume
+     shrinks from 15 to about 5 minutes.
+2. **Skip held devices and reset the episode while held.**
+   - Con: the hold would last as long as the device keeps announcing a reset.
+3. **Reset the episode only after a long gap, with liveness at the due round as the only evidence.**
+   - Con: one check-in during orbit's reconnect after a resume could complete an older episode.
+
+**Decision.** Option 1.
+- Devices in a hold and devices whose silence is already reported count in neither side of the majority guard.
+- Fleet's "never evaluated" placeholder (before 2001) counts as no policy results.
+- A host whose last contact lies ahead of Fleet's clock is accepted as a loud, fail-safe blind spot (suppression
+  alert, RR-149), not clamped.
+
+**Consequences.**
+- Positive: no false report during a staged agent rollout within ADR 0057's bounds; a device that checks in up to
+  once an hour while its fleetd is silent is reported; one organization's reported devices no longer blind the watch
+  for others.
+- Negative: up to 60 minutes more latency during a hold; a device that checks in less often than once an hour is not
+  reported (RR-149); beyond about 1,500 agent updates per hour, a device left unbound for more than 60 minutes gets a
+  false silence report, alongside ADR 0057's false claim report.
+- Addendum (review 2): an announced enrollment reset holds the watch at most once per device in 24 hours. A bound
+  device that resets is rebound in the first round after it reports its new token, rather than at the next token
+  rotation, so a second reset within 24 hours raises no report while the token can be resolved (plan amendment f,
+  F-15).
+- Follow-up: none beyond the PDK-1122d fix round.
+
 ## Amendment 2026-11-24 g (architect, PDK-1122k) — the inventory round reports a refused host
 The inventory round skips a device's host when Fleet refuses it or Postgres refuses its data after sanitising. Paddock
 records `device.tamper_inventory_rejected` once per episode, with the params `reason` (`fetch_refused` or

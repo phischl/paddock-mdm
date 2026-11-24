@@ -123,10 +123,20 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    was repaired and a publish reset its passing result before the worker read it, a new tamper is reported only after
    the policy has passed again. A host that evaluated a Paddock policy's current definition without an answer (the
    query failed there) is counted in `paddock_inventory_policy_unanswered_hosts{policy}` each full round and logged
-   as a warning. A device
+   as a warning. For `paddock_agent_running`, that missing answer is stored as a failing evaluation. A device
    installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
    policy as soon as any release is published; publish that build or install a published release. The worker logs the
-   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query;
+   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query.
+   It also reports, once per silence, `device.tamper_fleetd_silent` for an active device whose fleetd has not talked to
+   Fleet for 15 minutes (measured against the newest contact of any host), or whose host stored no policy results for 30
+   minutes longer than the newest host's (`reason` `policies`), while the device kept checking in (at most 60 minutes
+   between check-ins), confirmed when the device has checked in twice more and 15 more minutes have passed. After an
+   announced enrollment reset of fleetd, a suspended host binding or a re-enrollment of the device's host, the
+   confirmation counts only from 60 minutes after that event. An announced enrollment reset holds the watch at most once
+   per device in 24 hours. Reports wait while fewer than half of the live devices reach Fleet or none does: the worker
+   then logs `fleet silence watch suppressed` and sets `paddock_inventory_fleet_silent_suppressed`; a value above 0 for
+   longer than a few rounds means devices cannot reach `fleet.<domain>` (certificate, DNS, proxy) and needs the
+   operator. A site that blocks only `fleet.<domain>` raises the event for its devices;
 6. reports, once per episode, `device.tamper_fleet_host_claimed` when another host reports a device's hardware UUID
    and keeps contacting Fleet for 15 minutes, or when the device's host was enrolled again. After a re-enrollment, agent
    reports from Fleet wait 60 minutes. A Fleet database restore re-enrolls many hosts at once; the worker then holds
@@ -134,7 +144,9 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    no longer lists with the device's hardware UUID suspends the device's binding until the device names its new host
    (`paddock_inventory_bindings_suspended`). The worker resolves at most 200 device tokens per round: more than about
    1,500 agent updates per hour can leave a device unresolved for longer than 60 minutes, which then raises one false
-   `second_host` report, so keep rollout waves below that rate.
+   `second_host` report and one false `device.tamper_fleetd_silent`, so keep rollout waves below that rate. A device
+   whose binding stays suspended for longer than 60 minutes while its fleetd is silent is reported as
+   `device.tamper_fleetd_silent` too.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings
@@ -142,6 +154,23 @@ priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it s
 `severity=unknown`) and sort last; the start page tile counts the devices with critical or high findings and, next to
 it, the devices with findings of unknown severity. Treat a finding of unknown severity as worth checking: the CVE links
 to its entry in the National Vulnerability Database.
+
+## When the fleetd silence watch is suppressed
+
+`PaddockFleetSilenceWatchSuppressed` fires when the worker has held back `device.tamper_fleetd_silent` for 15 minutes
+because no live device, or fewer than half of them, reach Fleet. The worker logs `fleet silence watch suppressed` with
+`reason` (`no_fresh_peer` or `fresh_minority`), `due`, `live` and `fresh` every round.
+
+1. Check that devices reach `https://fleet.<domain>`: the certificate (`PaddockCertificateProbeFailing`), DNS, a
+   proxy, and the Fleet service (`docker compose ps fleet`, its log).
+2. A host in Fleet's host list whose last contact lies ahead of the Fleet host's clock, for example after a clock
+   correction, makes every other host look silent until that time has passed. Check the newest last contact in the
+   host list against the current time; the alert clears on its own when that time has passed.
+3. If Fleet is reachable and most devices still look silent, treat it as a possible mass tampering: compare the
+   devices' last contact with Fleet in Fleet's host list with their check-ins in the portal, and follow the incident
+   process.
+4. The alert clears in the first round in which at least half of the live devices reach Fleet; the held-back devices
+   are then reported.
 
 ## Portal and admin API
 
@@ -234,7 +263,8 @@ settings at start and every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, 
 
 Fleet's round intervals are environment variables of the `fleet` service: `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL`
 (default 10 minutes), `FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL` (1 hour) and `FLEET_VULNERABILITIES_PERIODICITY`
-(1 hour); the development stack uses 30 seconds, 2 minutes and 1 hour. Keep the development vulnerability period at
+(1 hour); the development stack uses 30 seconds, 2 minutes and 1 hour. Keep `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL`
+at 15 minutes or less: the worker reports a device whose policy results are 30 minutes older than the newest host's. Keep the development vulnerability period at
 1 hour or longer: with `FLEET_VULNERABILITIES_CPE_DATABASE_URL` set, Fleet downloads the 146 MB CPE database on every
 run. The inventory gates trigger the runs they need (`fleetctl trigger --name vulnerabilities` or Fleet's
 `POST /api/latest/fleet/trigger`), at most every 2 minutes while they wait; Fleet refuses a trigger while a run is

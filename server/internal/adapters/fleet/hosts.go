@@ -67,6 +67,15 @@ type host struct {
 	} `json:"policies"`
 }
 
+// policyUpdatedAt returns when the host last stored policy results; nil for none and for Fleet's placeholder
+// 2000-01-01 of a host that never stored any (plan M5a amendment 2026-11-24 f, F-L1).
+func policyUpdatedAt(at time.Time) *time.Time {
+	if at.Before(time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		return nil
+	}
+	return &at
+}
+
 // changedAt is the newest of the host's detail, software and policy updates.
 func (h host) changedAt() time.Time {
 	t := h.DetailUpdatedAt
@@ -106,6 +115,7 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 		if h.SeenTime != nil {
 			seen.SeenAt = *h.SeenTime
 		}
+		seen.PolicyUpdatedAt = policyUpdatedAt(h.PolicyUpdatedAt)
 		res.Seen = append(res.Seen, seen)
 		if h.changedAt().Before(since) {
 			continue
@@ -139,10 +149,7 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	h := out.Host
 	inv := ports.HostInventory{OSVersion: text(h.OSVersion), AgentVersion: text(h.OsqueryVersion), LastSeenAt: h.SeenTime}
-	if !h.PolicyUpdatedAt.IsZero() {
-		at := h.PolicyUpdatedAt
-		inv.PolicyUpdatedAt = &at
-	}
+	inv.PolicyUpdatedAt = policyUpdatedAt(h.PolicyUpdatedAt)
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
 		inv.AgentVersion = text(*h.OrbitVersion)
 	}

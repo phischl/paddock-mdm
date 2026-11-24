@@ -4972,3 +4972,595 @@ Agent tests with a real applier and checker:
 3. 1126c-3: the first start of the agent with this change raises no event.
 4. 1126c-4: an edit made before the update raises one event at the first correction, and the file is restored.
 5. 1126c-5: on a report-only device, a deleted drop-in with an entry raises one event, and the file stays deleted.
+
+## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds, sparse check-ins and the majority guard of the fleetd silence watch
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). It amends amendments
+2026-11-16 c and d for the fix round of PDK-1122d. Where they differ, this amendment wins. ADR 0056 records the decision
+in its amendment "2026-11-24 f". It builds on ADR 0057 (accepted) and on the implementation in commits `d4fcaa20` and
+`539584fe`. Migration `00164` is not merged anywhere, so this amendment changes it in place.
+
+### F-1. Goal
+
+1. A device whose inventory host is being re-bound under ADR 0057 (an announced enrollment reset, a suspended binding,
+   a re-enrollment) is not reported as a silent fleetd while the rebinding stays within the 60 minutes ADR 0057
+   allows. The org admin sees no `device.tamper_fleetd_silent` for an agent update in a staged rollout.
+2. A device that keeps checking in at intervals of up to an hour while its fleetd is silent is reported. A device
+   that suspends, boots or loses its network is still not reported.
+3. Devices whose silence is already reported, or that are in a hold, no longer count in the installation-wide
+   majority guard.
+4. Fleet's "never evaluated" placeholder for `policy_updated_at` counts as unknown.
+
+### F-2. Context
+
+- **Review 1, H1 (both reviewers).** `inventory.WatchFleet` judges a device by its speaking host (bound host, else
+  `FirstSpeaker`, else the stored values). It ignores `device_fleet_binding.reset_announced_at`, `bound_at`,
+  `suspended_at` and `device_inventory_ref.fleet_reenrolled_at`. The claim watch (`inventory.WatchClaims`,
+  `server/internal/inventory/claims.go`) holds such devices for `ClaimQuiet` (60 min). The silence watch reports
+  after 30 min. The worker resolves at most `ResolvePerRound` (200) device tokens per round, so a wave of more than
+  about 1,200 devices that reset together, or a device-token endpoint outage of about 20 min during a wave, leaves
+  devices unbound for more than 30 min. Their stored host is then stale, and each gets a false report.
+- **The announcement is device-supplied.** `reset_announced_at` comes from the device's check-in
+  (`fleet_enrollment_reset_at`), accepted between 24 h before and 5 min after the receive time, and a newer value
+  replaces an older one. A hold that skips or restarts the episode while the device announces a reset would therefore
+  never end. The hold in F-3 is bounded by the episode instead.
+- **Review 1, M1/M-b.** E2's row "stale, not live → `fleet_silent_since = NULL`" runs every round. A device counts
+  as live for 15 min after a check-in. A device that checks in every 20 min or less often is therefore never live for
+  a whole confirmation and is never reported.
+- **Why E2 reset on "not live".** It is the protection of AC-D3: after suspend, boot or network loss, the agent can
+  check in shortly before orbit reconnects, and an old `fleet_silent_since` would then make the device due at once.
+  The genuine agent checks in every 300 s (`compiler.CheckinIntervalS`, the same for every bundle). orbit talks to
+  Fleet every few seconds while it runs.
+- **Review 1, M2 (external).** `Live` and `Fresh` (E3) include devices whose silence is already reported and that stay
+  stale, for example a site that blocks only `fleet.<domain>`. Enough such devices in one organization keep the guard
+  down for every organization.
+- **Review 1, L1/L-d.** Fleet stores `hosts.policy_updated_at` as `NOT NULL DEFAULT '2000-01-01 00:00:00'`. The
+  adapter maps only the zero time to nil, so a host that never stored policy results is policy-stale (F5).
+- **Review 1, L2.** One listed host whose `seen_time` lies ahead of Fleet's clock (after a clock correction of the
+  Fleet host, while that host is offline) pins `R`. All live devices then look stale, the guard holds every report
+  (`no_fresh_peer`), and `PaddockFleetSilenceWatchSuppressed` fires. No false report results.
+- **Implementer's deviation 6.** Amendment c's RR-149 text named how osquery could be imitated toward Fleet. Public
+  texts describe what the system does and does not detect, never how.
+
+### F-3. Binding decisions
+
+**F-H1 Hold, bounded by the episode (replaces the reviewers' "no Start, reset `since`").**
+
+- New terms, evaluated per device per round:
+  - **hold start** — each of these values that is set and not later than the **episode start** (the device's
+    `fleet_silent_since`, or the round time `now` when it is NULL):
+    1. `reset_announced_at`, but only if `bound_at` is NULL or earlier than `reset_announced_at` (the device has not
+       been bound since the announcement; the same condition as `resetting` in `claims.go`);
+    2. `suspended_at`;
+    3. `fleet_reenrolled_at`.
+  - **hold end** = the latest hold start + `ClaimQuiet` (60 min); none when there is no hold start.
+  - **held** = a hold end exists and `now < hold end`.
+  - **effective start** `E` = the later of `fleet_silent_since` and the hold end (only defined while
+    `fleet_silent_since` is set).
+- A held device still starts its episode (`fleet_silent_since = now`). This fixes the episode start, so a later
+  announcement, suspension or re-enrollment (a hold start after the episode start) never extends the hold. A hold
+  therefore delays a report by at most 60 minutes and never prevents it.
+- The confirmation (F-M1) counts only from `E`. Within a hold, nothing becomes due.
+- A held device counts in neither `Live` nor `Fresh` (E3).
+- `claims.go` and the claim watch are unchanged.
+- Option not chosen: the reviewers' rule "held → no Start, reset `fleet_silent_since`". With a device-supplied
+  announcement, that hold would be renewed for as long as the device keeps announcing. It would also need no data
+  that bounds it.
+- Option not chosen: "held → skip the device". It has the same problem as the previous option.
+
+**F-M1 Episode, evidence and due rule (replaces amendment c's E2 table).**
+
+- New column `device_inventory_ref.fleet_silent_checkin_at timestamptz`: the device's `last_contact_at` taken in the
+  first round that found a check-in later than `E`. It is the first check-in after the silence was found, outside
+  any hold.
+- New constant `FleetSilenceGap = 60 * time.Minute`: an open episode is dropped when the device has not checked in for
+  that long.
+- **gone(d)**: `last_contact_at` is NULL or earlier than `now - FleetSilenceGap`.
+- Transitions per device and round. The first matching row applies:
+
+| # | Condition | Transition |
+| --- | --- | --- |
+| 1 | not stale | if `fleet_silent_since`, `fleet_silent_checkin_at` or `fleet_silent_reported_at` is set: **Clear** (all three = NULL) |
+| 2 | stale, gone | if `fleet_silent_since` is set: **Reset** (`fleet_silent_since` and `fleet_silent_checkin_at` = NULL; `fleet_silent_reported_at` stays) |
+| 3 | stale, `fleet_silent_since` NULL | if live: **Start** (`fleet_silent_since = now`) |
+| 4 | stale, `fleet_silent_checkin_at` NULL, `last_contact_at > E` | **Note** (`fleet_silent_checkin_at` = the device's `last_contact_at`) |
+| 5 | stale, `fleet_silent_checkin_at` set, `fleet_silent_reported_at` NULL, `last_contact_at > fleet_silent_checkin_at`, `now >= E + FleetSilenceConfirm` | **due** |
+| 6 | otherwise | nothing |
+
+- In words: a device is due when its fleetd stays silent, it checked in twice after the silence was found (outside a
+  hold), and 15 minutes have passed since the later of the episode start and the hold end. Gaps in check-ins of up
+  to 60 minutes do not end the episode.
+- **Why AC-D3 holds.** After suspend, boot or network loss, the first check-in can come before orbit reconnects
+  (row 4, Note). The report needs a second check-in with fleetd still silent (row 5). The genuine agent's next
+  check-in comes 5 minutes later. By then orbit has reconnected, the next round finds the device fresh, and row 1
+  clears the episode. An episode that started before a suspend (a round in the seconds between orbit's last contact
+  and the agent's last check-in) only shortens orbit's tolerance after the resume from 15 to about 5 minutes. Within
+  `FleetSilenceGap`, `fleet_silent_since` stays set.
+- Option not chosen: "due when `last_contact_at > fleet_silent_since`" without row 4. One check-in during orbit's
+  reconnect after a resume would then be enough for a false report whenever an older episode is still open.
+- Option not chosen: reset only after a long gap, but keep "live at the due round" as the only evidence. It has the
+  same weakness.
+- Option not chosen: no gap reset at all. That would let unrelated brief wake-ups days apart add up to one episode.
+
+**F-M2 Majority guard counts (amends E3).** A device counts in `Live` and `Fresh` only if it is not held (F-H1) and
+not "stale with `fleet_silent_reported_at` set". Everything else in E3 is unchanged: `Fresh >= 1`,
+`2 × Fresh >= Live`, a complete list, and the log line and gauge. A device whose silence ends (row 1) counts again in
+the same round.
+
+- Option not chosen: accept the gap and add a runbook remedy. The operator has no remedy inside Paddock for another
+  organization's network. Excluding already reported devices loses nothing, because they were reported.
+
+**F-L1 Fleet's placeholder.** Confirmed. The Fleet adapter maps a `policy_updated_at` earlier than
+`2001-01-01T00:00:00Z` to nil, in both places (`ListHostsChangedSince` → `HostSeen.PolicyUpdatedAt`, and
+`HostInventory` → `HostInventory.PolicyUpdatedAt`), through one helper. `changedAt` is unchanged.
+
+**F-L2 A future `seen_time`.** Accepted, not clamped.
+- Clamping `R` to the round time would compare Fleet's clock with the server's. E1 avoids that on purpose.
+- The same `NewestSeen` also drives the claim watch and the binding decisions (ADR 0057), and they would then
+  disagree.
+- The failure is fail-safe and loud: the guard holds the reports, the critical alert fires, and the episodes clear
+  when the time has passed.
+- An RR-149 line and a runbook step record it (F-6).
+
+**F-D6 RR-149 wording.** Confirmed: the dropped clause stays out. The item "a replaced osquery" becomes "a replaced
+or simulated osquery". ADR 0056 amendment c already uses those words. The wording of this item in amendment c,
+sections 6 and 12, is superseded by it.
+
+**F-R Review fixes without a new decision.** These are part of the same fix round, as the reviews describe them:
+- M-a: a `TestWatchFleet` row in which only fully fresh devices count as `Fresh`;
+- L-a: a worker test for the F6 gate while it is closed;
+- L-b: move and reword the F6 sentence in `docs/operations/fleet.md`;
+- L-c: `t.Fatalf` in the seen_time probe of `gateF7`.
+
+**F-C Contract.**
+- Device API, admin API, agent, supervisor and bundle: unchanged.
+- Audit: the description of the unreleased code `device.tamper_fleetd_silent` changes (F-6). Params, messages and
+  finding are unchanged.
+- Database: `00164` gains one column and returns five more columns from its platform function. It is still one
+  unmerged migration.
+
+### F-4. Non-goals
+
+- No change to `server/internal/inventory/claims.go`, `binding.go`, the claim watch, the binding decisions,
+  `ResolvePerRound`, `ClaimQuiet` or `NewestSeen`.
+- No change to `agent/` (in particular `agent/internal/revoke/`), `pkg/`, `api/openapi/*.yaml`, or the gateway's
+  handling of `fleet_enrollment_reset_at`.
+- No per-organization quorum, and no clamping of `R`.
+- PDK-1122k (one host's data fails the whole round) stays a separate ticket.
+
+### F-5. Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00164_fleet_silence_watch.sql` | change (unmerged) | column, function columns (F-6) |
+| `server/internal/adapters/postgres/queries/inventory.sql` + generated `pgstore` | change | F-6 queries |
+| `server/internal/inventory/fleetwatch.go`, `fleetwatch_test.go` | change | F-H1, F-M1, F-M2, tests |
+| `server/internal/app/inventory.go`, `inventory_fleetwatch_integration_test.go` | change | new fields, Note |
+| `server/internal/adapters/fleet/hosts.go`, `hosts_test.go` (or `binding_test.go`, where `TestListHostsSeen` lives) | change | F-L1 |
+| `server/internal/worker/inventory_fleetwatch_test.go`, `inventory_binding_test.go` | change | section F-8 |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | description (F-6) |
+| `test/acceptance/inventory_test.go` | change | seed `fleet_silent_checkin_at` |
+| `test/system/inventory_test.go` | change | L-c |
+| `docs/compliance/residual-risks.md`, `docs/operations/fleet.md`, `docs/architecture.md` §11.5 | change | F-6 texts, L-b |
+
+Do not touch: `server/internal/inventory/claims.go`, `binding.go`, `server/internal/worker/inventory.go` (the round
+order and `watchFleet` stay unchanged; the worker needs no change), `agent/`, `pkg/`, `api/openapi/`, and every
+migration other than `00164`.
+
+### F-6. Interfaces, data model and texts
+
+```sql
+-- 00164_fleet_silence_watch.sql (complete Up part; header comment gains fleet_silent_checkin_at)
+ALTER TABLE device_inventory_ref ADD COLUMN fleet_silent_since timestamptz,
+                                 ADD COLUMN fleet_silent_checkin_at timestamptz,
+                                 ADD COLUMN fleet_silent_reported_at timestamptz;
+
+CREATE FUNCTION paddock_fleet_watch_devices()
+  RETURNS TABLE (device_id uuid, organization_id uuid, hardware_uuid text, external_id text, bound_host text,
+                 last_contact_at timestamptz, last_seen_at timestamptz, policy_updated_at timestamptz,
+                 fleet_silent_since timestamptz, fleet_silent_checkin_at timestamptz,
+                 fleet_silent_reported_at timestamptz, reset_announced_at timestamptz, bound_at timestamptz,
+                 suspended_at timestamptz, fleet_reenrolled_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT d.id, d.organization_id, lower(d.hardware_uuid), i.external_id, b.host_id, s.last_contact_at,
+            i.last_seen_at, i.policy_updated_at, i.fleet_silent_since, i.fleet_silent_checkin_at,
+            i.fleet_silent_reported_at, b.reset_announced_at, b.bound_at, b.suspended_at, i.fleet_reenrolled_at
+     FROM public.device d JOIN public.device_inventory_ref i ON i.device_id = d.id
+          LEFT JOIN public.device_status s ON s.device_id = d.id
+          LEFT JOIN public.device_fleet_binding b ON b.device_id = d.id
+     WHERE d.state = 'active' $$;
+-- REVOKE/GRANT and the empty Down unchanged.
+```
+
+```sql
+-- name: FleetWatchDevices :many — additionally selects the five new columns in the function's order, with the
+-- same coalesce(…, 'epoch') pattern as the existing timestamps.
+
+-- name: NoteFleetSilenceCheckin :exec   (organization pool)
+UPDATE device_inventory_ref i SET fleet_silent_checkin_at = s.last_contact_at
+FROM device_status s
+WHERE s.device_id = i.device_id AND i.device_id = ANY(@device_ids::uuid[])
+  AND i.fleet_silent_since IS NOT NULL AND i.fleet_silent_checkin_at IS NULL AND s.last_contact_at IS NOT NULL;
+
+-- name: ResetFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: ClearFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL,
+                                fleet_silent_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+-- StartFleetSilence and MarkFleetSilentReported unchanged.
+```
+
+```go
+// server/internal/inventory/fleetwatch.go
+const (
+	// FleetSilenceGap is how long a device may go without check-in before its open silence episode is dropped
+	// (plan M5a amendment 2026-11-24 f, F-M1).
+	FleetSilenceGap = 60 * time.Minute
+)
+
+// WatchedDevice additionally carries (all nil when NULL):
+//   CheckinAt                                   — fleet_silent_checkin_at
+//   ResetAnnouncedAt, BoundAt, SuspendedAt      — device_fleet_binding
+//   ReenrolledAt                                — device_inventory_ref.fleet_reenrolled_at
+
+// FleetWatch additionally carries
+//   Note []uuid.UUID // devices whose first check-in after E is recorded (row 4)
+// ForOrganization filters Note like Start, Reset and Clear.
+
+// WatchFleet keeps its signature:
+func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now time.Time, live time.Duration) FleetWatch
+```
+
+- `SilentDevice` and the report params are unchanged. `silent_since` stays `fleet_silent_since`, the first round
+  that found the silence. A hold never moves it.
+- `ApplyFleetWatch` applies Start, Note, Reset and Clear in its existing single `InOrg` transaction. The order is
+  Clear, Reset, Start, Note. The sets are disjoint.
+- `WatchFleet` stays pure and is the only place that implements F-H1, F-M1 and F-M2.
+
+**Texts (neutral; replace the versions on the branch).**
+
+- **Registry description** of `device.tamper_fleetd_silent`: replace "for at least 15 minutes while the device kept
+  checking in with Paddock, confirmed for 15 more minutes while most other devices reached the inventory system
+  (actor: system)." with "for at least 15 minutes while the device kept checking in with Paddock, confirmed when the
+  device checked in twice more and 15 more minutes passed (counted from 60 minutes after an announced enrollment
+  reset of fleetd, a suspended host binding or a re-enrollment of its host), while most other devices reached the
+  inventory system (actor: system)." The rest is unchanged. Run `make gen`.
+- **RR-149**:
+  - Replace the item that begins "a foreign program that checks in while fleetd is stopped" and ends "plan M5a
+    amendment 2026-11-16 c);" with: "a foreign program that checks in while fleetd is stopped, as long as fewer than
+    half of the live devices reach the inventory system (devices already reported and devices in a hold do not
+    count), on an installation with a single live device, while the inventory system lists a host whose last contact
+    lies ahead of its clock, or if it checks in less often than once an hour (the server reports a silent fleetd as
+    `device.tamper_fleetd_silent` only with a fresh majority, and a lasting suppression raises the alert
+    `PaddockFleetSilenceWatchSuppressed`; plan M5a amendments 2026-11-16 c and 2026-11-24 f); after an announced
+    enrollment reset of fleetd, a suspended host binding or a re-enrollment, the report comes up to 60 minutes later;".
+  - Replace "a replaced osquery." with "a replaced or simulated osquery.".
+- **`docs/operations/fleet.md` step 5**:
+  - Replace "while the device kept checking in, confirmed over 15 more minutes." with "while the device kept checking
+    in (at most 60 minutes between check-ins), confirmed when the device has checked in twice more and 15 more
+    minutes have passed. After an announced enrollment reset of fleetd, a suspended host binding or a re-enrollment
+    of the device's host, the confirmation counts only from 60 minutes after that event."
+  - L-b: move the sentence "A `paddock_agent_running` that such a host lists without an answer counts as failing."
+    directly after the sentence that ends "…logged as a warning.", and reword it to "For `paddock_agent_running`,
+    that missing answer is stored as a failing evaluation."
+- **`docs/operations/fleet.md` step 6**: the rate stays at 1,500 per hour. Replace "which then raises one false
+  `second_host` report, so keep rollout waves below that rate." with "which then raises one false `second_host`
+  report and one false `device.tamper_fleetd_silent`, so keep rollout waves below that rate. A device whose binding
+  stays suspended for longer than 60 minutes while its fleetd is silent is reported as
+  `device.tamper_fleetd_silent` too."
+- **`docs/operations/fleet.md`, "When the fleetd silence watch is suppressed"**: after step 1, add a step (renumber
+  the following ones): "A host in Fleet's host list whose last contact lies ahead of the Fleet host's clock, for
+  example after a clock correction, makes every other host look silent until that time has passed. Check the newest
+  last contact in the host list against the current time; the alert clears on its own when that time has passed."
+- **`docs/architecture.md` §11.5**, the row of amendment c, third column: "`device.tamper_fleetd_silent` after 15 min
+  of silence (no contact, or no stored policy results for 30 min), confirmed by two more check-ins and 15 more min
+  (60 min later during an ADR 0057 hold)".
+- **Changelog** `changelog.d/pdk-1122d.added.md`: unchanged.
+
+### F-7. Steps
+
+1. **Migration, queries, generated code.** Change `00164`, the queries, `make gen`. Check: `make gen` leaves no diff
+   afterwards; `make lint-migrations-frozen` green.
+2. **`WatchFleet`.** F-H1, F-M1, F-M2 and the new unit tests. Check: `go test ./server/internal/inventory/ -run
+   'TestWatchFleet'`.
+3. **App.** New fields, Note. Check: `go test ./server/internal/app/ -run 'TestApplyFleetWatch|TestFleetWatchDevices'`.
+4. **Adapter (F-L1).** Check: `go test ./server/internal/adapters/fleet/`.
+5. **Worker tests.** Check: `go test ./server/internal/worker/ -run 'Fleet|AnnouncedReset|AgentRunning'`.
+6. **Registry text, docs, gates.** Run `make gen`, then the acceptance seed and the system L-c fix. Check:
+   `go vet ./test/...`; `make acceptance` with `-run TestInventoryFleetdSilent`, serially to any system test.
+7. **Quality gate.** `make typecheck`; `nice -n 19 make test`; `make lint-prometheus` (unchanged rules still green).
+
+### F-8. Tests
+
+"Regression" tests MUST fail on `539584fe`. The result document records the failing assertion.
+
+- **Unit `TestWatchFleet`, rows changed:**
+  - every row that expects a report gains `fleet_silent_checkin_at` before the last check-in;
+  - the row "not live: suspend or network loss" becomes "gone: no check-in for 61 min → Reset, mark kept";
+  - a new row: "no check-in for 59 min, open episode → nothing".
+- **Unit `TestWatchFleet`, new rows:**
+  1. **Note**: stale, `since` set, `checkin` NULL, `last_contact_at > since` → `Note`; `last_contact_at = since` →
+     nothing.
+  2. **Second check-in boundary**: `last_contact_at = checkin` → not due; one second later → due.
+  3. **Announced reset (regression H1-a)**:
+     - an unbound device, speaking host 25 min stale, `reset_announced_at = now − 35m`, `since = now − 20m`,
+       `checkin = now − 10m`, live → no report, no `Note`, not counted in `Live`;
+     - the same with `bound_at` later than the announcement, bound to that stale host → reported.
+  4. **Hold end boundary**: `reset_announced_at = now − 74m`, `since = now − 55m`, `checkin = now − 13m`, last
+     check-in `now − 1m` → not due (`E + 15m = now + 1m`). With `reset_announced_at = now − 75m` → due.
+  5. **An announcement after the episode start does not hold**: `since = now − 20m`, `reset_announced_at = now − 2m`,
+     `checkin` set, a second check-in → reported (regression for the bound).
+  6. **Suspended binding (regression H1-b)**: bound host not listed, stored `last_seen_at` 30 min old,
+     `suspended_at = now − 25m`, `since = now − 15m`, `checkin` set → no report. With `suspended_at` later than
+     `since` → reported.
+  7. **Re-enrollment**: `fleet_reenrolled_at = now − 20m ≤ since` → no report.
+  8. **Guard without held devices**: 1 due, 1 fresh peer, 3 held and stale live devices → reported (on `539584fe`:
+     `fresh_minority`).
+  9. **Guard without reported devices (M2)**: 1 due, 2 fresh peers, 4 stale live devices with a report mark →
+     reported (on `539584fe`: `fresh_minority`).
+  10. **M-a**: 1 due, 2 live devices that are contact-fresh but policy-stale, 1 fully fresh peer →
+      `Suppressed = "fresh_minority"`, no report.
+- **Unit `TestWatchFleetTimeline`** (new, pure). A helper applies a round's transitions to in-memory state, with
+  rounds every 5 min over 4 h, 3 fresh peers, fleetd of the device frozen at t = 0, and check-ins offset 2 min from
+  the rounds:
+  - check-ins every 5, 10, 16, 20, 25, 30 and 55 min → exactly one report each (regression M1: 20, 25, 30 and 55 give
+    0 on `539584fe`);
+  - every 65 min → no report;
+  - suspend: the device's check-ins and fleetd stop at the same time for 40 min, then the agent checks in and orbit
+    reconnects 2 min later → no report;
+  - the same with an episode opened in the round before the suspend and a 25-min suspend → no report;
+  - boot after 3 h off, orbit reconnects 3 min after the first check-in → no report;
+  - announced reset at t = 0, the new host fresh from t = 1 min, bound in the round at t = 40 → no report
+    (regression H1-a); bound only at t = 80 → exactly one report, in the round at t = 75.
+- **App `TestApplyFleetWatch`**:
+  - `Note` sets `fleet_silent_checkin_at` to the device's `last_contact_at`, and does not overwrite a set value;
+  - `Reset` clears `since` and `checkin` and keeps the mark;
+  - `Clear` clears all three;
+  - a device of another organization is untouched (RLS).
+- **App `TestFleetWatchDevices`**: returns the five new columns. A device without a binding row has nil binding
+  times.
+- **Adapter**: the list and the host detail with `"policy_updated_at": "2000-01-01T00:00:00Z"` → nil; with
+  `2026-11-24T10:00:00Z` → that time.
+- **Worker `TestInventoryRoundAnnouncedResetRaisesNoFleetSilence`** (`inventory_binding_test.go`, regression H1-a,
+  end to end):
+  - an unbound device whose stored host stops at the announcement, and a new host that is listed and fresh;
+  - the device checks in every round, and one peer device with a fresh host does too;
+  - the token cannot be resolved for 45 min (`unavailable`), then it resolves;
+  - result: no `device.tamper_fleetd_silent`, no claim, and the device ends bound to the new host.
+- **Worker** `TestInventoryRoundFleetWorkerRestart` and every seeded episode: seed `fleet_silent_checkin_at` as well.
+  `TestInventoryRoundFleetSilence` keeps its expectation: exactly one event, in the round 15 min after the start.
+- **Worker (L-a)**: with the definition just applied and the gate closed, a host that lists `paddock_agent_running`
+  unanswered gets no failing `inventory_policy_result` row.
+- **Acceptance `TestInventoryFleetdSilent`**: the `silent` seed adds `fleet_silent_checkin_at = now() - interval
+  '10 minutes'`. The device checks in every iteration, so it is due. The `quiet` expectations are unchanged.
+- **System F7**: unchanged expectations (a stopped orbit with an agent stand-in that checks in every interval is
+  reported); L-c only.
+
+### F-9. Acceptance criteria
+
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC-f1 | Given an agent update with an announced enrollment reset whose new host is bound within 60 minutes, then the org admin sees no `device.tamper_fleetd_silent` and no tamper finding for the device (unit timeline, worker regression) | H1 | Org admin (audit log, findings) |
+| AC-f2 | Given a device with a suspended binding or a re-enrolled host whose fleetd talks to Fleet again within 60 minutes, then no event (unit rows 6, 7) | H1 | Org admin |
+| AC-f3 | Given a device that checks in every 20, 25, 30 or 55 minutes while its fleetd is silent and most devices reach Fleet, then the org admin sees exactly one `device.tamper_fleetd_silent` (unit timeline) | M1 | Org admin |
+| AC-f4 | Given suspend, boot or network loss, then still no event (unit timeline; AC-D3 unchanged) | AC-D3 | Org admin |
+| AC-f5 | Given devices of another organization that are already reported and stay silent, then a due device is still reported (unit row 9) | M2 | Org admin of the other organization |
+| AC-f6 | Given a host that has never stored policy results, then it is not policy-stale (adapter test) | L1 | Org admin |
+| AC-f7 | Device API, admin API and agent unchanged | ADR 0047 | Maintainer (diff, CI `upgrade`) |
+
+### F-10. Freedoms
+
+- Internal helper names, and whether hold start, hold end and `E` are computed in one helper.
+- The name of the adapter helper of F-L1.
+- How the timeline test models its rounds, if the cases and expectations of F-8 hold.
+- Whether `ApplyFleetWatch` merges the three NULL updates into fewer statements.
+
+### F-11. Stop conditions
+
+- The production size of the whole ticket exceeds about 470 hand-written lines.
+- `paddock_worker` cannot read `device_status` inside `InOrg` for `NoteFleetSilenceCheckin`. Do not widen a grant;
+  report.
+- An existing claim or binding test changes its result.
+- An existing acceptance or system gate starts recording `device.tamper_fleetd_silent`.
+- The change would need an agent, supervisor, `pkg/`, device API or admin API change, or a new dependency.
+- The worker round order or `watchFleet` would have to change beyond reading the new fields.
+
+### F-12. Risks and open points
+
+- **Detection latency** for a device that checks in every 5 minutes is unchanged (about 35 minutes after fleetd
+  stops). With a check-in interval `I`, it is about 15 minutes plus up to 3 × `I`. During a hold, it is up to
+  60 minutes more.
+- **An episode opened in the seconds before a suspend** tolerates only about 5 minutes of orbit reconnect after the
+  resume instead of 15. This needs a round to fall into that window of seconds, and orbit to stay offline for a full
+  check-in interval after the resume. Accepted.
+- **More than about 1,500 agent updates per hour**, or a suspended binding that is not resolved within 60 minutes,
+  raise a false report. This is the same bound as ADR 0057's claim watch. It is documented in `fleet.md`, step 6.
+- **A device that checks in less often than once an hour** is not reported. The portal shows it as not in contact for
+  most of the time. RR-149.
+- **A future `seen_time`** blinds the watch until that time passes. The alert fires. RR-149 and the runbook.
+- **Resolved:** main accepted this amendment and ADR 0056 amendment f with the fix round.
+
+### F-13. Size (estimate)
+
+Branch state: 381 production lines.
+
+| Part | Lines |
+| --- | --- |
+| Production, hand-written: migration +6, queries +10, `fleetwatch.go` +40, app +15, adapter +6, registry ±0 | about +77, total about 458 |
+| Generated (`pgstore`, `audit-codes.md`) | about +45 |
+| Tests: unit rows ~110, timeline ~120, app ~40, adapter ~20, worker ~90, acceptance/system ~10 | about +390 |
+| Docs | about 25 |
+
+### F-14. Walk-through
+
+Rounds every 5 minutes at t = 0, 5, 10, … (minutes). `R` follows the peers, so `R ≈ t`. A host is contact-stale when
+its `seen_time < R − 15`, so a host last seen at 0 is stale from t = 20.
+
+**(a) An unbound alpha.10 device updates to alpha.11 during a 1,500-device wave.** The agent announces the reset with
+its check-in at t = 0 (`reset_announced_at = 0`), stops orbit and resets it. The stored host H1 was last seen at 0.
+The new host H2 is listed and fresh from t = 1. The genuine agent checks in at 1, 6, 11, and so on. All 1,500
+tokens are urgent. At 200 per round, this device's token is resolved in the round at t = 40. The speaking host is H1
+(`FirstSpeaker` = the stored host) until the binding.
+
+| t | Old rule (`539584fe`) | This amendment |
+| --- | --- | --- |
+| 5–15 | H1 fresh, nothing | H1 fresh, nothing; held (hold end 60), not counted in the guard |
+| 20 | stale, live → Start (`since` 20) | stale, live → Start (`since` 20); 0 ≤ 20, hold end 60, `E` = 60 |
+| 25–30 | wait | `last_contact` 26 or 31, not > `E` → nothing |
+| 35 | due → **false report** (`since` + 15) | nothing |
+| 40 | (reported) | bound to H2 (`bound_at` 40 > 0); speaking host H2 fresh → Clear. **No event.** |
+
+The same device with an additional 40-minute device-token endpoint outage, bound only at t = 80: Note at t = 65
+(`last_contact` 61 > 60). At t = 70: 66 > 61, but 70 < 75. At t = 75: 71 > 61 and 75 ≥ 75 → due, one false report.
+The claim watch raises its false `second_host` in the same round: its hold ends at 60, and it confirms at 75. Both
+watches share the documented limit of "unresolved for longer than 60 minutes", so the `fleet.md` rate stays at 1,500
+per hour.
+
+**(b) A stand-in that checks in every 25 minutes while orbit is stopped.** fleetd stops at t = 0, so H1 is last seen
+at 0. Check-ins come at 2, 27, 52, 77, and so on. There is no hold.
+
+| t | Old rule | This amendment |
+| --- | --- | --- |
+| 20, 25 | stale, not live (last 2) → nothing | stale, not live, not gone → nothing |
+| 30 | live (27) → Start (`since` 30) | live → Start (`since` 30, `E` 30) |
+| 35, 40 | live → wait | 27 ≤ 30 → nothing |
+| 45 | not live (27 < 30) → **Reset** | not gone (18 min) → nothing |
+| 55 | live (52) → Start again | 52 > 30 → **Note** (`checkin` 52) |
+| 60–75 | not live at 70 → Reset; repeats forever, **never reported** | last 52, not > 52 → nothing |
+| 80 | — | 77 > 52, 80 ≥ 45 → **due, reported** (guards hold) |
+
+### F-15. One reset hold per device per 24 hours (addendum after review 2, L-1)
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round 2). It implements main's
+choice of option (b) for review 2's finding L-1. It amends F-H1, and it amends rule 2 of plan amendment e, H5 (binding
+decisions), for resetting devices only.
+
+**Problem (L-1).** Row 2 (F-M1) ends an episode after 60 minutes without a check-in, so every period of check-ins
+opens a new episode. A reset announcement dated to the start of that period satisfies F-H1 again each time. The
+result: check-ins for up to about 55 minutes, then 65 minutes or more without, with an announcement per period, are
+never reported.
+
+**F-15.1 Rule.** One reset announcement per device per 24 hours can hold the silence watch.
+
+- New column `device_inventory_ref.fleet_reset_hold_at timestamptz` in `00164`, changed in place: the
+  `reset_announced_at` value whose hold the watch granted last. Clear and Reset (F-M1, rows 1 and 2) never change it.
+- F-H1's hold start 1 (`reset_announced_at`) additionally requires one of:
+  - `fleet_reset_hold_at` is NULL;
+  - `fleet_reset_hold_at` equals `reset_announced_at` (the granted hold continues in later rounds);
+  - `reset_announced_at >= fleet_reset_hold_at + 24h`.
+- **Grant.** The episode start fixes every hold start (F-H1), so a grant can only happen in the round that starts the
+  episode (F-M1, row 3). A Start whose hold start 1 qualifies under F-15.1 and lies within `ClaimQuiet` before `now`,
+  while `fleet_reset_hold_at` differs from `reset_announced_at`, is a **held Start**. It also sets
+  `fleet_reset_hold_at = reset_announced_at`.
+- Hold starts 2 (`suspended_at`) and 3 (`fleet_reenrolled_at`) are unchanged. The server derives them from Fleet's
+  host list, not from a device's announcement.
+
+**F-15.2 Prompt rebinding of a resetting bound device (amends amendment e, H5 rule 2).**
+- Rule 2 decides `DecideCurrent` without asking Fleet while the bound host is valid and fresh. It now applies only if
+  the device is not resetting, that is, not (`reset_announced_at` within `ClaimQuiet` and `bound_at` NULL or earlier
+  than it). This is the condition `Binding.Urgent` already uses for its first part.
+- Why: without this, a bound device that resets again reports its new token while the old bound host is still fresh.
+  Rule 2 then clears the token, and the new host is bound only after orbit's next hourly token rotation. The old host
+  becomes stale after 20 minutes, and with no second hold within 24 h the device would be due at about 35 minutes.
+- With F-15.2, the new host is bound in the first round after the token arrives, before the old host is stale.
+- Rules 3 to 9, the compare-and-set, `ResolvePerRound`, the urgent ordering and the claim watch are unchanged. Fleet
+  is asked only for the token the device's own check-in reported, once.
+
+**F-15.3 Interfaces.**
+
+```sql
+-- 00164 (in place): ALTER TABLE gains `ADD COLUMN fleet_reset_hold_at timestamptz` after fleet_silent_reported_at;
+-- paddock_fleet_watch_devices returns `fleet_reset_hold_at timestamptz` as its last column (i.fleet_reset_hold_at).
+
+-- name: StartFleetSilence :exec   (replaces the existing query)
+UPDATE device_inventory_ref i SET fleet_silent_since = @at::timestamptz,
+       fleet_reset_hold_at = CASE WHEN i.device_id = ANY(@held_ids::uuid[])
+         THEN (SELECT b.reset_announced_at FROM device_fleet_binding b WHERE b.device_id = i.device_id)
+         ELSE i.fleet_reset_hold_at END
+WHERE i.device_id = ANY(@device_ids::uuid[]) AND i.fleet_silent_since IS NULL;
+```
+
+```go
+// inventory.WatchedDevice gains ResetHoldAt *time.Time (fleet_reset_hold_at).
+// inventory.FleetWatch gains HeldStart []uuid.UUID: the subset of Start that are held Starts (F-15.1). ForOrganization
+// filters it like Start. ApplyFleetWatch passes it as held_ids; the worker counts it like Start.
+// inventory.Binding gains `func (b Binding) Resetting(now time.Time) bool`. Urgent uses it, and DecideBinding's rule
+// 2 adds `&& !b.Resetting(now)`.
+```
+
+- The SQL takes `reset_announced_at` again in the same statement. A newer announcement that arrives between the
+  round's read and this write is recorded instead. That only moves the 24-hour window a few minutes. Accepted.
+
+**F-15.4 Walk-through: the pattern of L-1.** Rounds every 5 minutes. fleetd has been silent for a long time, and the
+device has been bound since before t = 0. Check-ins come at 1, 6, …, 51 (period 1) and at 121, …, 171 (period 2).
+Announcements: A1 = 0 and A2 = 120. `fleet_reset_hold_at` starts NULL.
+
+| t | Decision |
+| --- | --- |
+| 5 | stale, live, no episode → **held Start**: `since` 5; A1 = 0 ≤ 5, `fleet_reset_hold_at` NULL → granted, `fleet_reset_hold_at` 0; hold end 60, `E` 60 |
+| 10–55 | A1 equals `fleet_reset_hold_at` → hold continues; `last_contact` ≤ 51, not > `E` → nothing |
+| 60–110 | no new check-in, not gone → nothing |
+| 115 | 51 < 115 − 60 → gone → Reset (`fleet_reset_hold_at` stays 0) |
+| 125 | stale, live → Start (`since` 125); A2 = 120 ≤ 125, but 120 ≠ 0 and 120 < 0 + 24h → **no hold**, `E` 125 |
+| 130 | 126 > 125 → Note |
+| 135 | 131 > 126, 135 < 140 → nothing |
+| 140 | 136 > 126, 140 ≥ 140 → **due, reported** (guards hold) |
+
+The pattern is reported 20 minutes into the second period. From then on, it gets at most one held period per
+24 hours.
+
+**F-15.5 Walk-through: a legitimate second reset within 24 hours.** The agent updated at A1, was bound to host H2 at
+A1 + 40, and the hold was granted (`fleet_reset_hold_at` = A1). Six hours later, the supervisor rolls the agent back
+and the same agent update is installed again. The rollback rewrites `orbit.env` without the instance line, so the
+update resets fleetd once more. Times are relative to that second announcement, A2 = 0 (A1 = −6 h). orbit
+re-enrolls as H3, which is fresh from t = 1. The check-in at t = 1 carries the announcement and H3's token. H2 was
+last seen at 0.
+
+| t | Binding (F-15.2) | Silence watch |
+| --- | --- | --- |
+| 5 | token pending; resetting (A2 = 0 > `bound_at`), so rule 2 does not apply → urgent resolve → H3, UUID matches, not in use → **rebind**, `bound_at` 5 | runs after the binding: speaking host H3 fresh → nothing |
+| 10 onward | the token was cleared by the rebind | H3 fresh → nothing. H2 is no longer the speaking host, so its staleness from t = 20 counts for nothing. **No event.** |
+
+- **Without F-15.2**: rule 2 clears the token at t = 5 (H2 still fresh). With no hold (within 24 h), the watch starts
+  at t = 20, notes at t = 25, and is due at t = 35, which is a false report before the rebind at the next token
+  rotation, about t = 60.
+- **With a device-token endpoint outage**: the token stays pending (`unavailable`). Without a hold, the device is due
+  at t = 35 unless the rebind succeeds by the round at t = 35. A second reset within 24 hours therefore tolerates
+  about 30 minutes of endpoint outage, not 60. This residual is documented: RR-149, in the clause about holds, gains
+  "; a second announced enrollment reset within 24 hours is not held".
+- A first reset of a device that is already bound, with no grant in the last 24 hours, is held as in F-H1. With
+  F-15.2, it is rebound in the first round as well.
+
+**F-15.6 Tests** ("regression" MUST fail on `002db741`):
+- `TestWatchFleet` rows:
+  - a second announcement 23 h after the granted one, at a Start → plain Start, not a held Start; with `since` set,
+    `checkin` set and a second check-in, reported (regression L-1);
+  - 24 h after it → a held Start; in a later round, an announcement equal to `fleet_reset_hold_at` → still held;
+  - `fleet_reset_hold_at` NULL → a held Start.
+- `TestWatchFleetTimeline`: the L-1 pattern of F-15.4 → exactly one report, in the round at t = 140 (regression).
+- `TestDecideBinding`: a bound, valid, fresh host with a pending token:
+  - resetting → `DecideResolve` (regression);
+  - not resetting → `DecideCurrent` (unchanged);
+  - bound after the announcement → `DecideCurrent`.
+- Worker `TestInventoryRoundSecondResetRebindsAtOnce` (`inventory_binding_test.go`): F-15.5 end to end → rebound to H3
+  in the first round after the token arrives, no `device.tamper_fleetd_silent`, and no claim.
+- App `TestApplyFleetWatch`: a held Start writes `fleet_reset_hold_at` from the binding row; a plain Start, Clear and
+  Reset leave it unchanged.
+
+**F-15.7 Texts.**
+- RR-149: the addition of F-15.5.
+- `docs/operations/fleet.md` step 5: after "…the confirmation counts only from 60 minutes after that event.", add "An
+  announced enrollment reset holds the watch at most once per device in 24 hours."
+
+**F-15.8 Stop conditions (added).**
+- Any existing binding or claim test changes its result through F-15.2.
+- F-15.2 would need more than the rule-2 condition and the `Resetting` method.
+
+**F-15.9 Size (estimate).**
+- Production about +22 lines: migration +3, queries +4, `fleetwatch.go` +8, app +3, `binding.go` +4. The total
+  becomes about **480**. That is about 10 above the cap of F-11, so main needs to raise the cap to about 485 for this
+  addendum.
+- Tests about +110 lines.

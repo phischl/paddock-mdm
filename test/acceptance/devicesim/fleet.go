@@ -33,6 +33,9 @@ type FleetHost struct {
 	// AgentNotRunning makes the agent-running policy (paddock_agent_running) fail, as osquery answers it while no
 	// genuine agent runs; every other policy is answered as before (plan M5a amendment 2026-11-16 b).
 	AgentNotRunning bool
+	// AgentRunningQueryFails makes the agent-running policy's query fail (status 1, no rows), as osquery reports a
+	// query it cannot run; Fleet then stores no answer (plan M5a amendment 2026-11-16 d, F6).
+	AgentRunningQueryFails bool
 	// Identifier is the host identifier the host enrolled under; Token is the device token its orbit registered
 	// (EnrollFleetBound), which the device reports in its check-ins (ADR 0057).
 	Identifier   string
@@ -130,7 +133,7 @@ func osVersion() map[string]string {
 }
 
 // Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass (the
-// agent binary policy fails while it does not list AgentBinarySHA256, the agent-running policy while AgentNotRunning), everything else is answered empty. It reports how many queries Fleet sent.
+// agent binary policy fails while it does not list AgentBinarySHA256, the agent-running policy while AgentNotRunning; its query fails while AgentRunningQueryFails), everything else is answered empty. It reports how many queries Fleet sent.
 func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	var read struct {
 		Queries map[string]string `json:"queries"`
@@ -144,8 +147,7 @@ func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	results, statuses := map[string]any{}, map[string]int{}
 	for name, query := range read.Queries {
 		h.recordListed(query, time.Now())
-		statuses[name] = 0
-		results[name] = h.rows(name, query)
+		statuses[name], results[name] = h.status(name, query), h.rows(name, query)
 	}
 	err := h.post(ctx, "/api/v1/osquery/distributed/write",
 		map[string]any{"node_key": h.key(), "queries": results, "statuses": statuses, "messages": map[string]string{}}, nil)
@@ -207,8 +209,22 @@ func (h *FleetHost) BinaryPolicyListedAt(hash string) (time.Time, bool) {
 	return at, ok
 }
 
+// status is osquery's status of a distributed query: 1 for the agent-running policy while AgentRunningQueryFails.
+func (h *FleetHost) status(query, sql string) int {
+	if h.failsAgentRunning(query, sql) {
+		return 1
+	}
+	return 0
+}
+
+func (h *FleetHost) failsAgentRunning(query, sql string) bool {
+	return h.AgentRunningQueryFails && strings.HasPrefix(query, "fleet_policy_query_") && strings.Contains(sql, agentRunningPolicyMarker)
+}
+
 func (h *FleetHost) rows(query, sql string) []map[string]string {
 	switch {
+	case h.failsAgentRunning(query, sql):
+		return []map[string]string{}
 	case query == "fleet_detail_query_os_version":
 		return []map[string]string{osVersion()}
 	case query == "fleet_detail_query_os_unix_like":

@@ -41,9 +41,13 @@ func (b Binding) Valid(seen map[ports.HostRef]ports.HostSeen) bool {
 // Urgent reports whether the device announced an enrollment reset not followed by a binding, or its binding is
 // suspended: its token is decided before the others (review round 1, L2).
 func (b Binding) Urgent(now time.Time) bool {
-	resetting := b.ResetAnnouncedAt != nil && now.Sub(*b.ResetAnnouncedAt) < ClaimQuiet &&
+	return b.Resetting(now) || b.SuspendedAt != nil
+}
+
+// Resetting reports whether the device announced an enrollment reset within ClaimQuiet that no binding followed.
+func (b Binding) Resetting(now time.Time) bool {
+	return b.ResetAnnouncedAt != nil && now.Sub(*b.ResetAnnouncedAt) < ClaimQuiet &&
 		(b.BoundAt == nil || b.BoundAt.Before(*b.ResetAnnouncedAt))
-	return resetting || b.SuspendedAt != nil
 }
 
 // Decision is the outcome of rules 1, 2, 6, 7, 8 and 9 of H5 for one binding.
@@ -70,7 +74,10 @@ func DecideBinding(b Binding, seen map[ports.HostRef]ports.HostSeen, r, now time
 		if b.TokenReportedAt == nil || now.Sub(*b.TokenReportedAt) >= TokenMaxAge {
 			return DecideExpired
 		}
-		if h := seen[b.Host]; b.Valid(seen) && !h.SeenAt.IsZero() && r.Sub(h.SeenAt) < BindingStale {
+		// A resetting device's new token names its new host while the old one is still fresh (plan M5a amendment f,
+		// F-15.2).
+		if h := seen[b.Host]; b.Valid(seen) && !h.SeenAt.IsZero() && r.Sub(h.SeenAt) < BindingStale &&
+			!b.Resetting(now) {
 			return DecideCurrent
 		}
 		return DecideResolve
