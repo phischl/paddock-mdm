@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/apply"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
@@ -134,14 +136,28 @@ func TestIdentityFileManipulationReported(t *testing.T) {
 	ticks(t, a, g, 2)
 }
 
-// restarted replaces the agent as an agent update does; guard tells whether the new agent has the identity check.
-func restarted(t *testing.T, a *Agent, guard bool) *Agent {
+// restarted replaces the agent as an agent update or restart does: a new process with a new applier and check;
+// guard tells whether the new agent has the identity check.
+func restarted(t *testing.T, a *Agent, sys diskSys, guard bool) *Agent {
 	t.Helper()
-	a = withIntegrity(t, a)
-	if guard {
-		a.d.Applier.WithFileGuard(a.d.Integrity)
+	c := integrity.New(a.d.Layout, integritySys{installed: map[string]bool{}})
+	c.DpkgBusy = func() bool { return false }
+	c.Sleep = func(time.Duration) {}
+	managed, err := reconcile.LoadManaged(a.d.Layout.Managed())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return a
+	d := a.d
+	d.Integrity, d.Events = c, &reconcile.Events{}
+	d.Applier = apply.New(sys, managed, d.Events)
+	if guard {
+		d.Applier.WithFileGuard(c)
+	}
+	b, err := New(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // enforcedBeforeUpdate is a device on which an agent without the identity check applied b, before the socket
@@ -164,8 +180,8 @@ func enforcedBeforeUpdate(t *testing.T, g *testgw.Gateway, b bundle.Bundle) (*Ag
 func TestIdentityUpdateThenNewLockNotReported(t *testing.T) {
 	ctx := context.Background()
 	g := testgw.New(t)
-	a, _ := enforcedBeforeUpdate(t, g, loginBundle(t, 1, true))
-	a = restarted(t, a, true)
+	a, sys := enforcedBeforeUpdate(t, g, loginBundle(t, 1, true))
+	a = restarted(t, a, sys, true)
 	ticks(t, a, g, 1)
 	a.drift(ctx)
 	ticks(t, a, g, 1)
@@ -205,7 +221,7 @@ func TestIdentityChangeBeforeUpdateReported(t *testing.T) {
 			a, sys := enforcedBeforeUpdate(t, g, loginBundle(t, 1, true, "erin@acme.test"))
 			want := sys.Files[tc.file].Data
 			tc.change(t, sys)
-			a = restarted(t, a, true)
+			a = restarted(t, a, sys, true)
 			a.drift(ctx)
 			if files, _ := identityEvents(t, a, g); !slices.Equal(files, []string{tc.file}) {
 				t.Fatalf("tamper %v, want [%s]", files, tc.file)
@@ -237,7 +253,7 @@ func TestIdentityDenyListWithoutLogin(t *testing.T) {
 	a, sys = enforcedBeforeUpdate(t, g, empty)
 	delete(sys.Files, reconcile.DenyList)
 	_ = os.Remove(filepath.Join(sys.root, reconcile.DenyList))
-	a = restarted(t, a, true)
+	a = restarted(t, a, sys, true)
 	a.drift(ctx)
 	if files, _ := identityEvents(t, a, g); !slices.Equal(files, []string{reconcile.DenyList}) || sys.Files[reconcile.DenyList] == nil {
 		t.Fatalf("tamper %v, deny list %v", files, sys.Files[reconcile.DenyList])
@@ -255,11 +271,122 @@ func TestIdentityReportOnlyBeforeUpdateNotReported(t *testing.T) {
 	if sys.Files[reconcile.HimmelblauConf] != nil {
 		t.Fatal("the report-only bundle wrote himmelblau.conf")
 	}
-	a = restarted(t, a, true)
+	a = restarted(t, a, sys, true)
 	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 2, true)))
 	a.Cycle(ctx)
 	if files, applied := identityEvents(t, a, g); len(files) != 0 || len(applied) != 1 {
 		t.Fatalf("tamper %v, login.applied %v", files, applied)
 	}
 	ticks(t, a, g, 2)
+}
+
+// removeFile deletes path on the fake system and on the disk, as root outside Paddock.
+func (s diskSys) removeFile(path string) {
+	delete(s.Files, path)
+	_ = os.Remove(filepath.Join(s.root, path))
+}
+
+// A rollback to an agent without the check, which then locks a user, and the update again: the first pass reports
+// nothing, and root removing the lock afterwards is reported once and corrected.
+func TestIdentityRollbackAndUpdateAgain(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a, sys := withLogin(t, g, true)
+	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 1, true)))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	a = restarted(t, a, sys, false)
+	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 2, true, "erin@acme.test")))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	a = restarted(t, a, sys, true)
+	ticks(t, a, g, 1)
+	sys.write(t, reconcile.DenyList, "")
+	a.tickIntegrity(ctx)
+	a.drift(ctx)
+	if files, applied := identityEvents(t, a, g); !slices.Equal(files, []string{reconcile.DenyList}) || len(applied) != 1 {
+		t.Fatalf("lock removed: tamper %v, login.applied %v", files, applied)
+	}
+	if got, _ := os.ReadFile(filepath.Join(sys.root, reconcile.DenyList)); string(got) != "erin@acme.test\nerin\n" {
+		t.Fatalf("deny list not restored: %q", got)
+	}
+}
+
+// The agent stops between Paddock's write and its record: the next apply of the same bundle confirms the file, and a
+// later removal of the lock is reported once.
+func TestIdentityRestartBetweenWriteAndRecord(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a, sys := withLogin(t, g, true)
+	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 1, true)))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	sys.write(t, reconcile.DenyList, "erin@acme.test\nerin\n") // what the write of bundle 2 left before the stop
+	a = restarted(t, a, sys, true)
+	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 2, true, "erin@acme.test")))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	ticks(t, a, g, 1)
+	sys.write(t, reconcile.DenyList, "")
+	a.tickIntegrity(ctx)
+	if files := tampered(t, a, g); !slices.Equal(files, []string{reconcile.DenyList}) {
+		t.Fatalf("lock removed: tamper %v", files)
+	}
+}
+
+// The agent before the update failed to install the packages of its last bundle and took the configuration back:
+// the first correction after the update reports nothing.
+func TestIdentityFailedInstallBeforeUpdateNotReported(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a, sys := enforcedBeforeUpdate(t, g, loginBundle(t, 1, true))
+	sys.FailCmd = "apt-get install"
+	b := loginBundle(t, 2, false)
+	r, err := bundle.LoginResource(func() bundle.LoginSpec {
+		var s bundle.LoginSpec
+		if err := json.Unmarshal(b.Resources[0].Spec, &s); err != nil {
+			t.Fatal(err)
+		}
+		s.Himmelblau.PackageVersion = "4.0.5"
+		return s
+	}())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Resources[0] = r
+	g.OfferBundle(testgw.SignedBundleOffer(t, b))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	a = restarted(t, a, sys, true)
+	ticks(t, a, g, 1)
+	a.drift(ctx)
+	if files, _ := identityEvents(t, a, g); len(files) != 0 {
+		t.Fatalf("tamper %v", files)
+	}
+	ticks(t, a, g, 2)
+}
+
+// 1126c-5: on a report-only device a deleted drop-in is reported once and stays deleted.
+func TestIdentityReportOnlyDeletedDropIn(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a, sys := withLogin(t, g, true)
+	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 1, true)))
+	a.Cycle(ctx)
+	b := loginBundle(t, 2, true)
+	b.Mode = bundle.ModeReportOnly
+	g.OfferBundle(testgw.SignedBundleOffer(t, b))
+	a.Cycle(ctx)
+	identityEvents(t, a, g)
+	sys.removeFile(reconcile.HimmelblaudSocketDropIn)
+	a.tickIntegrity(ctx)
+	if files := tampered(t, a, g); !slices.Equal(files, []string{reconcile.HimmelblaudSocketDropIn}) {
+		t.Fatalf("tamper %v", files)
+	}
+	identityEvents(t, a, g)
+	a.drift(ctx)
+	ticks(t, a, g, 2)
+	if _, err := os.Stat(filepath.Join(sys.root, reconcile.HimmelblaudSocketDropIn)); !os.IsNotExist(err) {
+		t.Fatalf("the drop-in came back: %v", err)
+	}
 }

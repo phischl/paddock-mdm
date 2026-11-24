@@ -173,3 +173,31 @@ func TestIdentityGuardConcurrentWithCheck(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A rebuilt baseline lost the renders Expect recorded: the next Expect records them again.
+func TestIdentityExpectAfterBaselineReset(t *testing.T) {
+	d := upgraded(t)
+	d.c.Expect(conf, []byte(render))
+	d.remove("/var/lib/paddock/state/integrity.json")
+	d.pass(Pass{Established: true})
+	if _, ok := d.baseline().Expected[conf]; ok {
+		t.Fatal("the reset kept the entry")
+	}
+	d.c.Expect(conf, []byte(render))
+	if got := d.baseline().Expected[conf]; got != sha(render) {
+		t.Fatalf("Expect after the reset recorded %q", got)
+	}
+}
+
+// A write record that could not be saved is saved by the next Expect, even one whose render is known.
+func TestIdentityUnsavedWriteSavedByExpect(t *testing.T) {
+	d := upgraded(t)
+	d.c.Expect(conf, []byte(render))
+	f := holdLock(t, d)
+	d.c.Written(reconcile.DenyList, []byte("erin\n"))
+	_ = f.Close()
+	d.c.Expect(conf, []byte(render))
+	if got := d.baseline().Expected[reconcile.DenyList]; got != sha("erin\n") {
+		t.Fatalf("baseline %q, want the unsaved write", got)
+	}
+}

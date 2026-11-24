@@ -8,6 +8,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // guardLog records the guard's calls between the system calls of the reconciler, in order.
@@ -73,10 +74,12 @@ func TestLoginGuardSeesEveryWrite(t *testing.T) {
 		t.Fatalf("Plan reached the guard: %q", got)
 	}
 	l.Apply(ctx, r)
-	writes := writeTriples(reconcile.HimmelblauConf, wantConf)
+	// The configuration written before the installation is recorded only once the installation succeeded.
+	writes := []string{"before " + reconcile.HimmelblauConf, "write " + reconcile.HimmelblauConf}
 	for _, p := range reconcile.HimmelblauSocketDropIns {
 		writes = append(writes, writeTriples(p, dropIn)...)
 	}
+	writes = append(writes, "written "+reconcile.HimmelblauConf+" "+wantConf)
 	writes = append(writes, writeTriples(reconcile.DenyList, "")...)
 	writes = append(writes, writeTriples(reconcile.HimmelblauConf, wantConf)...)
 	if got := g.managed(); !slices.Equal(got, writes) {
@@ -84,53 +87,70 @@ func TestLoginGuardSeesEveryWrite(t *testing.T) {
 	}
 }
 
-// After an agent update Apply hands the guard the renders of the previously enforced spec, before any write; the
-// socket drop-ins have none. A successful Apply makes its own spec the previous one.
+// After an agent start Apply hands the guard the renders of the previously enforced spec, before any write; the socket
+// drop-ins have none, and himmelblau.conf none while that spec's packages are not installed. A successful Apply makes
+// its own spec the previous one, and files that already hold their render are confirmed.
 func TestLoginGuardExpectsThePreviousRenders(t *testing.T) {
 	ctx := context.Background()
-	_, l, g := guarded(t)
+	sys, l, g := guarded(t)
 	prev := loginResource(t, loginSpec())
 	l.SetPrevious(&prev, true)
 	s := loginSpec()
 	s.LockedUsers = []string{"erin@acme.test"}
 	l.Apply(ctx, loginResource(t, s))
+	if got := g.managed(); len(got) < 1 || got[0] != "expect "+reconcile.DenyList+" " ||
+		slices.ContainsFunc(got[1:], func(e string) bool { return strings.HasPrefix(e, "expect ") }) {
+		t.Fatalf("packages missing: guard log %q, want only the deny list expected", got)
+	}
+	for _, p := range reconcile.HimmelblauPackages {
+		if v := sys.PackageVersion(p); !strings.HasPrefix(v, "4.0.4") {
+			t.Fatalf("%s %q after the installation", p, v)
+		}
+	}
+	l.SetPrevious(&prev, true)
+	l.Apply(ctx, loginResource(t, s))
 	got := g.managed()
 	want := []string{"expect " + reconcile.HimmelblauConf + " " + wantConf, "expect " + reconcile.DenyList + " "}
-	if len(got) < 2 || !slices.Equal(got[:2], want) || slices.ContainsFunc(got[2:], func(e string) bool { return strings.HasPrefix(e, "expect ") }) {
-		t.Fatalf("guard log %q, want it to start with %q and no other expect", got, want)
+	if len(got) < 2 || !slices.Equal(got[:2], want) {
+		t.Fatalf("guard log %q, want it to start with %q", got, want)
 	}
 	l.Apply(ctx, loginResource(t, s))
-	if got := g.managed(); len(got) != 2 || got[1] != "expect "+reconcile.DenyList+" erin@acme.test\nerin\n" {
-		t.Fatalf("second apply: guard log %q", got)
+	got = g.managed()
+	if !slices.Contains(got, "expect "+reconcile.DenyList+" erin@acme.test\nerin\n") ||
+		!slices.Contains(got, "written "+reconcile.DenyList+" erin@acme.test\nerin\n") ||
+		!slices.Contains(got, "written "+reconcile.HimmelblauConf+" "+wantConf) || slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "before ") }) {
+		t.Fatalf("unchanged apply: guard log %q, want the own spec expected and every file confirmed", got)
 	}
 }
 
-func writeTriples(path, content string) []string {
-	return []string{"before " + path, "write " + path, "written " + path + " " + content}
-}
-
-// A failed write is never recorded as Paddock's.
-func TestLoginGuardFailedWriteNotRecorded(t *testing.T) {
-	sys, l, g := guarded(t)
-	sys.FailWrite = reconcile.DenyList
-	l.Apply(context.Background(), loginResource(t, loginSpec()))
-	got := g.managed()
-	if i := slices.Index(got, "write "+reconcile.DenyList); i < 1 || got[i-1] != "before "+reconcile.DenyList ||
-		slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "written "+reconcile.DenyList) }) {
-		t.Fatalf("guard log %q", got)
-	}
-}
-
-// A failed installation takes the configuration back through the guard: the previous file, or its removal.
-func TestLoginGuardSeesTheRollback(t *testing.T) {
+// At agent start the files that hold the previous renders are confirmed; himmelblau.conf only while that spec's
+// packages are installed, and nothing without a previous spec.
+func TestLoginGuardConfirmPrevious(t *testing.T) {
+	_, l, g := guarded(t)
+	r := loginResource(t, loginSpec())
+	l.Apply(context.Background(), r)
+	s := loginSpec()
+	s.Himmelblau.PackageVersion = "4.0.5" // not installed; the rendered file does not name the version
+	other := loginResource(t, s)
 	for _, tc := range []struct {
-		name, previous string
-		want           []string
-	}{
-		{"restore", "[global]\n", writeTriples(reconcile.HimmelblauConf, "[global]\n")},
-		{"remove", "", []string{"before " + reconcile.HimmelblauConf, "remove " + reconcile.HimmelblauConf,
-			"written " + reconcile.HimmelblauConf + " <removed>"}},
-	} {
+		prev     *bundle.Resource
+		confirms int
+	}{{nil, 0}, {&other, 4}, {&r, 5}} {
+		g.managed()
+		l.SetPrevious(tc.prev, true)
+		l.ConfirmPrevious()
+		got := g.managed()
+		withConf := slices.Contains(got, "written "+reconcile.HimmelblauConf+" "+wantConf)
+		if len(got) != tc.confirms || withConf != (tc.confirms == 5) || tc.confirms > 0 && !slices.Contains(got, "written "+reconcile.DenyList+" ") {
+			t.Fatalf("%d confirms expected: guard log %q", tc.confirms, got)
+		}
+	}
+}
+
+// A failed installation takes the configuration back without the guard: neither the configuration it wrote nor the
+// restored or removed file becomes the baseline.
+func TestLoginGuardSeesTheRollback(t *testing.T) {
+	for _, tc := range []struct{ name, previous, undo string }{{"restore", "[global]\n", "write"}, {"remove", "", "remove"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			sys, l, g := guarded(t)
 			sys.FailCmd = "apt-get install"
@@ -138,15 +158,15 @@ func TestLoginGuardSeesTheRollback(t *testing.T) {
 				sys.Files[reconcile.HimmelblauConf] = &fakesys.File{Data: []byte(tc.previous), Mode: 0o644}
 			}
 			l.Apply(context.Background(), loginResource(t, loginSpec()))
-			got := g.managed()
 			var conf []string
-			for _, e := range got {
+			for _, e := range g.managed() {
 				if strings.Contains(e, " "+reconcile.HimmelblauConf) && !strings.HasPrefix(e, "expect ") {
 					conf = append(conf, e)
 				}
 			}
-			if len(conf) < 3 || !slices.Equal(conf[len(conf)-3:], tc.want) {
-				t.Fatalf("himmelblau.conf in the guard log %q, want it to end with %q", conf, tc.want)
+			want := []string{"before " + reconcile.HimmelblauConf, "write " + reconcile.HimmelblauConf, tc.undo + " " + reconcile.HimmelblauConf}
+			if !slices.Equal(conf, want) {
+				t.Fatalf("himmelblau.conf in the guard log %q, want %q", conf, want)
 			}
 		})
 	}
@@ -168,5 +188,31 @@ func TestLoginGuardEnsureDenyList(t *testing.T) {
 		if got := g.managed(); !slices.Equal(got, want) {
 			t.Fatalf("applied %v: guard log %q, want %q", applied, got, want)
 		}
+	}
+}
+
+func writeTriples(path, content string) []string {
+	return []string{"before " + path, "write " + path, "written " + path + " " + content}
+}
+
+// A failed write is never recorded as Paddock's.
+func TestLoginGuardFailedWriteNotRecorded(t *testing.T) {
+	sys, l, g := guarded(t)
+	sys.FailWrite = reconcile.DenyList
+	l.Apply(context.Background(), loginResource(t, loginSpec()))
+	got := g.managed()
+	if i := slices.Index(got, "write "+reconcile.DenyList); i < 1 || got[i-1] != "before "+reconcile.DenyList ||
+		slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "written "+reconcile.DenyList) }) {
+		t.Fatalf("guard log %q", got)
+	}
+}
+
+// An installation killed at its timeout keeps the configuration it wrote, so the guard records it.
+func TestLoginGuardTimeoutKeepsTheRecord(t *testing.T) {
+	sys, l, g := guarded(t)
+	sys.AptTimeout = true
+	l.Apply(context.Background(), loginResource(t, loginSpec()))
+	if got := g.managed(); !slices.Contains(got, "written "+reconcile.HimmelblauConf+" "+wantConf) {
+		t.Fatalf("guard log %q", got)
 	}
 }

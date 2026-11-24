@@ -347,6 +347,7 @@ func New(d Deps) (*Agent, error) {
 	a.refreshHealth()
 	a.loadCurrent()
 	a.d.Applier.SetPrevious(a.current)
+	a.d.Applier.ConfirmPrevious()
 	return a, nil
 }
 

@@ -2704,16 +2704,25 @@ and the three `90-paddock.conf` drop-ins of `himmelblaud.socket`, `himmelblaud-t
 - They are checked in both enforcement modes.
 
 **F2 Baseline only from Paddock's own content.** The baseline entry of an F1 file is never taken from the disk; a pass
-with no entry for such a file skips it. An entry is written at only three points:
-- `Written(path, content)` after each successful write or removal by the login reconciler: the SHA-256 of the content
-  written, or `""` after a removal. The file's once-per-change mark is cleared. A record that cannot be saved (lock
-  timeout) stays in memory and is saved by the next successful `Expect`, `BeforeWrite`, `Written` or pass.
+with no entry for such a file skips it. An entry is written only at these points:
+- `Written(path, content)` after each successful write by the login reconciler: the SHA-256 of the content written.
+  The file's once-per-change mark is cleared. A record that cannot be saved (lock timeout) stays in memory and is
+  saved by the next successful `Expect`, `BeforeWrite`, `Written` or pass. The configuration written before a package
+  installation is recorded only once the installation succeeded or was killed at its timeout, which both keep it. The
+  restore or removal after a failed installation records nothing.
+- `Written(path, render)` for every F1 file that already holds Paddock's current render when the login reconciler
+  applies a login resource (`confirmManaged`). The value is the render, not the disk, so an entry left behind by a
+  crash, an unsaved record or an older agent follows the file as soon as Paddock's render is in place.
+- `ConfirmPrevious` at every agent start, after `SetPrevious` and before the first pass: the same confirmation for the
+  renders of the previously enforced spec. It covers a rollback to an agent without this check that wrote new
+  content, followed by an update again.
 - `Expect(path, render)` when the login reconciler applies a login resource after an agent start. It applies only when
   the agent enforced a bundle before this start, which the agent passes on with `SetPrevious` after loading its cached
-  bundle. The baseline records the render of that earlier bundle's login spec for `himmelblau.conf` and `login-deny`,
-  and only where no entry exists. A cached report-only bundle counts as no bundle, because it wrote nothing. The
-  drop-ins get no `Expect`: agents before them never wrote them. After a successful apply, its own spec becomes the
-  previous one.
+  bundle. At every agent start, where no entry exists, the baseline records the render of that earlier bundle's login
+  spec for `himmelblau.conf` and `login-deny`. A cached report-only bundle counts as no bundle, because it wrote
+  nothing. The drop-ins get no `Expect`: agents before them never wrote them. `himmelblau.conf` gets neither `Expect`
+  nor the start confirmation while the previous spec's packages are not installed: a failed installation took that
+  configuration back. After a successful apply, its own spec becomes the previous one.
 - `Expect(login-deny, empty)` when the agent keeps the deny list of the PAM profile without a login resource and
   finds it missing, again only after an enforced bundle. Agents before this change kept the list in place, so its
   absence is a change: it unlocks every locked user. A device that never enforced a bundle records nothing here. An
@@ -2722,9 +2731,11 @@ with no entry for such a file skips it. An entry is written at only three points
 As a result:
 - A fresh enrolment raises no event.
 - The first spec change after an update compares the disk with what Paddock wrote before, which matches, so it raises
-  no event.
+  no event. This holds also when the last installation before the update failed.
 - An edit or deletion made before the update, including one locked name removed from `login-deny`, raises one event
   at the first correction.
+- After a rollback to an agent without this check and an update again, the first pass raises no event, and a later
+  change is reported.
 - `renderHimmelblauConf`, `renderDenyList` and `EnsureDenyList` are unchanged since v0.1.0-alpha.10.
 
 **F3 Check right before the correction.** `BeforeWrite(path)` hashes the file and compares it with its entry under
@@ -2734,24 +2745,33 @@ As a result:
   one event.
 - A hash or lock error is one `Warn` and no event.
 
-The login reconciler's helpers `writeManaged` and `removeManaged` call `BeforeWrite`, then the write, then `Written`;
-a failed write records nothing. Every write and removal of an F1 file goes through them: the deny list and
-`himmelblau.conf` in apply, the configuration write before the installation and its restore or removal after a failed
-installation, the drop-ins, and `EnsureDenyList`. `Expect`, `BeforeWrite` and `Written` are safe from any goroutine
-and never touch the pass's hash cache or `Warn` throttle. A rebuilt baseline makes the next `Expect` record again.
+The login reconciler's helper `writeManaged` calls `BeforeWrite`, then the write, then `Written`; a failed write
+records nothing. Every write of an F1 file goes through it (the deny list and `himmelblau.conf` in apply, the drop-ins,
+and `EnsureDenyList`), except the configuration write before the installation, which calls `BeforeWrite` and records
+as F2 says, and the restore or removal after a failed installation, which calls no guard method. `Expect`,
+`BeforeWrite` and `Written` are safe from any goroutine and never touch the pass's hash cache or `Warn` throttle. A
+rebuilt baseline makes the next `Expect` record again.
 
 **F4 Wiring.** `reconcile.FileGuard` (`Expect`, `BeforeWrite`, `Written`) is implemented by `integrity.Checker`.
-`apply.Applier.WithFileGuard` and `SetPrevious` pass it on to the login reconciler, and `agent.New` wires both. The
+`apply.Applier.WithFileGuard`, `SetPrevious` and `ConfirmPrevious` pass it on to the login reconciler, and
+`agent.New` wires all three. The
 reconciler does not import the integrity package, and `baseline.go` is unchanged.
 
 **F5 Residuals (RR-148).**
 - Only content is judged.
 - A change made in the instant between the check and Paddock's own write is overwritten without an event.
-- Until Paddock's first write after an agent update, `himmelblau.conf` and `login-deny` are judged against what
-  Paddock wrote for the bundle it enforced before the update. A local account created or removed since then can raise
-  one event.
+- A check that cannot hash the file or take `integrity.lock` logs a `Warn`; the correction then overwrites a change
+  without an event.
+- At every agent start without an entry, until Paddock's first write, `himmelblau.conf` and `login-deny` are judged
+  against what Paddock wrote for the bundle it enforced before. A local account created or removed since then can
+  raise one event.
+- A stop or an unsaved record between Paddock's write and its record can raise one event for that write; the next
+  apply of a login resource records it again.
+- With a report-only bundle cached at the agent start there is no previous render: an edit made before the start, or
+  a deleted `login-deny`, is corrected without an event when the device enforces again.
 - The drop-ins are judged only after Paddock's first write.
 - On a device that never enforced a bundle, an absent `login-deny` is not a change.
+- A Paddock-written file stays judged after the login resource leaves the bundle, until Paddock removes it.
 - A later release that changes a render and is installed directly over an agent without this check can raise one
   event per changed file.
 - Report-only mode records nothing until the device enforces a bundle.
@@ -2766,17 +2786,24 @@ reconciler does not import the integrity package, and `baseline.go` is unchanged
 - a deleted file is reported by the pass alone;
 - an empty file;
 - lock timeouts;
+- a rebuilt baseline makes `Expect` record again;
+- an unsaved record is saved by the next `Expect`;
 - concurrency under `-race`.
 
-Reconcile tests: the guard order, no `Expect` on a fresh device, the previous renders, a failed write, the rollback,
-and `EnsureDenyList` with and without an enforced bundle.
+Reconcile tests: the guard order, no `Expect` on a fresh device, the previous renders, the confirmation at start, a
+failed write, a failed installation that records nothing, a timeout that keeps the record, and `EnsureDenyList` with
+and without an enforced bundle.
 
 Agent tests with a real applier and checker:
 - a manipulation is reported and corrected;
 - the update followed by a new lock raises no event, and the missing drop-ins are written without an event;
 - an edit, a deletion and a removed locked name before the update are each reported once;
 - the deny list without a login resource;
-- a report-only bundle before the update.
+- a report-only bundle before the update;
+- a rollback to an agent without the check and an update again;
+- a stop between a write and its record;
+- a failed installation before the update;
+- a deleted drop-in on a report-only device.
 
 **Acceptance.**
 1. 1126c-1: in enforce mode, root edits `himmelblau.conf`. Within one drift interval there is one event for that file

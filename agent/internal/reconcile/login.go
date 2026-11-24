@@ -303,10 +303,14 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	// Only Apply hands the renders over: a report-only device runs Plan alone and never writes them. The socket
 	// drop-ins have no previous render: agents before them never wrote them (plan M5a amendment 2026-11-17 f).
+	// A previous configuration whose packages are not installed may have been taken back by a failed installation.
 	if l.Guard != nil && l.prev != nil {
-		l.Guard.Expect(HimmelblauConf, renderHimmelblauConf(*l.prev))
+		if l.installed(l.prev.Himmelblau.PackageVersion) {
+			l.Guard.Expect(HimmelblauConf, renderHimmelblauConf(*l.prev))
+		}
 		l.Guard.Expect(DenyList, renderDenyList(*l.prev, st.local))
 	}
+	l.confirmManaged(st, true)
 	var changed []string
 	var aptErr error
 	wasSuspended := suspendedConf(l.read(HimmelblauConf))
@@ -495,7 +499,10 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 	}
 	previous, _, readErr := l.Sys.ReadFile(HimmelblauConf)
 	if !l.fileIs(HimmelblauConf, conf) {
-		if err := l.writeManaged(HimmelblauConf, conf); err != nil {
+		if l.Guard != nil {
+			l.Guard.BeforeWrite(HimmelblauConf)
+		}
+		if err := l.Sys.WriteFileAtomic(HimmelblauConf, conf, 0o644, 0, 0); err != nil {
 			return false, false, fmt.Errorf("%w: %w", errConfig, err)
 		}
 		confWritten = true
@@ -505,6 +512,11 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		slog.WarnContext(ctx, "writing the himmelblaud socket drop-ins before the installation failed", "error", err)
 	}
 	err = l.install(ctx, version)
+	// The guard records the configuration only once it stays: a failed installation takes it back, a timeout keeps it
+	// (plan M5a amendment 2026-11-17 f).
+	if confWritten && l.Guard != nil && (err == nil || errors.Is(err, context.DeadlineExceeded)) {
+		l.Guard.Written(HimmelblauConf, conf)
+	}
 	switch {
 	case err == nil:
 		l.aptTimeouts, l.aptRetryAt, l.aptTimeoutErr = 0, time.Time{}, nil
@@ -519,9 +531,9 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		l.aptTimeoutErr = fmt.Errorf("killed after %s, next attempt in %s: %w", PackageTimeout, backoff, err)
 		return false, confWritten, l.aptTimeoutErr
 	case confWritten && readErr == nil:
-		return false, confWritten, errors.Join(err, l.writeManaged(HimmelblauConf, previous))
+		return false, confWritten, errors.Join(err, l.Sys.WriteFileAtomic(HimmelblauConf, previous, 0o644, 0, 0))
 	case confWritten:
-		return false, confWritten, errors.Join(err, l.removeManaged(HimmelblauConf))
+		return false, confWritten, errors.Join(err, l.Sys.Remove(HimmelblauConf))
 	}
 	return false, confWritten, err
 }
@@ -566,16 +578,37 @@ func (l *Login) writeManaged(path string, data []byte) error {
 	return err
 }
 
-// removeManaged removes one of the LoginManagedFiles between the guard's check and its record.
-func (l *Login) removeManaged(path string) error {
-	if l.Guard != nil {
-		l.Guard.BeforeWrite(path)
+// confirmManaged records the LoginManagedFiles that hold Paddock's render as their baseline: Paddock's own content,
+// never the disk's, so that an entry a crash, an unsaved record or an older agent left behind follows the file
+// (plan M5a amendment 2026-11-17 f). withConf false leaves himmelblau.conf out.
+func (l *Login) confirmManaged(st loginState, withConf bool) {
+	if l.Guard == nil {
+		return
 	}
-	err := l.Sys.Remove(path)
-	if (err == nil || errors.Is(err, fs.ErrNotExist)) && l.Guard != nil {
-		l.Guard.Written(path, nil)
+	files := map[string][]byte{DenyList: st.wantDeny}
+	if withConf {
+		files[HimmelblauConf] = st.wantConf
 	}
-	return err
+	for _, p := range HimmelblauSocketDropIns {
+		files[p] = himmelblaudSocketDropIn
+	}
+	for p, render := range files {
+		if l.fileIs(p, render) {
+			l.Guard.Written(p, render)
+		}
+	}
+}
+
+// ConfirmPrevious confirms at agent start, before the first integrity pass, the files that hold the renders of the
+// previously enforced spec: an older agent may have written them since the baseline last moved (plan M5a amendment
+// 2026-11-17 f).
+func (l *Login) ConfirmPrevious() {
+	if l.Guard == nil || l.prev == nil {
+		return
+	}
+	if st, err := l.state(*l.prev); err == nil {
+		l.confirmManaged(st, l.installed(l.prev.Himmelblau.PackageVersion))
+	}
 }
 
 func (l *Login) socketDropInsAre() bool {

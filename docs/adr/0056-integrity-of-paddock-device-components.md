@@ -283,15 +283,16 @@ whatever `drift_interval_s` says. A pass runs at every agent start. The suspensi
 `state.json`, so restarts, a held lock or an unwritable baseline no longer reset it. Root who edits the agent state
 resets it, the same residual as the joint reset in point 5. Plan M5a R15 holds the detail.
 
-
 ## Amendment 2026-11-17 (architect, PDK-1126c) — Paddock-written identity files
 
 Plan M5a, "Amendment 2026-11-17 f", holds the binding detail. C also judges the identity files the login reconciler
 writes: `/etc/himmelblau/himmelblau.conf`, `/etc/paddock/login-deny` and the `90-paddock.conf` drop-ins of the three
 Himmelblau socket units. Only their content is judged. Their baseline comes only from content Paddock wrote, never
-from the disk. After each write, the baseline takes the content just written. After an agent update, the baseline
-takes the render of the bundle the agent enforced before the update, recorded only where no entry exists; the
-drop-ins have no such render. Right before the login reconciler corrects one of these files, it checks the file
-against the baseline. A change found there or in a pass raises `device.tamper_protected_file_changed` once, and the
-login reconciler still corrects the file (`device.login_applied`). A missing `login-deny` after an enforced bundle is
-a change, because its absence unlocks every locked user. The remaining gaps are listed in RR-148.
+from the disk. After each write that stays, the baseline takes the content just written; a file that already holds
+Paddock's render is confirmed with that render when the login reconciler applies, and at every agent start for the
+renders of the bundle enforced before. At every agent start without an entry, the baseline takes the render of the
+bundle the agent enforced before; the drop-ins have no such render. Right before the login reconciler corrects one
+of these files, it checks the file against the baseline. A change found there or in a pass raises
+`device.tamper_protected_file_changed` once, and the login reconciler still corrects the file
+(`device.login_applied`). A missing `login-deny` after an enforced bundle is a change, because its absence unlocks
+every locked user. The remaining gaps are listed in RR-148.
