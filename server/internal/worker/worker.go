@@ -149,3 +149,10 @@ func decode(body []byte, v any) error {
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
 }
+
+// decodeLenient parses a heartbeat, ignoring fields this release does not know: a newer gateway may add optional
+// fields while this worker still consumes, and the next check-in replaces a heartbeat anyway (ADR 0057, review round 1,
+// L3).
+func decodeLenient(body []byte, v any) error {
+	return json.Unmarshal(body, v)
+}

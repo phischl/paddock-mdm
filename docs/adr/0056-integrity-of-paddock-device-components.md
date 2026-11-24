@@ -283,3 +283,108 @@ whatever `drift_interval_s` says. A pass runs at every agent start. The suspensi
 `state.json`, so restarts, a held lock or an unwritable baseline no longer reset it. Root who edits the agent state
 resets it, the same residual as the joint reset in point 5. Plan M5a R15 holds the detail.
 
+## Amendment 2026-11-16 d (architect, PDK-1122d) — osquery that stops evaluating, and a failing agent-running query
+
+Status: **accepted** as reduced (2026-11-17, main, `decisions-alpha11.md` §159). Details, texts and tests: plan
+`docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 d (architect, PDK-1122d)". Builds on ADR
+0057 (inventory hosts bound to their device, PDK-1123), which lands first.
+
+**Context.** The PDK-1122c review found two cases that the mutual watch and amendment c do not report:
+- an `osqueryd` that stops storing policy results while orbit keeps talking to Fleet;
+- a `paddock_agent_running` query that stops answering on the device. Its empty result is dropped every round.
+
+Amendment c also judged a device by the newest contact of every host with its hardware UUID. After ADR 0057, the
+device's bound host is the one that counts.
+
+**Options.**
+
+1. **Server-side, from Fleet's host list (chosen).**
+   - A device whose bound host's policy results are 30 minutes older than the newest host's is a silent fleetd
+     (`reason` `policies`).
+   - An unanswered `paddock_agent_running` on a host that evaluates its policies counts as a failing evaluation. Its
+     query never changes (D7), so an empty answer means that the query failed.
+   - Pro: no device or protocol change.
+   - Con: `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL` must stay at 15 minutes or less.
+2. **A separate code for each case.** Not chosen: the operator needs to know that fleetd cannot confirm the agent,
+   and the description names the cause.
+
+**Decision.** Option 1, report only.
+
+- Amendment c's `seen(d)` becomes the `seen_time` of the device's bound host (ADR 0057). For a device without a
+  binding, it is the host Fleet enrolled first.
+- `device.tamper_fleetd_silent` (unreleased) gains the params `policy_updated_at` and `reason`.
+- The released `device.tamper_agent_not_running` gains one additive sentence in its description.
+- Amendment c's migration becomes `00164` (PDK-1123 takes `00163`).
+
+**Consequences.**
+
+- Positive: the two cases of the review are reported; amendment c's watch follows the bound host.
+- Negative: a longer description of a released code; an operator who raises the policy interval above 15 minutes
+  gets false `policies` reports (documented).
+- Follow-up: none beyond amendment c's.
+
+## Amendment 2026-11-17 (architect, PDK-1126c) — Paddock-written identity files
+
+Plan M5a, "Amendment 2026-11-17 f", holds the binding detail. C also judges the identity files the login reconciler
+writes: `/etc/himmelblau/himmelblau.conf`, `/etc/paddock/login-deny` and the `90-paddock.conf` drop-ins of the three
+Himmelblau socket units. Only their content is judged. Their baseline comes only from content Paddock wrote, never
+from the disk. After each write that stays, the baseline takes the content just written; a file that already holds
+Paddock's render is confirmed with that render when the login reconciler applies, and at every agent start for the
+renders of the bundle enforced before. At every agent start without an entry, the baseline takes the render of the
+bundle the agent enforced before; the drop-ins have no such render. Right before the login reconciler corrects one
+of these files, it checks the file against the baseline. A change found there or in a pass raises
+`device.tamper_protected_file_changed` once, and the login reconciler still corrects the file
+(`device.login_applied`). A missing `login-deny` after an enforced bundle is a change, because its absence unlocks
+every locked user. The remaining gaps are listed in RR-148.
+
+## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds and sparse check-ins in the fleetd silence watch
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). Details, texts and tests:
+plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-24 f (architect, PDK-1122d review 1)".
+
+**Context.** The review of amendment c's implementation found three problems:
+- ADR 0057 allows 60 minutes to re-bind a device's inventory host after an announced enrollment reset, a suspended
+  binding or a re-enrollment, but the silence watch reported after 30 minutes.
+- A device that checks in at intervals of 20 minutes or more was never confirmed.
+- Devices whose silence was already reported kept the installation-wide majority guard down.
+
+**Options.**
+
+1. **Hold, bounded by the episode, and confirmation by check-ins (chosen).**
+   - The confirmation counts only from 60 minutes after an ADR 0057 event that began no later than the silence
+     episode.
+   - A report needs two check-ins after the silence was found, plus 15 minutes.
+   - An episode ends only after 60 minutes without a check-in.
+   - Pro: a hold delays a report and never prevents it, even though the reset announcement comes from the device.
+     Sparse check-ins are reported, and suspend, boot and network loss still raise nothing.
+   - Con: one more column; for an episode opened in the seconds before a suspend, orbit's tolerance after the resume
+     shrinks from 15 to about 5 minutes.
+2. **Skip held devices and reset the episode while held.**
+   - Con: the hold would last as long as the device keeps announcing a reset.
+3. **Reset the episode only after a long gap, with liveness at the due round as the only evidence.**
+   - Con: one check-in during orbit's reconnect after a resume could complete an older episode.
+
+**Decision.** Option 1.
+- Devices in a hold and devices whose silence is already reported count in neither side of the majority guard.
+- Fleet's "never evaluated" placeholder (before 2001) counts as no policy results.
+- A host whose last contact lies ahead of Fleet's clock is accepted as a loud, fail-safe blind spot (suppression
+  alert, RR-149), not clamped.
+
+**Consequences.**
+- Positive: no false report during a staged agent rollout within ADR 0057's bounds; a device that checks in up to
+  once an hour while its fleetd is silent is reported; one organization's reported devices no longer blind the watch
+  for others.
+- Negative: up to 60 minutes more latency during a hold; a device that checks in less often than once an hour is not
+  reported (RR-149); beyond about 1,500 agent updates per hour, a device left unbound for more than 60 minutes gets a
+  false silence report, alongside ADR 0057's false claim report.
+- Addendum (review 2): an announced enrollment reset holds the watch at most once per device in 24 hours. A bound
+  device that resets is rebound in the first round after it reports its new token, rather than at the next token
+  rotation, so a second reset within 24 hours raises no report while the token can be resolved (plan amendment f,
+  F-15).
+- Follow-up: none beyond the PDK-1122d fix round.
+
+## Amendment 2026-11-24 g (architect, PDK-1122k) — the inventory round reports a refused host
+The inventory round skips a device's host when Fleet refuses it or Postgres refuses its data after sanitising. Paddock
+records `device.tamper_inventory_rejected` once per episode, with the params `reason` (`fetch_refused` or
+`store_refused`) and `fleet_host`, the device's own Fleet host, and no error text. A successful store ends the episode.
+The code opens or counts a tamper finding in the device's own organisation.

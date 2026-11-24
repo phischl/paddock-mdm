@@ -22,6 +22,7 @@ func TestMetricsOnlyWhereRegistered(t *testing.T) {
 		"paddock_osv_stale",
 		"paddock_retention_stores",
 		"paddock_tls_probe_hosts",
+		"paddock_inventory_bindings_suspended",
 	}
 	for _, name := range names {
 		if n, err := testutil.GatherAndCount(prometheus.DefaultGatherer, name); err != nil || n != 0 {

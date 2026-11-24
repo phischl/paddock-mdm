@@ -163,6 +163,15 @@ const (
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
 	// Agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part A).
 	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
+	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
+	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+	// CodeDeviceTamperFleetdSilent: fleetd stopped working with the inventory system while the device kept checking in
+	// (plan M5a amendments 2026-11-16 c and d, ADR 0056).
+	CodeDeviceTamperFleetdSilent Code = "device.tamper_fleetd_silent"
+	// CodeDeviceTamperInventoryRejected: the inventory round could not store a device's inventory (PDK-1122k).
+	CodeDeviceTamperInventoryRejected Code = "device.tamper_inventory_rejected"
+	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
+	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
 	// Update management (plan M5b decisions 1–3 and 6).
 	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
 	CodePackageHoldCreated        Code = "package_hold.created"
@@ -813,7 +822,9 @@ var registry = map[Code]Definition{
 		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one " +
 			"of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own components " +
 			"for longer than a fixed bound, and file names the path that blocks the check. reason baseline_reset: the agent's " +
-			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file.",
+			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file. " +
+			"reason update_result_unstaged: an update result named no release the agent staged, the agent kept its baseline " +
+			"of its slots, and file names the update result.",
 		Params:   deviceEventParams,
 		Outcomes: []Outcome{OutcomeSuccess},
 	},
@@ -1291,7 +1302,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
-		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
+		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, or its query stopped answering on a host that evaluates its policies, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
 		Params:      []string{"policy", "last_contact_at", "failing_since", "evaluated_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
@@ -1302,6 +1313,34 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+	},
+	CodeDeviceTamperFleetdSilent: {
+		Code: CodeDeviceTamperFleetdSilent, Emitted: true,
+		Description: "fleetd on a device stopped working with the inventory system for at least 15 minutes while the device kept checking in with Paddock, confirmed when the device checked in twice more and 15 more minutes passed (counted from 60 minutes after an announced enrollment reset of fleetd, a suspended host binding or a re-enrollment of its host), while most other devices reached the inventory system (actor: system). reason contact: the inventory system has not heard from the device's fleetd for 15 minutes longer than from the most recent host; reason policies: fleetd still talks to it, but osquery has stored no policy results for 30 minutes longer than the most recent host (osquery stopped, frozen or broken while orbit runs). fleetd was stopped, frozen, removed or cut off from the inventory system's address only, or something other than the genuine agent checks in for the device. fleetd_seen_at and policy_updated_at are the device's last contact and last stored policy results in the inventory system's clock (absent when unknown); last_contact_at is the device's last check-in; silent_since is when the worker first found the silence.",
+		Params:      []string{"fleetd_seen_at", "policy_updated_at", "last_contact_at", "silent_since", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per silence; fleetd working with the inventory system again ends it.",
+	},
+	CodeDeviceTamperInventoryRejected: {
+		Code: CodeDeviceTamperInventoryRejected, Emitted: true,
+		Description: "The inventory round could not store the inventory of a device and skipped it (actor: system). reason fetch_refused: Fleet no longer knows the host that speaks for the device, or refused it; reason store_refused: Paddock refused the host's inventory data. fleet_host is the inventory system's ID of the host that speaks for the device. Until the device's inventory is stored again, its software, vulnerabilities and the agent reports derived from the inventory system rest on its last stored inventory.",
+		Params:      []string{"reason", "fleet_host"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per episode; the episode ends when the device's inventory is stored again.",
+	},
+	CodeDeviceInventoryHostRemoved: {
+		Code: CodeDeviceInventoryHostRemoved, Emitted: true,
+		Description: "The inventory round removed from Fleet a host that the device no longer speaks from (actor: system). reason replaced: the host Paddock stores for the device changed and fleet_host was the previous one; reason relisted: Fleet lists fleet_host, the host stored for the device, with another hardware UUID; reason retired: the device was retired and fleet_host is the host Paddock stored for it. Until it is removed, the host is reserved for the device: no other device is bound to it or stores it. left_at is when it was left. fleet_host_deleted is true when Fleet deleted the host or no longer knew it. A host that another device stores, is bound to or holds reserved is not removed and records no event. A failure keeps the reservation: upstream_unavailable when Fleet failed or could not be reached (retried next round), invalid_state when Fleet refused this host (retried after an hour). After a Fleet rebuild, the removed host can be another machine's record; that machine's fleetd enrolls again under a new ID.",
+		Params:      []string{"hostname", "fleet_host", "reason", "left_at", "fleet_host_deleted"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0057.",
+	},
+	CodeDeviceTamperFleetHostClaimed: {
+		Code: CodeDeviceTamperFleetHostClaimed, Emitted: true,
+		Description: "An inventory host other than the one that speaks for a device claims it (actor: system). kind second_host: another host reported the device's hardware UUID and kept contacting the inventory system for 15 minutes; kind reenrolled: the host that speaks for the device was enrolled again, which also happens when fleetd's local state on the device is lost, or, for a device that has not named its host, another host took the place of the one stored for it. binding is device when the device named its inventory host over its device connection, first when it has not named one yet and the host already stored for it (else the one with the lowest ID) speaks for it. Only the speaking host's data is stored for the device; after a re-enrollment, agent reports derived from the inventory system wait 60 minutes. bound_host is the inventory system's ID of the speaking host, other_hosts the IDs of the other live claimants (at most 10, ascending, comma-separated; absent when none), hosts the number of live claimants including the speaking host, enrolled_at the inventory system's time of the latest enrollment of the speaking host (absent when unknown), claim_since when the worker first saw the claim.",
+		Params:      []string{"kind", "binding", "bound_host", "other_hosts", "hosts", "enrolled_at", "claim_since"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per claim episode; the episode ends when no other live host claims the device and no re-enrollment was seen for 60 minutes.",
 	},
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,

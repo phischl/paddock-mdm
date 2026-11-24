@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -976,6 +977,15 @@ func IsUniqueViolation(err error, constraint string) bool {
 func IsForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// IsDataError reports whether PostgreSQL refused the data of a statement: a data exception (SQLSTATE class 22, such
+// as a NUL byte in text), an integrity constraint violation (class 23) or a value over a limit (54000, such as a key
+// too long for its btree index). Another failure, such as a lost connection, is not one.
+func IsDataError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		(strings.HasPrefix(pgErr.Code, "22") || strings.HasPrefix(pgErr.Code, "23") || pgErr.Code == "54000")
 }
 
 // IsAuditDaySealed reports whether err is the audit_object trigger's refusal of an object for an already sealed day

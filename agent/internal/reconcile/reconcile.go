@@ -44,6 +44,8 @@ type System interface {
 	// directories are created 0755 root:root.
 	WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error
 	Remove(path string) error
+	// RemoveAll removes path and everything below it; a missing path is not an error.
+	RemoveAll(path string) error
 	LookupUser(name string) (uid int, err error)
 	LookupGroup(name string) (gid int, err error)
 	// Owner returns the numeric owner and group of a file described by info.

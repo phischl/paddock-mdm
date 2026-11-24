@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,21 @@ func TestAgentGates(t *testing.T) {
 				t.Fatalf("the update gates reported %v", files)
 			}
 		})
+		// A rollout of S4 still running would offer its release again during S5, and the update result of that retry
+		// would fall into S5's window (PDK-1122j).
+		d.Together(t, "S4", "retract", func() string {
+			done := map[string]bool{}
+			for _, vs := range d.Shared(s4Releases) {
+				for _, v := range strings.Fields(vs) {
+					if !done[v] {
+						done[v] = true
+						retractRelease(t, v)
+					}
+				}
+			}
+			return ""
+		})
+		waitUpdatesSettled(t, d, d.Must("date +%s"))
 		t.Run("S5 integrity of the agent slots", func(t *testing.T) { d.Bind(t); gateS5(t, d) })
 	})
 }
@@ -278,17 +294,70 @@ func gateS3(t *testing.T, d *Device) {
 	}
 }
 
+// waitUpdatesSettled waits for a check-in of d more than one rollout round after since (device clock, unix seconds):
+// the gateway's offer is rewritten only by the worker's round (worker.RolloutInterval, 60 s), so that check-in carries
+// no offer of a retracted release. Then it waits until no agent update is in flight (no request, no probation, the
+// last update result processed) and the device stays so across a later check-in: the agent saves last_checkin_at
+// before it stages an offer, and a late round may still serve a stale one (plan M5a R16).
+func waitUpdatesSettled(t *testing.T, d *Device, since string) {
+	t.Helper()
+	start, err := strconv.ParseInt(since, 10, 64)
+	if err != nil {
+		t.Fatalf("device time %q: %v", since, err)
+	}
+	checkin := func() time.Time {
+		at, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(d.State()["last_checkin_at"]))
+		return at
+	}
+	Until(t, d.Name+": a check-in one rollout round after the retract", 5*time.Minute, 5*time.Second, d.checkinTick(),
+		func() bool { return checkin().Unix() > start+65 })
+	quiet := func() bool {
+		if d.Must("sudo sh -c 'test -e /var/lib/paddock/staging/request.json || test -e /var/lib/paddock/state/probation.json' && echo busy || echo idle") != "idle" {
+			return false
+		}
+		raw := d.Must("sudo cat /var/lib/paddock/state/update-result.json 2>/dev/null || true")
+		if raw == "" {
+			return true
+		}
+		var r struct {
+			At time.Time `json:"at"`
+		}
+		reported, err := time.Parse(time.RFC3339Nano, fmt.Sprint(d.State()["reported_update_at"]))
+		return json.Unmarshal([]byte(raw), &r) == nil && err == nil && reported.Equal(r.At)
+	}
+	var quietSince time.Time
+	Until(t, d.Name+": no agent update in flight across a check-in", 15*time.Minute, 5*time.Second, d.checkinTick(),
+		func() bool {
+			if !quiet() {
+				quietSince = time.Time{}
+				return false
+			}
+			now := checkin()
+			if quietSince.IsZero() {
+				quietSince = now
+				return false
+			}
+			return now.After(quietSince)
+		})
+}
+
+// s4Releases is the Share key of the releases of S4, which TestAgentGates retracts before S5. AfterAll still retracts
+// each one at the end, for a run that never reaches that step; an already halted release is left as it is.
+const s4Releases = "S4 releases"
+
 // release marks t as gate and releases a new version once every VM running in parallel arrived at it: a rollout
 // reaches every device.
 func release(t *testing.T, d *Device, gate string, minor int, label string, tags []string) string {
 	t.Helper()
 	d.Gate(t, gate)
-	return d.Together(t, gate, "release", func() string {
+	v := d.Together(t, gate, "release", func() string {
 		v := version(minor, label)
 		d.s.Release(t, v, tags)
 		d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
 		return v
 	})
+	d.Share(s4Releases, d.Shared(s4Releases)[d.Name]+" "+v)
+	return v
 }
 
 // stage puts a release into the device's staging directory exactly as the agent stages a download, and signals the

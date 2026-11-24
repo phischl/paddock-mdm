@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
@@ -303,11 +305,12 @@ func (h *Helper) managedFiles(ctx context.Context) string {
 	return stepDone
 }
 
-// Himmelblau's caches and configuration; home directories of directory users are never touched.
-var himmelblauPaths = []string{"/etc/himmelblau", "/var/cache/himmelblau", "/var/lib/himmelblau",
+// Himmelblau's caches and configuration; home directories of directory users are never touched. The purge leaves the
+// socket nodes in /run/himmelblaud behind (the socket unit keeps them, PDK-1126).
+var himmelblauPaths = []string{"/etc/himmelblau", "/var/cache/himmelblau", "/var/lib/himmelblau", "/run/himmelblaud",
 	"/etc/apt/sources.list.d/paddock-himmelblau.list", "/etc/apt/keyrings/himmelblau.gpg"}
 
-// himmelblau purges the Himmelblau packages and removes their configuration and caches.
+// himmelblau purges the Himmelblau packages and removes their configuration, caches, socket drop-in and NSS sources.
 func (h *Helper) himmelblau(ctx context.Context) string {
 	var errs []string
 	if err := h.run(ctx, "apt-get", purgeArgs(h.himmelblauPackages(ctx)...)...); err != nil {
@@ -318,10 +321,73 @@ func (h *Helper) himmelblau(ctx context.Context) string {
 			errs = append(errs, err.Error())
 		}
 	}
+	for _, p := range reconcile.HimmelblauSocketDropIns {
+		if err := h.remove(p); err != nil {
+			errs = append(errs, err.Error())
+		}
+		_ = os.Remove(h.path(filepath.Dir(p))) // only when empty: an administrator's drop-ins stay
+	}
+	if err := h.run(ctx, "systemctl", "daemon-reload"); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := h.nsswitch(ctx); err != nil {
+		errs = append(errs, err.Error())
+	}
 	if len(errs) > 0 {
 		return failed("%s", strings.Join(errs, "; "))
 	}
 	return stepDone
+}
+
+// nsswitchFile is the NSS configuration; nss-himmelblau's postinst appends " himmelblau" to these databases and no
+// maintainer script of the package takes it out again.
+const nsswitchFile = "/etc/nsswitch.conf"
+
+var nsswitchDatabases = []string{"passwd", "group", "shadow", "initgroups"}
+
+// nsswitch takes the himmelblau source out of the lines nss-himmelblau's postinst wrote: a database line without
+// leading blanks that ends in exactly " himmelblau", names it once, keeps another source and carries no comment. Any
+// other line that names it was edited by an administrator and stays as it is, logged; a lookup through the missing
+// module fails silently. The file is replaced atomically with its mode and owner, and only when a line changed.
+func (h *Helper) nsswitch(ctx context.Context) error {
+	p := h.path(nsswitchFile)
+	info, err := os.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		slog.WarnContext(ctx, "the NSS configuration is not a regular file; left as it is", "file", nsswitchFile)
+		return nil
+	}
+	data, err := os.ReadFile(h.path(nsswitchFile))
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		db, sources, ok := strings.Cut(strings.TrimLeft(line, " \t"), ":")
+		fields := strings.Fields(sources)
+		if !ok || !slices.Contains(nsswitchDatabases, db) || !slices.Contains(fields, "himmelblau") {
+			continue
+		}
+		if db+":"+sources == line && strings.HasSuffix(sources, " himmelblau") && len(fields) > 1 &&
+			!strings.Contains(line, "#") && slices.Index(fields, "himmelblau") == len(fields)-1 {
+			lines[i], changed = strings.TrimSuffix(line, " himmelblau"), true
+			continue
+		}
+		slog.WarnContext(ctx, "an edited NSS line names himmelblau; left as it is", "file", nsswitchFile, "database", db, "line", i+1)
+	}
+	if !changed {
+		return nil
+	}
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if st == nil {
+		return fmt.Errorf("%s: no owner", nsswitchFile)
+	}
+	return fsutil.WriteFileOwned(p, []byte(strings.Join(lines, "\n")), info.Mode().Perm(), 0o755, int(st.Uid), int(st.Gid))
 }
 
 // himmelblauPackages is the installer's selection plus every other package named himmelblau* that dpkg knows as

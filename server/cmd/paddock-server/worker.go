@@ -327,7 +327,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, s.indexRetention).WithDiagnosticsObjects(escrowObjects),
 			app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, s.retentionEvery).WithOffboardedDevices(offboarded)
 		inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
-			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery).WithSLASummary(app.NewVulnerabilitySLASummary(runner))
+			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery).WithSLASummary(app.NewVulnerabilitySLASummary(runner)).WithBinder(fleetClient).WithAdmin(fleetClient)
 		osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(s.osvURL), pool, platformPool, s.osvEvery)
 		offboard := worker.NewOffboarding(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
 			Platform: platformPool, Identity: ak, Inventory: fleetClient, Cache: cache, Sessions: sessions.NewStore(vk),

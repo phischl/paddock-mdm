@@ -455,6 +455,7 @@ var informational = map[audit.Code]bool{
 	"device.groups_changed":                         true,
 	"device.install_now_requested":                  true,
 	"device.inventory_host_kept":                    true,
+	"device.inventory_host_removed":                 true,
 	"device.inventory_purged":                       true,
 	"device.inventory_viewed":                       true,
 	"device.name_changed":                           true,

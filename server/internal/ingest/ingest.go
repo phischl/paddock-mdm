@@ -56,6 +56,12 @@ type Heartbeat struct {
 	ClockOffsetS int64 `json:"clock_offset_s"`
 	// DeliveredCommands are the commands the check-in response carried (plan M4a decision 3).
 	DeliveredCommands []uuid.UUID `json:"delivered_commands,omitempty"`
+	// FleetDeviceToken is the validated device token of fleetd the agent reported (ADR 0057); "" when it sent none or
+	// garbage.
+	FleetDeviceToken string `json:"fleet_device_token,omitempty"`
+	// FleetEnrollmentResetAt is the agent's announced enrollment reset of fleetd within the accepted window; nil
+	// otherwise (ADR 0057, H14).
+	FleetEnrollmentResetAt *time.Time `json:"fleet_enrollment_reset_at,omitempty"`
 }
 
 // Events is a batch of device events (routing key ingest.event.<org>, message_id random).

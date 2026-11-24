@@ -84,6 +84,10 @@ func TestStalledVersionDefersTheUpdateRequest(t *testing.T) {
 		f := newFake(t)
 		release, clock := f.stallVersion("A", "1.0.0", f.good())
 		f.start()
+		// The agent checks in before Run looks for a request left from before the restart: a request staged in between
+		// is deferred twice, by resumeRequest and by the SIGUSR1, and the second wait of 20 s outlasts the advance
+		// below (PDK-1132). The first tick comes after that look.
+		f.waitSent()
 		f.waitFor("the running agent checked in", f.checkedIn)
 		if err := os.Remove(f.cfg.LastCheckin); err != nil {
 			t.Fatal(err)
@@ -330,6 +334,9 @@ func TestStalledSelfTestKeepsTheCheckedVersion(t *testing.T) {
 		return runVersion(dir, 10*time.Second)
 	}
 	f.start()
+	// Staged before Run looked for a request left from before the restart, the request would take the first version
+	// call there and onRequest's call would time out (PDK-1132). The first tick comes after that look.
+	f.waitSent()
 	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
 	f.waitFor("the new agent checked in", f.checkedIn)
 	if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.FromVersion != "1.0.0" {

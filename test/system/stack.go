@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,12 @@ type Stack struct {
 	// publishMu serializes PublishInstalledAgent's check and publish: the VMs install in parallel, and the second one
 	// must see the release the first published (plan M5a amendment 2026-11-16, review round 1, A9).
 	publishMu sync.Mutex
+	// gate, when set, is the organization administrator the Stack acts as instead of alice (gate OS1, whose VMs enroll
+	// into an organization of their own).
+	gate *orgAdmin
+	// orgGone is set once the Stack's organization was deleted: the cleanups of its resources then have nothing to
+	// delete, and a 401 or 404 is the expected answer.
+	orgGone atomic.Bool
 }
 
 func newStack(t *testing.T) *Stack {
@@ -67,6 +74,16 @@ func (s *Stack) Login(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if s.gate != nil {
+		admin, err := s.gate.login(ctx)
+		if err != nil {
+			t.Fatalf("login %s: %v", s.gate.username, err)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.alice = admin
+		return
+	}
 	alice, err := portal.Login(ctx, portal.Alice)
 	if err != nil {
 		t.Fatalf("login alice (run make dev-seed): %v", err)
@@ -95,6 +112,10 @@ func (s *Stack) StepUp(t *testing.T) {
 	t.Helper()
 	if s.lab != nil {
 		s.lab.stepUp(t, s.session(), s.lab.orgAdmin)
+		return
+	}
+	if s.gate != nil {
+		s.gate.stepUp(t, s.session())
 		return
 	}
 	for attempt := 1; ; attempt++ {
@@ -147,6 +168,9 @@ func (s *Stack) RevokeOnCleanup(t *testing.T, tokenID string) {
 // cleanupCall sends a cleanup request as alice and reports, without stopping, a status other than ok. It signs in
 // again once if the session ended, e.g. after a gate restarted the stack.
 func (s *Stack) cleanupCall(t *testing.T, method, path string, ok ...int) {
+	if s.orgGone.Load() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	res, err := s.session().Do(ctx, method, path, nil)

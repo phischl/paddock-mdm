@@ -327,6 +327,20 @@ create a system account; the uninstall helper purges the Himmelblau packages its
 - `docs/operations/software.md`: "What the device does", "Self-service app", "Residual risks" (written with this
   amendment) and the troubleshooting row (PDK-983).
 
+**Addendum 2026-11-17 (PDK-1126).** Himmelblau 4.0.8's `himmelblaud.socket` stops with the daemon (`PartOf`) but keeps
+its socket file (`RemoveOnStop=no`), so during a hold `pam_himmelblau` prints "connection refused" to the standard
+output of every PAM caller; with the file missing, account and session checks (`sudo -u` or `sudo -n` without a
+password prompt) print nothing, while a password authentication still waits about 1 s, shows two Himmelblau
+messages at the login prompt (PAM conversation) and prints one "timed out waiting for himmelblaud socket" line on
+standard output, also for local users. The login reconciler therefore
+manages the drop-in `/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`, nothing else), and
+the same drop-in for `himmelblaud-tasks.socket` and `himmelblaud-broker.socket`, like `himmelblau.conf`: written
+before the installation, rewritten on drift with a `daemon-reload` and reported as `login.applied` (`config`); a
+failed reload is retried by the next pass, and a failure after the deny list is reported only after the sessions of a
+lock were handled. The `reset` removal takes them out again together with the socket files and the `himmelblau`
+sources nss-himmelblau's postinst appended to `/etc/nsswitch.conf`. The PAM wait of about 1 s per password
+authentication during a hold is recorded in RR-133.
+
 ## Amendment 2026-11-11 b — the remaining points of the hold (PDK-985, PDK-990, PDK-991; architect decisions)
 
 Three stubs left open by the amendment 2026-11-10 are decided. Binding language: **MUST** / **MUST NOT**. Where
@@ -2666,3 +2680,2887 @@ R15 differs from R3, R4, R7 or R13, R15 wins.
 2. The pass at loop start raises an event on a regular boot in a VM gate.
 
 The remaining simplifications (S2–S9, N4, N5) are the alpha.12 stub PDK-1122g. They are not part of this round.
+
+### R16 (PDK-1122j): update results keep the slot baseline
+
+Processing an update result no longer adopts what `current` points at or what the slots hold. Each release this agent
+staged settles at most once, and only a result that matches it can move the baseline.
+
+**Persisted state (`integrity.json`).** `Staged` (version, sha256) stays as is. `LastStaged` and `RollbackPending` are
+replaced by one record `LastResult *AppliedResult` with the fields `version` (string), `sha256` (string, the staged hash),
+`at` (time, the `at` of the result), `outcome` (string) and `rollback_pending` (bool, `omitempty`). All fields are
+`omitempty` additions to the baseline, so an older agent still reads it.
+
+**Signature.** `integrity.UpdateResult(l paths.Layout, version, outcome string, at time.Time) (unstaged bool, err error)`.
+The rules apply in this order; the first that matches decides.
+1. No record of the slots (`Expected[current]` absent): nothing changes, `unstaged` is false, no event. This covers a
+   device whose agent never recorded a staged release (update from a release without the check). On an established
+   device the next pass reports the missing record as `baseline_reset` (R14), so this is not silent.
+2. Replay: `LastResult` has the same `version`, `outcome` and `at`: nothing changes, `unstaged` is false. This is the
+   repeat after a crash between the baseline and the state file.
+3. Staged: `Staged` is set and its version equals `version`. The slot whose observed hash equals the staged hash is
+   taken. `current` moves only on `updated` or `rollback_failed`, and only to that slot. `Staged` is cleared and
+   `LastResult` is set with `rollback_pending` true only for `rollback_failed`; any earlier `LastResult` is replaced.
+4. Completed rollback: `outcome` is `rolled_back`, `LastResult.rollback_pending` is true and `LastResult.version` equals
+   `version`. `current` moves to the other slot only if that slot is unchanged against the baseline and the observed
+   `current` slot is not the staged slot. `LastResult` is replaced with this result and `rollback_pending` false.
+5. Anything else is unstaged: the whole baseline is kept, `Staged` and `LastResult` stay unchanged, `unstaged` is true.
+   The caller emits `device.tamper_protected_file_changed` (`TamperProtectedFileChanged`) once per result `at`, with
+   reason `update_result_unstaged` (`protocol.TamperReasonUpdateResultUnstaged`, next to `check_suspended` and
+   `baseline_reset`) and `File` `integrity.UpdateResultFile`. The audit code description names the reason.
+
+Every other outcome keeps `Expected[current]`, so the next quiescent pass reports a deviation. A result for a settled
+release (second `updated`, `rollback_failed` or `rolled_back` with a new `at`) is unstaged. `RecordStaged` clears
+`LastResult`. Residual, accepted: while a release is staged and not yet settled, one result for it can take effect, and
+after a genuine `rollback_failed` one `rolled_back` can move `current` once to the other slot's genuine binary (R11 L3).
+RR-148 states both and does not claim that rewritten results go undetected beyond what this rule detects. The comment at
+`agent/internal/agent/updates.go:117` is updated to this rule.
+
+**Gate.** The system gate retracts the releases of S4 in a shared step before S5 and then waits for two conditions, polling
+with the existing helpers and without a fixed sleep: first a check-in of each VM carries no offer (the offer stays cached
+for up to one rollout round of 60 s), then the device is quiet (no `request.json`, no `probation.json`, the last update
+result processed) before S5 flips.
+
+**Tests** (each fails without its rule; the first three fail on `a40549bd`).
+- `updated` then a forged `rollback_failed`, a flip of `current` and a forged `rolled_back`: reported.
+- `rolled_back`, a flip and a forged `updated`: reported. `self_test_failed`, a flip and a forged `rollback_failed`: reported.
+- Repeating `rollback_failed`, `rolled_back` and `updated` for one version in several rounds (toggle): every round after
+  the first reports, and no baseline move is silent.
+- A genuine `rollback_failed` then `rolled_back` and a regular `updated`: no event.
+- A first result without any baseline record (update from a release without the check): no event.
+- A replay with the same `at`: no event; the same result with a different `at` after settlement: the event.
+
+## Amendment 2026-11-16 d (architect, PDK-1122d) — osquery that stops evaluating, a failing agent-running query, and the speaking host
+
+Status: **accepted** as reduced (2026-11-17, main, `decisions-alpha11.md` §159).
+- Extends amendment c. Where the two differ, this amendment wins.
+- ADR 0056 records the decision in its amendment "d" of the same date.
+- Ticket PDK-1122d, risk high. Implementation starts after PDK-1123 (amendment 2026-11-17 e) is merged.
+- The claim report, the hold and the binding of an earlier draft of this amendment moved to amendment e (PDK-1123).
+
+### 1. Goal
+
+1. Amendment c judges a device by its **speaking host** (amendment e, section 3, "Terms"), not by the newest of all
+   hosts with its hardware UUID.
+2. An osquery that stops storing policy results while orbit keeps talking to Fleet is reported as a silent fleetd
+   (`reason` `policies`).
+3. A `paddock_agent_running` query that stops answering counts as a failing evaluation.
+
+Report only; no device API, admin API, agent or bundle change.
+
+### 2. Context
+
+- **Review of PDK-1122c, finding L1.**
+  - (L1-A) A `paddock_agent_running` query that fails on the device (the `processes` table disabled, or the query on
+    the watchdog denylist) yields `""`. The row is deleted every round (`DeleteMissingPolicyResults`), and rule (b)
+    never fires.
+  - (L1-B) An `osqueryd` stopped with SIGSTOP while orbit runs stops Fleet's `policy_updated_at`. If orbit's requests
+    keep `seen_time` fresh, neither rule (b) nor amendment c fires.
+- **Amendment c's E1** uses "the newest `seen_time` of the hosts whose hardware UUID equals the device's". After
+  amendment e, only the speaking host's data counts for a device. The same must hold for its silence.
+- **From amendment e:** `ports.HostSeen` (`Ref`, `HardwareUUID`, `SeenAt`, `EnrolledAt`), `HostPage.Seen`,
+  `inventory.Targets` and the round order (bindings → store → claim watch → agent reports).
+
+### 3. Binding decisions
+
+**D-c1 Changes to amendment c.**
+
+1. Migration: `server/migrations/paddock/00164_fleet_silence_watch.sql` (amendment e takes `00163`). Its content is
+   amendment c's section 6. In addition, `paddock_fleet_watch_devices` returns `i.policy_updated_at` after
+   `last_seen_at` (for F5).
+2. E1: `seen(d)` is the `seen_time` of the device's speaking host, from amendment e's `Targets`: the bound host, or
+   else the first-enrolled host of its UUID. A device whose speaking host is not listed uses the stored
+   `device_inventory_ref.last_seen_at`, as amendment c's host-deleted branch does.
+3. `ports.HostSeen` gains `PolicyUpdatedAt *time.Time` (nil when the host never stored policy results). The Fleet
+   adapter fills it in `Seen`. Amendment c's own `Seen` adapter work is already done by amendment e.
+4. `inventory.WatchFleet` gains the parameter `t inventory.Targets`. Its signature becomes
+   `WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now time.Time, live time.Duration) FleetWatch`.
+5. The silence watch runs in the round directly after amendment e's claim watch, before `reportAgents`.
+6. Amendment c's gauge `paddock_inventory_fleet_silent_suppressed`, alert `PaddockFleetSilenceWatchSuppressed` and
+   runbook subsection keep their names. The claim watch has its own gauge and alert (amendment e, H9).
+7. Amendment c's `TestWatchFleet` row "duplicate hosts of one UUID: the newest `seen` counts" is replaced by: "a
+   speaking host 20 min stale and another claimant fresh, live, `since = now - 15m` → reported with `reason
+   contact`" (regression).
+
+**F5 Osquery that stops evaluating: a second reason for `device.tamper_fleetd_silent`.** Extend E1:
+
+- `P` = the newest `policy_updated_at` of any listed host (Fleet's clock).
+- **policy-stale(d)**: the speaking host's `PolicyUpdatedAt` is set and older than `P - PolicySilence`. If the
+  speaking host is not listed, the stored `device_inventory_ref.policy_updated_at` is used.
+  `PolicySilence = 30 min`, three times Fleet's default policy interval of 10 min.
+- **contact-stale(d)** is amendment c's `stale(d)`.
+- **stale(d)** = contact-stale(d) OR policy-stale(d). Amendment c's E2 state machine, E3 guards and E4 rows apply
+  unchanged to this `stale(d)`. A device counts as `Fresh` in E3 only if it is neither contact-stale nor
+  policy-stale.
+- Param `reason` = `contact` if contact-stale, else `policies`.
+- Comparing with `P`, not with the host's own `seen_time`, keeps a Fleet-wide stall of policy evaluation from looking
+  like a device fault: the same argument as E1's `R`.
+- A NULL `policy_updated_at` (a host that never stored results) is not policy-stale.
+
+**F6 Unanswered agent-running query: counted as failing.** In `Round`, before `StoreHost`, the worker moves
+`paddock_agent_running` from `UnansweredPolicies` to `Policies` as `{Passing: false}` when the host's
+`PolicyUpdatedAt` is at least `binaryEvaluationLag` after this process first applied the policy definition. That is
+the gate `countUnanswered` already uses.
+
+- Only this key qualifies: D7 keeps its query text constant, so after the first evaluation an empty answer means that
+  the query failed. The binary policy and `disk_encrypted` keep amendment A7.
+- Rule (b)'s 15 minutes of continuous failure absorb a single empty answer: a policy just recreated after a Fleet
+  reset, or a partial batch (L2).
+- The gauge `paddock_inventory_policy_unanswered_hosts` keeps counting these hosts.
+- Option not chosen: a separate signal or code. The event says what an operator needs to know (fleetd cannot confirm
+  the agent), and the description names the cause.
+
+**F7 Codes.**
+
+- `device.tamper_fleetd_silent` (amendment c, not released):
+  - Params become `fleetd_seen_at`, `policy_updated_at`, `last_contact_at`, `silent_since`, `reason`.
+  - Description: "fleetd on a device stopped working with the inventory system for at least 15 minutes while the
+    device kept checking in with Paddock, confirmed for 15 more minutes while most other devices reached the
+    inventory system (actor: system). reason contact: the inventory system has not heard from the device's fleetd for
+    15 minutes longer than from the most recent host; reason policies: fleetd still talks to it, but osquery has
+    stored no policy results for 30 minutes longer than the most recent host (osquery stopped, frozen or broken while
+    orbit runs). fleetd was stopped, frozen, removed or cut off from the inventory system's address only, or
+    something other than the genuine agent checks in for the device. fleetd_seen_at and policy_updated_at are the
+    device's last contact and last stored policy results in the inventory system's clock (absent when unknown);
+    last_contact_at is the device's last check-in; silent_since is when the worker first found the silence."
+  - Messages: EN "fleetd on {target} no longer works with the inventory system while the device keeps checking in";
+    DE "fleetd auf {target} arbeitet nicht mehr mit dem Inventarsystem, während sich das Gerät weiter meldet".
+- `device.tamper_agent_not_running` (released): the description gains, after "…while the device may have kept
+  checking in", the text ", or its query stopped answering on a host that evaluates its policies". Params, messages,
+  MSGID and finding are unchanged. This is additive, like amendment b's D6.
+
+**F8 Contract.** Device API, admin API, agent, supervisor and bundle are unchanged. Audit event contract: the param
+and description change of an unreleased code, and an additive description change of a released code. Database: one
+migration, `00164`.
+
+### 4. Non-goals
+
+- Everything amendment e covers: binding, claims, hold, wave guard of claims, Fleet configuration.
+- No change to `agent/` (in particular `agent/internal/revoke/`), the supervisor, `pkg/` or `api/openapi/*.yaml`.
+- No change to the policy SQL files, the Fleet settings, or the attention function.
+
+### 5. Files
+
+Amendment c's table applies, with these changes:
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00164_fleet_silence_watch.sql` | new (replaces c's `00163_…`) | D-c1 (1) |
+| `server/internal/ports/inventory.go` | change | `HostSeen.PolicyUpdatedAt` |
+| `server/internal/adapters/fleet/hosts.go`, `hosts_test.go` | change | `PolicyUpdatedAt` in `Seen` |
+| `server/internal/inventory/fleetwatch.go`, `fleetwatch_test.go` | new (as c) | D-c1, F5 |
+| `server/internal/inventory/inventory.go`, `inventory_test.go` | change | `UnansweredAgentRunningAsFailing` (F6) |
+| `server/internal/worker/inventory.go`, `inventory_test.go` | change | c's step after the claim watch, F6 rewrite |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | F7 |
+| `server/web/src/locales/en.json`, `de.json` | change | F7 messages |
+| `test/acceptance/devicesim/fleet.go`, `fleet_test.go` | change | `AgentRunningQueryFails` |
+| `test/acceptance/inventory_test.go` | change | section 8 |
+| `test/system/inventory_test.go` | change | c's F7 with the extension below, probes |
+
+### 6. Interfaces and texts
+
+```go
+// server/internal/inventory/fleetwatch.go (amendment c), additionally
+const PolicySilence = 30 * time.Minute // F5
+// WatchedDevice gains PolicyUpdatedAt *time.Time; SilentDevice gains PolicyUpdatedAt *time.Time and Reason string
+// ("contact" | "policies").
+
+// server/internal/inventory/inventory.go
+// UnansweredAgentRunningAsFailing returns inv with PolicyAgentRunning moved from UnansweredPolicies to Policies as
+// failing when gateOpen; otherwise inv unchanged (F6).
+func UnansweredAgentRunningAsFailing(inv ports.HostInventory, gateOpen bool) ports.HostInventory
+```
+
+Texts (applied after amendment c's texts and amendment e's):
+
+- **RR-149**, not-reported list: replace the item that begins "a `paddock_agent_running` query made to fail on the
+  device" and ends "(both follow-up PDK-1122d);" with "a `paddock_agent_running` query that never answered on the
+  device since the server last started (an answer that stops later counts as failing, plan M5a amendment 2026-11-16
+  d);". Before "Not reported:", add: "An `osqueryd` that stops storing policy results while orbit runs is reported as
+  `device.tamper_fleetd_silent` with reason `policies` (amendment d)."
+- **`docs/architecture.md` §11.5**: amendment c's row, third column: "`device.tamper_fleetd_silent` after 15 min of
+  silence (no contact, or no stored policy results for 30 min) confirmed for 15 more min".
+- **`docs/operations/fleet.md`**: the interval paragraph gains "Keep `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL` at 15
+  minutes or less: the worker reports a device whose policy results are 30 minutes older than the newest host's."
+- **Changelog** `changelog.d/PDK-1122d.security.md`, after amendment c's text: "A frozen osquery and an agent check
+  that stops answering are reported too."
+
+### 7. Steps
+
+Amendment c's steps, with these changes:
+- Step 1 uses migration `00164`.
+- After step 2: `go test ./server/internal/inventory/ -run 'TestWatchFleet|TestUnansweredAgentRunning'`.
+- The worker step places the silence watch after amendment e's claim watch.
+- The system step runs F7 with the extension and the probes below.
+
+### 8. Tests
+
+Amendment c's tests apply, with D-c1 (7). "Regression" tests MUST fail without the change.
+
+- **Unit `TestWatchFleet`**, new rows:
+  - D-c1 (7);
+  - **policies**: speaking host fresh, `policy_updated_at = P - 31m`, live, confirmed → `reason policies`;
+    `P - 29m` → not stale (boundary); NULL → not stale; a Fleet-wide stall (every host at `P - 40m`) → nothing.
+- **Unit `TestUnansweredAgentRunningAsFailing`**: gate open → moved as failing; gate closed → unchanged; the binary and
+  `disk_encrypted` keys are never moved.
+- **Adapter**: `TestListHostsSeen` gains `policy_updated_at`.
+- **Worker `TestInventoryRoundAgentRunningQueryFails`** (regression L1-A): `paddock_agent_running` is unanswered with
+  `policy_updated_at` advancing 10 min per round past the gate, and the device checks in → one
+  `device.tamper_agent_not_running` after the third round.
+- **devicesim** `TestFleetHostAgentRunningQueryFails`: the agent-running query gets status 1 and no rows; other queries
+  are answered as before.
+- **Acceptance `TestInventoryAgentRunningQueryFails`**: a device whose host first passes, then sets
+  `AgentRunningQueryFails`. Wait until the stored row is failing with `failing_since`, then seed it 16 minutes back.
+  Wait until alice sees `device.tamper_agent_not_running`.
+- **System, extension of c's F7** (while orbit is stopped):
+  1. After step 2, the harness enrolls `EnrollFleetAs(identifier "pdk-f7-second"+suffix, uuid = the VM's UUID)`,
+     which passes every policy, and answers every 30 s in a goroutine stopped by `t.Cleanup`.
+  2. Step 3's `device.tamper_fleetd_silent` MUST still come, with `reason` `contact` (regression D-c1).
+  3. Before step 4 of c, stop that host and delete it through Fleet's API. Amendment e's claim event for it is
+     expected: per VM, `device.tamper_fleet_host_claimed` count +1.
+- **System probes** (recorded in the result document, not gates):
+  - **F7c**: `kill -STOP` every `osqueryd` (`pgrep -x osqueryd`) for 4 minutes, reading the host's `seen_time` and
+    `policy_updated_at` at the start and the end, then `kill -CONT` (also in `t.Cleanup`). The probe answers whether
+    orbit keeps `seen_time` fresh.
+  - **Enrollment stability**: the VM host's `last_enrolled_at` at the start and the end of `TestInventoryGates`.
+
+### 9. Acceptance criteria
+
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC-d1 | Given a device whose fleetd is stopped while another host with its UUID stays fresh, then `device.tamper_fleetd_silent` is still reported (F7 extension) | D-c1 | Org admin |
+| AC-d2 | Given an osquery that stores no policy results for 30 min longer than the newest host while fleetd is otherwise fresh, then `device.tamper_fleetd_silent` with `reason` `policies` (worker tests) | F5 | Org admin |
+| AC-d3 | Given a `paddock_agent_running` query that stops answering while the device checks in, then `device.tamper_agent_not_running` after evaluations 15 min apart | F6 | Org admin |
+| AC-d4 | Device API, admin API and agent unchanged | ADR 0047 | Maintainer (diff, CI `upgrade`) |
+
+### 10. Freedoms
+
+Amendment c's freedoms; and whether F5 shares a helper with E1.
+
+### 11. Stop conditions
+
+Amendment c's stop conditions, plus:
+
+- The enrollment-stability probe shows a change across F1–F7.
+- An existing acceptance or system gate starts recording `device.tamper_agent_not_running` through F6.
+- The change would need an agent, supervisor, `pkg/`, device API or admin API change, or a new dependency.
+- The production size exceeds about 480 lines.
+
+### 12. Risks
+
+- **`FLEET_OSQUERY_POLICY_UPDATE_INTERVAL` above 15 min** raises `reason policies` falsely; documented in fleet.md.
+- **The F7c probe shows that orbit does not keep `seen_time` fresh** while osquery is frozen: then a frozen osquery
+  is already contact-stale, and F5 is a second path to the same report. No change needed.
+
+### 13. Size (estimate)
+
+Amendment c's estimate was about 360 production and 1015 test lines. With D-c1 (amendment e already builds the
+`Seen` adapter: about −25), F5 (~40), F6 (~25) and D-c1's other changes (~10):
+
+| Part | Lines |
+| --- | --- |
+| Production, hand-written | about 410 |
+| Generated | about 70 |
+| Tests (c's ~1015 plus unit ~70, worker ~60, devicesim ~20, acceptance ~60, system ~40) | about 1265 |
+| Docs by the implementer | about 70 |
+
+## Amendment 2026-11-17 e (architect, PDK-1123) — inventory hosts bound to their device
+
+Status: **accepted** (2026-11-17, main, `decisions-alpha11.md` §159, with the conditions of H13 and H14). ADR 0057
+records the decision.
+Ticket PDK-1123, risk high, release blocker for 0.1.0-alpha.11.
+- Lands **before** PDK-1122d (amendments c and d). Amendment d lists what PDK-1122d changes on top of it.
+- Builds on PDK-1122b (agent binary policy, migration 00161) and PDK-1122c (amendment b, migration 00162), both
+  merged into the integration branch.
+
+### 1. Goal
+
+1. Each device names its inventory host over its signed device connection. From then on, the worker stores only that
+   host's inventory, vulnerability findings, hardware facts and policy results for the device.
+2. Until a device has named its host (agents before 0.1.0-alpha.11, devices without fleetd), only the host that Fleet
+   enrolled first for the device's hardware UUID is stored.
+3. The organization admin sees `device.tamper_fleet_host_claimed` when another inventory host claims a device or the
+   device's host is enrolled again. Agent reports that the inventory system derives wait 60 minutes after a
+   re-enrollment.
+4. A second device with the same hardware UUID no longer stops a bound device's inventory.
+
+### 2. Context
+
+- **Mapping today.** The worker (`server/internal/worker/inventory.go`, `Inventory.Round`) lists Fleet's hosts in
+  pages ordered by ID (`fleet.Client.ListHostsChangedSince`, `order_key=id`). It maps each changed host through its
+  hardware UUID (`app.InventorySync.MapHosts` → `paddock_inventory_devices`, migration 00024: a UUID maps only if
+  exactly one active or quarantined device has it). It stores every mapped host with `StoreHost`
+  (`UpsertInventoryRef … ON CONFLICT (device_id) DO UPDATE`).
+- **Fleet identity today.** `deploy/compose/compose.yaml` sets `FLEET_OSQUERY_HOST_IDENTIFIER: uuid`. The agent
+  writes `/etc/paddock/orbit.env` (`agent/internal/reconcile/inventory.go`, `fleetdFiles`) without
+  `ORBIT_HOST_IDENTIFIER`, so orbit uses its default `uuid`.
+- **What Fleet free offers** (sources at tag `fleet-v4.94.1`; details in ADR 0057, Context):
+  - `ORBIT_HOST_IDENTIFIER=instance`: orbit and osquery enroll under osquery's per-installation `instance_id`.
+  - `osquery.host_identifier=provided`: an osquery enrollment uses the identifier osquery sends. orbit's enrollment
+    always uses the identifier orbit sends.
+  - orbit keeps a device token (a random UUID, lower case) in `/opt/orbit/identifier`, mode 0644. It registers the
+    token for its own host (`POST /api/fleet/orbit/device_token`, authenticated by orbit's node key) and rotates it
+    when it is one hour old.
+  - `GET /api/latest/fleet/device/{token}` answers `{"host": {"id": …, "uuid": …, …}}` for a token registered within
+    the last hour (`token = ? OR previous_token = ?` and `updated_at` within the TTL), and 401 otherwise. Device
+    endpoints ban an IP address only after 1000 consecutive failures within one minute.
+  - Fleet's host list carries `last_enrolled_at` and `seen_time`. An enrollment that matches an existing host keeps its
+    ID and sets `last_enrolled_at = NOW()` (`EnrollOsquery`, `server/datastore/mysql/hosts.go`).
+  - Teams and team enroll secrets need Fleet Premium. One-time enroll secrets exist only for Apple and Windows MDM.
+- **Device API.** `pkg/protocol.CheckinRequest`; the gateway (`server/internal/transport/http/device/handlers.go`,
+  `checkin`) publishes an `ingest.Heartbeat`. The worker's `Reports.heartbeat` (`server/internal/worker/reports.go`)
+  coalesces heartbeats per device and `devicecache.HeartbeatInterval` (60 s) before `DeviceReports.RecordStatus`. The
+  gateway ignores unknown request fields; an additive field is compatible in both directions (ADR 0047).
+- **ADRs:** 0009 (no Fleet Premium features), 0041 (hostname; context statement on `--host_identifier=uuid`), 0047
+  (upgrade guarantee), 0056 (integrity checks; amendments b and c accepted, amendment d proposed and reduced to
+  PDK-1122d), **0057 (this design, proposed)**.
+
+### 3. Binding decisions
+
+**Terms** (used with exactly this meaning in this amendment, the code and the tests):
+
+- **device token**: the content of `/opt/orbit/identifier`, a lower-case UUID.
+- **binding**: a `device_fleet_binding` row whose `host_id` is set. A device with a binding is **bound**; its
+  `host_id` is its **bound host**.
+- **listed hosts**: every host of Fleet's host list that has a hardware UUID, from all pages of this round, in list
+  order (ascending Fleet ID). `R` = the newest `seen_time` of any listed host (Fleet's clock).
+- **first-enrolled host** of a hardware UUID: the first listed host with that lower-case UUID, among the listed hosts
+  that are not bound to any device.
+- **speaking host** of a device: its bound host if the device is bound, otherwise the first-enrolled host of its
+  hardware UUID. `binding` mode `device` or `first` respectively.
+- **claimant** of a device: a listed host whose lower-case hardware UUID equals the device's. A **live other
+  claimant** is a claimant that is not the speaking host, with a non-zero `seen_time` and `R - seen_time <
+  HostClaimLive` (10 min).
+
+**H1 Fleet identifies hosts by the identifier that fleetd provides.**
+
+- `deploy/compose/compose.yaml`: `FLEET_OSQUERY_HOST_IDENTIFIER: provided`. The comment above it becomes:
+  "Hosts enroll under the identifier fleetd provides, osquery's per-installation instance ID (ADR 0057); Paddock maps
+  hosts to devices through the binding the device reports."
+- Why `provided` and not `instance`: orbit's enrollment always uses orbit's own identifier. With `instance` on the
+  server, a device whose orbit still uses `uuid` gets two hosts. With `provided`, both settings of the device side stay
+  on one host.
+
+**H2 fleetd enrolls under its instance ID; the switch re-enrolls a device once.**
+
+- `fleetdFiles` adds the line `ORBIT_HOST_IDENTIFIER=instance` to `orbit.env`, directly after
+  `ORBIT_FLEET_DESKTOP=false`. The rendered file is then exactly:
+  ```
+  # Managed by Paddock. Do not edit: local changes are reverted.
+  ORBIT_FLEET_URL=<fleet_url>
+  ORBIT_ENROLL_SECRET_PATH=/opt/orbit/secret.txt
+  ORBIT_FLEET_CERTIFICATE=/etc/ssl/certs/ca-certificates.crt
+  ORBIT_DISABLE_UPDATES=true
+  ORBIT_ENABLE_SCRIPTS=false
+  ORBIT_FLEET_DESKTOP=false
+  ORBIT_HOST_IDENTIFIER=instance
+  ```
+- **One-time enrollment reset.** In `Inventory.writeFiles`, before it writes `FleetdEnv`, the reconciler resets
+  fleetd's enrollment when all of these hold:
+  - the package `fleet-osquery` is installed;
+  - `FleetdEnv` exists as a regular file;
+  - its content has no line equal to `ORBIT_HOST_IDENTIFIER=instance`.
+  The reset runs `systemctl stop orbit.service` and then removes `/opt/orbit/secret-orbit-node-key.txt`,
+  `/opt/orbit/identifier` and the directory `/opt/orbit/osquery.db`, with its content. A path that does not exist is
+  not an error. `writeFiles` then writes the files and restarts `orbit.service`, as it already does.
+  - Why: orbit and osquery keep their existing node keys after a configuration change, so the host would keep its old
+    identity. orbit does the same reset itself when it detects a hardware change (`orbit.go`, "detected hardware
+    migration").
+  - A fresh device (no `orbit.env`) and a device without fleetd need no reset: fleetd enrolls with the new
+    configuration from the start.
+- The reset emits no event of its own. A changed `orbit.env` while the same spec is applied is still reported as
+  `tamper.protected_file_changed`, as today.
+- `reconcile.System` gains `RemoveAll(path string) error` (`os.RemoveAll` below the root, like `Remove`).
+  `agent/internal/reconcile/fakesys` implements it.
+- New constants in `agent/internal/reconcile/inventory.go`:
+  - `FleetdDeviceTokenFile = "/opt/orbit/identifier"`;
+  - `fleetdOrbitNodeKey = "/opt/orbit/secret-orbit-node-key.txt"`;
+  - `fleetdOsqueryDB = "/opt/orbit/osquery.db"`;
+  - `fleetdHostIdentifierLine = "ORBIT_HOST_IDENTIFIER=instance"`.
+
+**H3 The agent reports its device token over the device API.**
+
+- `protocol.CheckinRequest` gains
+  ``FleetDeviceToken string `json:"fleet_device_token,omitempty"` ``.
+- `Agent.checkinRequest` reads `reconcile.FleetdDeviceTokenFile` through `a.d.Sys` (nil `Sys`: none) and trims ASCII
+  whitespace. It sends the value when all of these hold:
+  - it matches `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`;
+  - it differs from `a.fleetTokenSent`, the token of the last check-in that returned HTTP 200.
+  Otherwise the field stays empty.
+- After a check-in returns HTTP 200, `a.fleetTokenSent` becomes the token that check-in carried, if it carried one.
+  `fleetTokenSent` lives in memory only: after an agent restart, the token is sent once more.
+- The token is never logged, never written to the agent's state, and never put into the health report.
+
+**H4 Gateway and ingest record the token before heartbeat coalescing.**
+
+- `ingest.Heartbeat` gains ``FleetDeviceToken string `json:"fleet_device_token,omitempty"` ``.
+- The gateway sets it to `req.FleetDeviceToken` if that matches the regular expression of H3, and to `""` otherwise.
+  An invalid value never fails the check-in.
+- `Reports.heartbeat` calls `DeviceReports.RecordFleetDeviceToken` after `MarkDelivered` and before `ClaimHeartbeat`,
+  only for a non-empty token, with `MarkDelivered`'s outcome handling: an unavailable organization is acked, any other
+  error is retried. A coalesced heartbeat therefore never loses a token.
+- `RecordFleetDeviceToken` upserts `pending_token` and `token_reported_at = hb.ReceivedAt` in the device's
+  organization (`InOrg`). It writes only for an active device. An older heartbeat never overwrites a newer token
+  (section 6).
+
+**H5 Binding by the worker.** In every round, after the host list and before any `StoreHost`, the worker loads the
+bindings of active and quarantined devices (`paddock_inventory_bindings`, platform pool). It decides each binding
+with a pending token in ascending `token_reported_at` order:
+
+| # | Condition (first that applies) | Action | `result` label |
+| --- | --- | --- | --- |
+| 1 | `now - token_reported_at >= TokenMaxAge` (50 min) | clear the token, no Fleet call | `expired` |
+| 2 | bound, the bound host is listed with non-zero `seen_time` and `R - seen_time < BindingStale` (15 min) | clear the token, no Fleet call | `current` |
+| 3 | `ResolvePerRound` (200) Fleet calls already made this round | keep the token for the next round | none |
+| 4 | Fleet answers 401 or 404 (`problem.NotFound`) | clear the token | `unknown_token` |
+| 5 | Fleet fails otherwise | keep the token; no further calls this round; the round continues | `unavailable` |
+| 6 | the host's lower-case `uuid` differs from the device's hardware UUID | clear the token; `Warn` `inventory host binding refused` (`organization_id`, `device_id`, `host`) | `uuid_mismatch` |
+| 7 | the host is the bound host | clear the token | `current` |
+| 8 | the device is not bound | bind: `host_id`, `bound_at = now`, clear the token; `Info` `inventory host bound` | `bound` |
+| 9 | otherwise | bind to the new host; `Info` `inventory host rebound` (`previous`, `host`) | `rebound` |
+
+- Every clear and bind is a compare-and-set on `token_reported_at` (section 6), so a token reported meanwhile stays
+  pending.
+- Each decision increments `paddock_inventory_host_bindings_total{result}`.
+- The binding needs no audit event: only the device's own signed connection can name its host, and the claim report
+  (H8) covers what an organization admin must see.
+- Rule 2 keeps Fleet calls to new devices, the one-time re-enrollment (H2) and real host changes. A bound host that
+  keeps talking needs no new call per token rotation.
+
+**H6 Only the speaking host is stored.** For every changed listed host `h`:
+
+1. `h` is the bound host of exactly one device → stored for that device.
+2. `h` is the bound host of two or more devices → stored for none, counted `unmapped`.
+3. otherwise, `MapHosts` maps `h`'s UUID to device `d` (bound devices no longer count in `paddock_inventory_devices`,
+   section 6), and `h` is the first-enrolled host of that UUID → stored for `d`.
+4. otherwise, if `h`'s UUID equals the hardware UUID of any device that has a `device_fleet_binding` row, or `MapHosts`
+   maps it → counted `ignored`, never stored.
+5. otherwise → counted `unmapped`, as today.
+
+- The gauge `paddock_inventory_unmapped_hosts` keeps its meaning.
+- `inventory synced` gains the attributes `ignored`, `bound` (rule 8 and 9 decisions this round) and `claims`
+  (reported claims).
+
+**H7 The claim watch (state from ADR 0057 E).** For every **watched device** (an active device with a
+`device_inventory_ref`; platform function `paddock_inventory_claim_devices`), each round:
+
+- **second host**: at least one live other claimant is listed.
+- **re-enrolled**: the speaking host is listed, its ID equals the stored `external_id`, its `last_enrolled_at` and
+  the stored `fleet_enrolled_at` are both set, and they differ. A changed host ID is a rebinding and is not counted.
+- `fleet_enrolled_at` is set to the speaking host's `last_enrolled_at` whenever the speaking host is listed. It is NULL
+  after the upgrade, so the first round only records it.
+
+| Condition | Transition |
+| --- | --- |
+| re-enrolled | `fleet_reenrolled_at = now` |
+| second host or re-enrolled, `fleet_claim_since` NULL | `fleet_claim_since = now` (episode starts) |
+| `fleet_claim_reported_at` NULL, and either `fleet_reenrolled_at >= fleet_claim_since`, or second host with `now - fleet_claim_since >= HostClaimConfirm` (15 min) | **due** |
+| no second host, and `fleet_reenrolled_at` NULL or older than `now - ClaimQuiet` (60 min) | `fleet_claim_since = NULL`, `fleet_claim_reported_at = NULL` (episode ends) |
+
+- A re-enrollment is due at once: Fleet recorded it, so it is not transient. A second host needs 15 minutes.
+- The live window (10 min) is shorter than the confirmation (15 min). A host that stopped before the episode started,
+  such as the previous host after the one-time re-enrollment (H2), can therefore never become due.
+- `kind` = `reenrolled` if the episode saw a re-enrollment, else `second_host`.
+
+**H8 Hold of Fleet-derived agent reports.** `ListAgentNotRunning` and `ListAgentBinaryUnknown` skip a device whose
+`fleet_reenrolled_at >= now - ClaimQuiet`. Their rows keep `alerted_at` NULL, so a failure that is still there after
+the hold is reported then. The claim watch runs **before** `reportAgents` and `reportBinaries` in the round. A second
+host does not hold reports: H6 already keeps its data out.
+
+**H9 Wave guard.** Let `Claimed` be the number of watched devices with `fleet_claim_since` set after this round's
+transitions, and `Watched` the number of watched devices.
+
+- If `Claimed >= 3` and `2 × Claimed > Watched`, the round reports no claim. The transitions still apply.
+- The worker then logs one `Warn` `inventory claim watch suppressed` (`reason` `claim_majority`, `due`, `claimed`,
+  `watched`) and sets the gauge `paddock_inventory_claim_watch_suppressed` to the number of due devices. Otherwise the
+  gauge is 0.
+- A process whose `WithLeaderLock` call did not run the round sets the gauge to 0.
+- New critical alert `PaddockInventoryClaimWatchSuppressed`: `max(paddock_inventory_claim_watch_suppressed) > 0` for
+  15m.
+- Covered: a Fleet database restore re-enrolls every host whose node key changed after the backup. The H8 hold
+  applies even while reports are suppressed.
+
+**H10 Event `device.tamper_fleet_host_claimed`** (32 characters, no MSGID alias; next to
+`CodeDeviceTamperAgentBinaryChanged`):
+
+```go
+CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+
+CodeDeviceTamperFleetHostClaimed: {
+	Code: CodeDeviceTamperFleetHostClaimed, Emitted: true,
+	Description: "An inventory host other than the one that speaks for a device claims it (actor: system). kind second_host: another host reported the device's hardware UUID and kept contacting the inventory system for 15 minutes; kind reenrolled: the host that speaks for the device was enrolled again, which also happens when fleetd's local state on the device is lost. binding is device when the device named its inventory host over its device connection, first when it has not named one yet and the host the inventory system enrolled first for its hardware UUID speaks for it. Only the speaking host's data is stored for the device; after a re-enrollment, agent reports derived from the inventory system wait 60 minutes. bound_host is the inventory system's ID of the speaking host, other_hosts the IDs of the other live claimants (at most 10, ascending, comma-separated; absent when none), hosts the number of live claimants including the speaking host, enrolled_at the inventory system's time of the latest enrollment of the speaking host (absent when unknown), claim_since when the worker first saw the claim.",
+	Params:   []string{"kind", "binding", "bound_host", "other_hosts", "hosts", "enrolled_at", "claim_since"},
+	Outcomes: []Outcome{OutcomeSuccess},
+	Note:     "Recorded once per claim episode; the episode ends when no other live host claims the device and no re-enrollment was seen for 60 minutes.",
+},
+```
+
+- Tamper finding: `tamperFindingCodes[audit.CodeDeviceTamperFleetHostClaimed] = ""`, opened in the event's
+  transaction. Same pattern as `ReportAgentBinaryUnknown`: `ActionRunner`, mark-reported in the event's transaction,
+  0 rows → no event.
+- Portal messages `audit.device.tamper_fleet_host_claimed`:
+  - EN: "Another inventory enrollment claims {target}"
+  - DE: "Eine weitere Anmeldung im Inventarsystem beansprucht {target}"
+- No attention kind (as amendment c E6). No hostname or other host-reported text in the params. Fleet host IDs are
+  installation-wide numbers.
+
+**H11 Contract, compatibility and upgrade path.**
+
+- **Device API**: one optional request field `fleet_device_token` in `CheckinRequest` (`api/openapi/device.yaml` and
+  `pkg/protocol`). `info.version` stays `1.0.0`, and `protocol.Version` stays `paddock-v1`: additive fields have never
+  bumped them (`os_release`, `health.software`).
+  - An agent before alpha.11 never sends the field; its device stays in mode `first`.
+  - An alpha.11 agent against an alpha.10 server sends a field that the gateway ignores.
+- **Admin API, bundle format, commands, event types:** unchanged.
+- **Audit event contract:** one new code (additive).
+- **Database:** migration `00163_inventory_host_binding.sql`. `00163` is the next free number on every branch and
+  worktree (checked 2026-11-17: only `00162` is used, by PDK-1122c). PDK-1122d moves amendment c's migration to
+  `00164`.
+- **Upgrade order (ADR 0047, server first):**
+  1. The server upgrade restarts Fleet with `provided`. Existing hosts keep their node keys and their records; nothing
+     re-enrolls. Every device is in mode `first`.
+  2. Each device's agent updates in its rollout wave. Its first drift pass (at most 300 s) resets and re-enrolls
+     fleetd under the instance ID; a new Fleet host appears.
+  3. The next check-in (within one check-in interval) carries the new host's token; the next round (at most 5 min)
+     binds it.
+  4. The previous host stops talking. It stays in Fleet, is never stored, and never becomes due (H7).
+  - Between steps 2 and 4, the first-enrolled host is the previous host, which no longer changes, so nothing new is
+    stored for up to about two rounds.
+- **Fleet host count:** each updated device leaves one stale host in Fleet until the follow-up cleanup (PDK-1123a).
+  Fleet free has no host limit.
+
+**H12 Fail safe and isolation.**
+- Report only: no command, lock, quarantine or bundle change.
+- `device_fleet_binding` is organization-scoped with forced RLS. The platform functions return rows across
+  organizations to the worker's platform pool only, as `paddock_inventory_devices` does.
+- The token is a credential for Fleet's device endpoints, which are not published (`Caddyfile`: only
+  `/api/osquery/*`, `/api/v1/osquery/*`, `/api/fleet/orbit/*`). It is kept until the worker's next decision, at most
+  `TokenMaxAge`. It MUST NOT appear in logs, errors, metrics, audit params or the admin API.
+
+**H13 Conditions of acceptance (§159), binding.** They extend sections 5–13; where they differ, H13 wins.
+
+1. **Interim state of older agents (ADR 0057 D1, approved).** RR-22 carries it as a residual, with the upgrade
+   instruction (texts, section 6).
+2. **The device token stays out of logs, audit params and error texts.** It lives in Postgres for at most
+   `TokenMaxAge` (50 min) and is deleted after the decision.
+   - `Reports.heartbeat` does not record a token whose `hb.ReceivedAt` is older than `inventory.TokenMaxAge`. Such a
+     heartbeat is processed without its token.
+   - Each round, before H5, the worker calls the platform function `paddock_expire_fleet_device_tokens(before)` with
+     `before = now - TokenMaxAge`. It sets `pending_token = NULL` on every row of every device state whose
+     `token_reported_at < before`, and returns the count. That also covers retired and pending devices, which H5 never
+     sees.
+   - In RabbitMQ the token is part of the heartbeat message. It stays there only until the worker consumes it,
+     normally seconds. While the worker role is down, a queued heartbeat keeps its token. Fleet itself honours the
+     token for at most one hour after orbit registered it, and orbit replaces it hourly. Accepted.
+   - Test `TestFleetDeviceTokenNeverLogged` (worker package) captures `slog` output (a JSON handler on a buffer) and
+     audit params while it runs, with one fixed token:
+     - the gateway check-in;
+     - `Reports.heartbeat`;
+     - every H5 outcome (`bound`, `rebound`, `current`, `expired`, `unknown_token`, `unavailable`, `uuid_mismatch`);
+     - an adapter transport error.
+     It asserts that the token string occurs in none of the captured log records, returned errors or audit params.
+     The adapter test `TestResolveDeviceToken` keeps its own error-text assertion.
+3. **The re-enrollment wave follows the staged agent rollout, and the agent's own reset never raises a claim.** The
+   reset happens only in the drift pass of an updated agent, so it follows the rollout waves. H14 makes the reset
+   distinguishable from a re-enrollment of the device's host.
+4. **Probes first.** Step 1 (probes (a)–(e), plus (f) of H14) runs before any code. A failing probe is a stop condition
+   (section 11). Stop at about 1050 hand-written production lines.
+5. **Review.** Before close, the external review re-runs the binding probes against the finished stack.
+
+**H14 Announced enrollment reset.**
+
+- **What it distinguishes.**
+  - The agent's reset makes fleetd enroll under a **new** instance ID, so Fleet creates a **new host** with a new ID.
+  - A re-enrollment of the device's speaking host keeps the host ID and changes its `last_enrolled_at`. H7 reports it
+    as `reenrolled`, with or without an announcement.
+  - Without an announcement, the new host could be counted as a live other claimant (`second_host`) in mode `first`.
+    That happens if the binding of the new host is delayed for 15 minutes (Fleet's device endpoint unavailable, the
+    token expired).
+- **Agent.**
+  - Before the reset of H2 removes anything, the reconciler stores the reset time in the agent state:
+    `state.FleetResetAt *time.Time`, written through the existing state persistence before `systemctl stop
+    orbit.service`.
+  - `CheckinRequest` gains ``FleetEnrollmentResetAt *time.Time `json:"fleet_enrollment_reset_at,omitempty"` ``. The
+    agent sends it in every check-in while `state.FleetResetAt` is set.
+  - The agent clears `state.FleetResetAt` after a check-in that returned HTTP 200 and also carried a device token
+    read after the reset time (`/opt/orbit/identifier` modification time later than `FleetResetAt`). It also clears it
+    24 hours after `FleetResetAt`. The announcement thus reaches the server before or with the new host's token, and
+    survives an agent restart.
+- **Gateway and ingest.**
+  - `ingest.Heartbeat` gains ``FleetEnrollmentResetAt *time.Time `json:"fleet_enrollment_reset_at,omitempty"` ``.
+  - The gateway passes the value only if it is not later than the receive time plus 5 minutes and not older than
+    24 hours; otherwise nil. An invalid value never fails the check-in.
+  - `Reports.heartbeat` records it before coalescing, together with the token:
+    `DeviceReports.RecordFleetDeviceToken` becomes `RecordFleetReport` and upserts either field. An older value never
+    overwrites a newer one.
+- **Data.** `device_fleet_binding` gains `reset_announced_at timestamptz`. `paddock_inventory_claim_devices` returns
+  `b.reset_announced_at` and `b.bound_at` after `bound_host`. `inventory.ClaimDevice` gains
+  `ResetAnnouncedAt, BoundAt *time.Time`.
+- **Claim watch rule (extends H7).** A device is **resetting** while all of these hold:
+  - `reset_announced_at` is set and `now - reset_announced_at < ClaimQuiet` (60 min);
+  - it has no binding newer than the announcement (`bound_at` NULL or `bound_at < reset_announced_at`).
+  For a resetting device, live other claimants do not count as **second host** (no episode starts, a running
+  `second_host` episode is not due). **re-enrolled** counts unchanged. The worker logs one `Info` per round and
+  device, `inventory claim held: enrollment reset announced` (`organization_id`, `device_id`).
+- **Bounds of the window.**
+  - The announcement comes over the device's own signed connection and applies to that device only.
+  - It lasts at most 60 minutes and ends with the device's first binding after the announcement.
+  - A host that the device does not name is never stored (H6).
+  - A further host that keeps claiming the device after the window is reported by the normal rule.
+- **Tests.**
+  - Unit `TestWatchClaimsAnnouncedReset`:
+    - mode `first`, a new live host with a higher ID, announced 20 min ago, not bound → no `ClaimStart`, no claim;
+    - the same without an announcement and `since = now - 15m` → claim `second_host`;
+    - announced 61 min ago → normal rule;
+    - bound after the announcement → normal rule;
+    - re-enrolled speaking host during the window → claim `reenrolled` (a reset never hides a re-enrollment).
+  - Worker `TestInventoryRoundAnnouncedResetRaisesNoClaim` (regression): the new host's token resolution fails for
+    20 minutes (`unavailable`), then succeeds → no claim event across the whole sequence, and the device ends bound
+    to the new host.
+  - Agent `TestInventoryEnrollmentResetAnnounced`: the state holds `FleetResetAt` before the first removal (fake
+    `System` records the order); check-ins carry it; it is cleared after an acknowledged check-in with a newer token;
+    it survives an agent restart; it is cleared after 24 hours.
+  - Gateway `TestCheckinFleetEnrollmentResetAt`: valid passes; future beyond 5 min and older than 24 h → nil, HTTP
+    200.
+  - VM gate F8 step 3 asserts in addition that `device_fleet_binding.reset_announced_at` is set before the new host
+    is bound.
+- **Probe (f)** (step 1): on the VM, after the reset by hand, the new host's ID differs from the previous host's ID,
+  and the previous host's `last_enrolled_at` is unchanged. If Fleet re-uses the previous record instead, stop: the
+  reset would then look like a re-enrollment.
+- **Contract.** One more optional request field. `api/openapi/device.yaml`, `CheckinRequest.properties`:
+  ```yaml
+        fleet_enrollment_reset_at:
+          type: string
+          format: date-time
+          description: |
+            When the agent reset fleetd's enrollment to enroll it under its instance identifier (ADR 0057), sent until a
+            check-in with the new device token succeeded, at most 24 hours. Optional; agents before 0.1.0-alpha.11 leave
+            it out.
+  ```
+- **Migration additions** (same file `00163_inventory_host_binding.sql`):
+  ```sql
+  -- device_fleet_binding's CREATE TABLE gains the column reset_announced_at timestamptz after bound_at
+  -- (the agent's announced enrollment reset, H14).
+  -- paddock_inventory_claim_devices additionally returns b.reset_announced_at, b.bound_at (after bound_host).
+  -- +goose StatementBegin
+  CREATE FUNCTION paddock_expire_fleet_device_tokens(before timestamptz) RETURNS bigint
+    LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+    $$ WITH x AS (UPDATE public.device_fleet_binding SET pending_token = NULL
+                  WHERE pending_token IS NOT NULL AND token_reported_at < before RETURNING 1)
+       SELECT count(*) FROM x $$;
+  -- +goose StatementEnd
+  REVOKE ALL ON FUNCTION paddock_expire_fleet_device_tokens(timestamptz) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION paddock_expire_fleet_device_tokens(timestamptz) TO paddock_platform;
+  ```
+  ```sql
+  -- name: RecordFleetEnrollmentReset :exec   (organization pool; an older announcement never overwrites a newer one)
+  INSERT INTO device_fleet_binding (device_id, organization_id, reset_announced_at)
+  SELECT d.id, d.organization_id, @reset_at::timestamptz FROM device d WHERE d.id = @device_id AND d.state = 'active'
+  ON CONFLICT (device_id) DO UPDATE SET reset_announced_at = EXCLUDED.reset_announced_at
+    WHERE device_fleet_binding.reset_announced_at IS NULL
+       OR device_fleet_binding.reset_announced_at < EXCLUDED.reset_announced_at;
+
+  -- name: ExpireFleetDeviceTokens :one   (platform pool)
+  SELECT paddock_expire_fleet_device_tokens(@before::timestamptz);
+  ```
+- **Files** (additions to section 5): `agent/internal/agent/state.go` (or the file that defines the agent state;
+  field `FleetResetAt`), and the reconciler's access to it. The reconciler gets it as a callback field
+  `Inventory.AnnounceReset func(time.Time) error` that the agent sets; a nil callback skips the announcement in
+  tests.
+
+### 4. Non-goals
+
+- No change to `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, the supervisor, or the bundle format.
+- No change to the policy SQL files or to Fleet's settings (`EnsureSettings`).
+- No deletion of Fleet hosts (follow-up PDK-1123a). No change to retention or offboarding host deletion
+  (`paddock_fleet_host_in_use*`): a bound device's `device_inventory_ref.external_id` is its bound host after its
+  first store, which those functions already see.
+- No Fleet teams, team secrets or other Fleet Premium features (ADR 0009, ADR 0057 C).
+- No attention kind, no portal view of the binding.
+- Nothing of amendment c or d (silent fleetd, `policies` reason, unanswered agent-running query): PDK-1122d.
+
+### 5. Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00163_inventory_host_binding.sql` | new | section 6 |
+| `server/internal/adapters/postgres/queries/inventory.sql` | change | binding, claim and hold queries |
+| `server/internal/adapters/postgres/queries/device.sql` | change | `RecordFleetDeviceToken` |
+| `server/internal/adapters/postgres/pgstore/*` | regenerated | `make gen` |
+| `server/internal/ports/inventory.go` | change | `HostSeen`, `HostPage.Seen`, `InventoryBinder` |
+| `server/internal/adapters/fleet/hosts.go`, `hosts_test.go`, `testdata/get_hosts.json` | change | `Seen`, `last_enrolled_at`, `ResolveDeviceToken` |
+| `server/internal/inventory/binding.go`, `binding_test.go` | new | `Binding`, `HostTargets`, `DecideBinding` |
+| `server/internal/inventory/claims.go`, `claims_test.go` | new | `WatchClaims` |
+| `server/internal/app/inventory.go`, `inventory_integration_test.go` | change | bindings, claims, hold |
+| `server/internal/app/devicereports.go`, `devicereports_integration_test.go` | change | `RecordFleetDeviceToken` |
+| `server/internal/app/findings.go` | change | finding entry |
+| `server/internal/worker/inventory.go`, `inventory_test.go` | change | round order, H5, H6, H7, H9, metrics |
+| `server/internal/worker/reports.go`, `reports_test.go` | change | H4 |
+| `server/internal/ingest/ingest.go` | change | `Heartbeat.FleetDeviceToken` |
+| `server/internal/transport/http/device/handlers.go`, `handlers_test.go` | change | H4 validation |
+| `server/cmd/paddock-server/worker.go` | change | `.WithBinder(fleetClient)` |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | H10 |
+| `server/web/src/locales/en.json`, `de.json` | change | H10 messages |
+| `pkg/protocol/types.go` | change | H3 field |
+| `api/openapi/device.yaml` | change | H3 field |
+| `agent/internal/agent/agent.go`, `agent_test.go` (or the existing check-in test file) | change | H3 |
+| `agent/internal/reconcile/inventory.go`, `inventory_test.go` | change | H2 |
+| `agent/internal/reconcile/reconcile.go`, `system.go`, `fakesys/fakesys.go` | change | `RemoveAll` |
+| `deploy/compose/compose.yaml` | change | H1 |
+| `deploy/compose/prometheus/alerts.yml`, `alerts_test.yml` | change | H9 alert |
+| `test/acceptance/devicesim/fleet.go`, `fleet_test.go`, `devicesim.go` | change | section 8 helpers |
+| `test/acceptance/fleethost.go` | change | `fleetHostIDs` |
+| `test/acceptance/inventory_test.go` | change | `TestInventoryHostBinding` |
+| `test/system/inventory_test.go` | change | gate F8, `fleetHostByUUID` picks the most recently seen host |
+| `docs/compliance/residual-risks.md`, `docs/architecture.md` (§11.5, §15), `docs/operations/fleet.md`, `docs/operations/monitoring.md`, `docs/operations/upgrade.md` | change | section 6 texts |
+| `changelog.d/PDK-1123.security.md` | new | section 6 text |
+
+**Not touched:**
+- `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `agent/cmd/paddock-supervisor/` and the supervisor
+  packages;
+- `pkg/bundle/`, `api/openapi/admin.yaml`, `server/internal/inventory/policies/`;
+- the offboarding and retention code;
+- `docs/adr/`.
+
+### 6. Interfaces, data model and texts
+
+```sql
+-- 00163_inventory_host_binding.sql
+-- Inventory hosts bound to their device (ADR 0057; plan M5a amendment 2026-11-17 e).
+-- device_fleet_binding: per device, the inventory host the device named over its device connection (host_id, the
+-- inventory system's host ID as text, like device_inventory_ref.external_id; bound_at when the worker bound it) and the
+-- latest device token the agent reported that the worker has not decided yet (pending_token, token_reported_at; the
+-- token is cleared after the decision).
+-- device_inventory_ref, the claim watch: fleet_enrolled_at is the inventory system's latest enrollment time of the
+-- stored host as last observed; fleet_reenrolled_at the worker's time of the last round that saw that host enrolled
+-- again; fleet_claim_since the worker's time when the current claim episode started; fleet_claim_reported_at when
+-- device.tamper_fleet_host_claimed was recorded for it.
+-- paddock_inventory_devices no longer counts bound devices, so a bound device never makes a hardware UUID ambiguous.
+-- Forward-only: there is no Down migration.
+-- +goose Up
+CREATE TABLE device_fleet_binding (
+  device_id uuid PRIMARY KEY REFERENCES device(id),
+  organization_id uuid NOT NULL,
+  pending_token text CHECK (pending_token ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+  token_reported_at timestamptz,
+  host_id text CHECK (host_id ~ '^[0-9]{1,19}$'),
+  bound_at timestamptz,
+  FOREIGN KEY (organization_id, device_id) REFERENCES device (organization_id, id)
+);
+CREATE INDEX device_fleet_binding_host ON device_fleet_binding (host_id) WHERE host_id IS NOT NULL;
+ALTER TABLE device_fleet_binding ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_fleet_binding FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON device_fleet_binding TO paddock_worker
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON device_fleet_binding TO paddock_worker;
+INSERT INTO offboarding_table (table_name, delete_order) VALUES ('device_fleet_binding', 165);
+
+ALTER TABLE device_inventory_ref ADD COLUMN fleet_enrolled_at timestamptz,
+                                 ADD COLUMN fleet_reenrolled_at timestamptz,
+                                 ADD COLUMN fleet_claim_since timestamptz,
+                                 ADD COLUMN fleet_claim_reported_at timestamptz;
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION paddock_inventory_devices(uuids text[])
+  RETURNS TABLE (hardware_uuid text, device_id uuid, organization_id uuid)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+  $$ SELECT lower(d.hardware_uuid), min(d.id::text)::uuid, min(d.organization_id::text)::uuid
+     FROM device d
+     WHERE lower(d.hardware_uuid) = ANY (SELECT lower(u) FROM unnest(uuids) u)
+       AND d.state IN ('active','quarantined')
+       AND NOT EXISTS (SELECT 1 FROM device_fleet_binding b WHERE b.device_id = d.id AND b.host_id IS NOT NULL)
+     GROUP BY lower(d.hardware_uuid)
+     HAVING count(*) = 1 $$;
+
+CREATE FUNCTION paddock_inventory_bindings()
+  RETURNS TABLE (device_id uuid, organization_id uuid, hardware_uuid text, host_id text, pending_token text,
+                 token_reported_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT d.id, d.organization_id, lower(d.hardware_uuid), b.host_id, b.pending_token, b.token_reported_at
+     FROM public.device_fleet_binding b JOIN public.device d ON d.id = b.device_id
+     WHERE d.state IN ('active','quarantined') $$;
+
+CREATE FUNCTION paddock_inventory_claim_devices()
+  RETURNS TABLE (device_id uuid, organization_id uuid, hardware_uuid text, external_id text, bound_host text,
+                 fleet_enrolled_at timestamptz, fleet_reenrolled_at timestamptz, fleet_claim_since timestamptz,
+                 fleet_claim_reported_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT d.id, d.organization_id, lower(d.hardware_uuid), i.external_id, b.host_id, i.fleet_enrolled_at,
+            i.fleet_reenrolled_at, i.fleet_claim_since, i.fleet_claim_reported_at
+     FROM public.device d JOIN public.device_inventory_ref i ON i.device_id = d.id
+          LEFT JOIN public.device_fleet_binding b ON b.device_id = d.id
+     WHERE d.state = 'active' $$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION paddock_inventory_bindings() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_inventory_bindings() TO paddock_platform;
+REVOKE ALL ON FUNCTION paddock_inventory_claim_devices() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_inventory_claim_devices() TO paddock_platform;
+
+-- +goose Down
+```
+
+`CREATE OR REPLACE` keeps the existing grants of `paddock_inventory_devices`. If the project's migration lint
+requires the pinned `search_path` for a replaced function, use `pg_catalog, public, pg_temp` with qualified tables, as
+in the two new functions.
+
+```sql
+-- device.sql
+-- name: RecordFleetDeviceToken :exec   (organization pool; an older heartbeat never overwrites a newer token)
+INSERT INTO device_fleet_binding (device_id, organization_id, pending_token, token_reported_at)
+SELECT d.id, d.organization_id, @token::text, @reported_at::timestamptz FROM device d
+WHERE d.id = @device_id AND d.state = 'active'
+ON CONFLICT (device_id) DO UPDATE
+  SET pending_token = EXCLUDED.pending_token, token_reported_at = EXCLUDED.token_reported_at
+  WHERE device_fleet_binding.token_reported_at IS NULL
+     OR device_fleet_binding.token_reported_at < EXCLUDED.token_reported_at;
+
+-- inventory.sql
+-- name: InventoryBindings :many   (platform pool)
+SELECT * FROM paddock_inventory_bindings() ORDER BY token_reported_at NULLS LAST, device_id;
+
+-- name: BindInventoryHost :execrows   (organization pool; compare-and-set on the reported token)
+UPDATE device_fleet_binding SET host_id = @host_id, bound_at = @at, pending_token = NULL
+WHERE device_id = @device_id AND token_reported_at = @token_reported_at;
+
+-- name: ClearFleetDeviceToken :execrows
+UPDATE device_fleet_binding SET pending_token = NULL
+WHERE device_id = @device_id AND token_reported_at = @token_reported_at;
+
+-- name: InventoryClaimDevices :many   (platform pool)
+SELECT * FROM paddock_inventory_claim_devices() ORDER BY device_id;
+
+-- name: SetFleetEnrolledAt :exec   (organization pool)
+UPDATE device_inventory_ref SET fleet_enrolled_at = @enrolled_at WHERE device_id = @device_id;
+
+-- name: MarkFleetReenrolled :exec
+UPDATE device_inventory_ref SET fleet_reenrolled_at = @at WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: StartFleetClaim :exec
+UPDATE device_inventory_ref SET fleet_claim_since = @at
+WHERE device_id = ANY(@device_ids::uuid[]) AND fleet_claim_since IS NULL;
+
+-- name: ClearFleetClaim :exec
+UPDATE device_inventory_ref SET fleet_claim_since = NULL, fleet_claim_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: MarkFleetClaimReported :execrows
+UPDATE device_inventory_ref SET fleet_claim_reported_at = @at
+WHERE device_id = @device_id AND fleet_claim_reported_at IS NULL;
+
+-- ListAgentNotRunning and ListAgentBinaryUnknown: add to the WHERE clause
+--   AND (i.fleet_reenrolled_at IS NULL OR i.fleet_reenrolled_at < @held_before::timestamptz)
+```
+
+```go
+// pkg/protocol/types.go, CheckinRequest
+	// FleetDeviceToken is fleetd's current device token (/opt/orbit/identifier), sent when it changed since the last
+	// successful check-in (ADR 0057). Agents before 0.1.0-alpha.11 leave it out.
+	FleetDeviceToken string `json:"fleet_device_token,omitempty"`
+
+// server/internal/ports/inventory.go
+// HostSeen is one listed host of the inventory system that has a hardware UUID (ADR 0057).
+type HostSeen struct {
+	Ref          HostRef
+	HardwareUUID string
+	SeenAt       time.Time  // zero when the inventory system reports none
+	EnrolledAt   *time.Time // the host's latest enrollment; nil when unknown
+}
+// HostPage gains: Seen []HostSeen — every host of the page with a hardware UUID, changed or not, in list order.
+
+// InventoryBinder resolves a device token to the host that registered it (ADR 0057).
+type InventoryBinder interface {
+	// ResolveDeviceToken returns the host the token identifies and its hardware UUID. An error wrapping
+	// problem.NotFound means the inventory system knows no host for the token (unknown or older than its lifetime);
+	// problem.UpstreamUnavailable that it failed or could not be reached. Errors never contain the token.
+	ResolveDeviceToken(ctx context.Context, token string) (HostRef, string, error)
+}
+
+// server/internal/adapters/fleet/hosts.go
+// ResolveDeviceToken implements ports.InventoryBinder with GET /api/latest/fleet/device/{token}?exclude_software=true,
+// one attempt (the next round retries). It refuses a token that does not match the device token format without a
+// request. 401 and 404 are problem.NotFound; a 200 without host.id is problem.UpstreamUnavailable.
+func (c *Client) ResolveDeviceToken(ctx context.Context, token string) (ports.HostRef, string, error)
+
+// server/internal/inventory/binding.go
+const (
+	TokenMaxAge     = 50 * time.Minute
+	BindingStale    = 15 * time.Minute
+	ResolvePerRound = 200
+)
+
+// Binding is a device's row of paddock_inventory_bindings.
+type Binding struct {
+	DeviceID, OrganizationID uuid.UUID
+	HardwareUUID             string        // lower case
+	Host                     ports.HostRef // "" when the device is not bound
+	PendingToken             string
+	TokenReportedAt          *time.Time
+}
+
+// Decision is the outcome of rules 1, 2, 6, 7, 8 and 9 of H5 for one binding.
+type Decision int
+const (
+	DecideResolve Decision = iota // call ResolveDeviceToken (rules 3–5 are the worker's)
+	DecideExpired
+	DecideCurrent
+	DecideUUIDMismatch
+	DecideBind
+	DecideRebind
+)
+
+// DecideBinding returns the decision before a Fleet call (resolved == nil: rules 1, 2 or DecideResolve) or after it
+// (resolved: the host and its hardware UUID; rules 6–9). It is pure.
+func DecideBinding(b Binding, seen map[ports.HostRef]ports.HostSeen, r, now time.Time, resolved *ports.HostSeen) Decision
+
+// Targets says which listed hosts may be stored (H6).
+type Targets struct {
+	Bound    map[ports.HostRef]Binding // hosts bound to exactly one device
+	Excluded map[ports.HostRef]bool    // hosts bound to two or more devices
+	First    map[string]ports.HostRef  // lower-case hardware UUID → first-enrolled host
+	BindingUUIDs map[string]bool       // lower-case hardware UUIDs of devices with a binding row (H6 rule 4)
+}
+
+// HostTargets computes Targets from the listed hosts (list order) and the bindings. It is pure.
+func HostTargets(seen []ports.HostSeen, bindings []Binding) Targets
+
+// server/internal/inventory/claims.go
+const (
+	HostClaimLive     = 10 * time.Minute
+	HostClaimConfirm  = 15 * time.Minute
+	ClaimQuiet        = 60 * time.Minute
+	ClaimMajorityMin  = 3
+	ClaimHostsInParam = 10
+)
+
+// ClaimDevice is one watched device (paddock_inventory_claim_devices).
+type ClaimDevice struct {
+	DeviceID, OrganizationID uuid.UUID
+	HardwareUUID             string        // lower case
+	ExternalID               ports.HostRef // the stored host
+	BoundHost                ports.HostRef // "" when not bound (binding mode first)
+	EnrolledAt, ReenrolledAt, ClaimSince, ClaimReportedAt *time.Time
+}
+
+// ClaimedDevice is a device to report.
+type ClaimedDevice struct {
+	ClaimDevice
+	Kind       string // "second_host" | "reenrolled"
+	Binding    string // "device" | "first"
+	Bound      ports.HostRef
+	Others     []ports.HostRef // ascending; the param is capped at ClaimHostsInParam
+	Hosts      int
+	EnrolledAt *time.Time      // the speaking host's
+}
+
+// ClaimWatch is one round's decision.
+type ClaimWatch struct {
+	Enrolled                         map[uuid.UUID]*time.Time // fleet_enrolled_at to store
+	Reenrolled, ClaimStart, ClaimClear []uuid.UUID
+	Claims                           []ClaimedDevice // empty when Suppressed
+	Due, Watched, Claimed            int
+	Suppressed                       bool // claim_majority
+}
+
+// WatchClaims decides one round (H7, H9). seen is the round's listed hosts in list order; t is the round's Targets
+// (its First names the speaking host of a device that is not bound). It is pure.
+func WatchClaims(devices []ClaimDevice, seen []ports.HostSeen, t Targets, now time.Time) ClaimWatch
+
+// server/internal/app
+func (s *InventorySync) InventoryBindings(ctx context.Context) ([]inventory.Binding, error)                 // platform
+func (s *InventorySync) BindInventoryHost(ctx context.Context, device uuid.UUID, reportedAt time.Time,
+	host ports.HostRef, now time.Time) (bool, error)                                                        // ctx: device's org
+func (s *InventorySync) ClearFleetDeviceToken(ctx context.Context, device uuid.UUID, reportedAt time.Time) error
+func (s *InventorySync) InventoryClaimDevices(ctx context.Context) ([]inventory.ClaimDevice, error)        // platform
+// ApplyClaimWatch applies one organization's part of w (the worker splits w per organization) in one transaction,
+// then reports each claim through ActionRunner (MarkFleetClaimReported; 0 rows records nothing; tamper finding).
+func (s *InventorySync) ApplyClaimWatch(ctx context.Context, w inventory.ClaimWatch, now time.Time) ([]uuid.UUID, error)
+// ReportAgentNotRunning(ctx, now) passes held_before = now - inventory.ClaimQuiet;
+// ReportAgentBinaryUnknown gains now as its second parameter: (ctx, now, evaluatedAfter, knownHashes).
+func (d *DeviceReports) RecordFleetDeviceToken(ctx context.Context, hb ingest.Heartbeat) error
+
+// server/internal/worker/inventory.go
+func (i *Inventory) WithBinder(b ports.InventoryBinder) *Inventory // nil binder: rules 3–9 never run
+// metrics (registered like metricUnmappedHosts):
+//   paddock_inventory_host_bindings_total{result="bound|rebound|current|expired|unknown_token|uuid_mismatch|unavailable"} counter
+//   paddock_inventory_claim_watch_suppressed gauge
+```
+
+**Round order** (`Inventory.Round`, binding):
+1. Policies, the agent binary policy, `VulnerabilityState`: unchanged.
+2. List every page. Collect the changed hosts (as today) and `Seen` (every host with a UUID).
+3. `InventoryBindings`, then the H5 decisions. The worker keeps the decided bindings in memory for steps 4 and 6.
+4. `HostTargets`; `MapHosts` for the UUIDs of the changed hosts; then H6 for each changed host, and `StoreHost`.
+5. `InventoryClaimDevices`; `WatchClaims` with step 4's `Targets`; `ApplyClaimWatch` per organization; the H9 log
+   and gauge.
+6. `reportAgents`, `reportBinaries` (with the hold), `summarize`.
+
+A failure in steps 2, 4 or 5 fails the round, as today. A Fleet failure in step 3 is rule 5 and does not fail it.
+
+**Alert** (`deploy/compose/prometheus/alerts.yml`, group of the inventory alerts; the test cases follow the existing
+`alerts_test.yml` pattern: fires after 15m, not after 14m, not at 0):
+```yaml
+      - alert: PaddockInventoryClaimWatchSuppressed
+        expr: max(paddock_inventory_claim_watch_suppressed) > 0
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "Inventory claim reports are held: most watched devices have an open claim"
+          description: "More than half of the devices with inventory have an open claim episode, so no claim is reported. A Fleet database restore causes this for up to 60 minutes; otherwise follow docs/operations/fleet.md, \"When the inventory claim watch is suppressed\"."
+```
+
+**Device API** (`api/openapi/device.yaml`, `CheckinRequest.properties`):
+```yaml
+        fleet_device_token:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: |
+            fleetd's current device token (the content of /opt/orbit/identifier), sent when it changed since the last
+            successful check-in. The server resolves it through the inventory system to the device's inventory host
+            and stores only that host's data for the device (ADR 0057). A value that does not match the pattern is
+            ignored without failing the check-in. Optional; agents before 0.1.0-alpha.11 leave it out.
+```
+
+**Texts** (the implementer applies them on top of the texts of PDK-1122c, `b228593a`):
+
+- **RR-22**, risk column: replace "Fleet host identity is not yet bound to the device (follow-up PDK-1123)." with:
+  "Each device's inventory host is bound to the identity the device reports over its signed device connection; hosts
+  that are not bound to a device are not stored for it, and another host that claims a device, or a re-enrollment of
+  its host, is reported as `device.tamper_fleet_host_claimed` (ADR 0057). A device whose agent predates 0.1.0-alpha.11
+  has not named its host yet; for it, the host Fleet enrolled first is stored until the agent updates."
+  - Mitigation column: replace "hosts that map to no device are ignored and counted;" with "hosts that map to no
+    device, or that do not speak for the device, are ignored and counted;".
+  - Recommendation column: replace "Accept, or rotate the secret periodically." with "Upgrade the server first, then
+    every agent to 0.1.0-alpha.11 or later through a staged rollout; until a device's agent is updated, its
+    inventory host is not yet bound to it (residual). Accept, or rotate the secret periodically."
+- **RR-149**, not-reported list: replace "a Fleet host whose identity is not yet bound to the device (RR-22, follow-up
+  PDK-1123);" with "a device whose agent has not named its inventory host yet, while the host Fleet enrolled first
+  for it is used (RR-22);".
+- **`docs/architecture.md` §15**, "Mapping:" bullet, replace its first sentence with: "Fleet hosts are matched to
+  Paddock devices through the binding each device reports over its device connection (ADR 0057): fleetd's device
+  token, resolved by the worker through Fleet's device endpoint. Until a device has reported one, the host Fleet
+  enrolled first for the device's hardware UUID (`system_info.uuid`) is used."
+- **`docs/architecture.md` §11.5**: new row "Only the host that speaks for the device claims it (worker, from Fleet's
+  host list) | every inventory round | `device.tamper_fleet_host_claimed` (`kind` `second_host` after 15 min,
+  `reenrolled` at once)".
+- **`docs/operations/fleet.md`**:
+  - "fleetd on devices", step 1: `orbit.env` also sets `ORBIT_HOST_IDENTIFIER=instance`. On a device whose fleetd was
+    enrolled before, the agent re-enrolls fleetd once (it stops `orbit.service` and removes orbit's node key, device
+    token and osquery database).
+  - "Inventory sync and mutual watch", step 3, replace with: "binds each device to the host its agent named
+    (fleetd's device token, resolved through Fleet's device endpoint) and stores only that host for the device. A
+    device whose agent has not named a host yet uses the host Fleet enrolled first for its hardware UUID. Hosts that
+    do not speak for a device are counted in the log attribute `ignored`; `paddock_inventory_host_bindings_total`
+    counts the binding decisions by `result`."
+  - Step 5 gains: "It reports, once per episode, `device.tamper_fleet_host_claimed` when another host reports a
+    device's hardware UUID and keeps contacting Fleet for 15 minutes, or when the device's host was enrolled again.
+    After a re-enrollment, agent reports from Fleet wait 60 minutes. A Fleet database restore re-enrolls many hosts at
+    once; the worker then holds the claim reports (`claim_majority`)."
+  - New runbook subsection "When the inventory claim watch is suppressed": the alert `PaddockInventoryClaimWatchSuppressed`
+    and the log `inventory claim watch suppressed`. Steps: (1) check whether Fleet was restored or upgraded; the
+    episodes end 60 minutes after the last re-enrollment. (2) Otherwise list the Fleet hosts per hardware UUID; several
+    live hosts per UUID without such a cause need a security review of the devices concerned.
+  - "Settings Paddock enforces" gains: "`FLEET_OSQUERY_HOST_IDENTIFIER=provided` (compose): Fleet identifies a host by
+    the identifier fleetd provides."
+- **`docs/operations/monitoring.md`**: rows for `paddock_inventory_host_bindings_total`,
+  `paddock_inventory_claim_watch_suppressed` and `PaddockInventoryClaimWatchSuppressed`.
+- **`docs/operations/upgrade.md`**, notes of 0.1.0-alpha.11: "Each device enrolls its fleetd once more after its agent
+  updates; a new Fleet host appears per device, and the previous one stays in Fleet without data being stored for it.
+  Inventory of a device pauses for up to about 10 minutes around its re-enrollment."
+- **Changelog** `changelog.d/PDK-1123.security.md`: "Each device's inventory host is now bound to the identity the
+  device reports over its signed device connection, and only that host's data is stored for the device. Another
+  inventory host that claims a device, and a re-enrollment of a device's host, are reported as tamper findings.
+  Update the agents: a device whose agent predates this release uses the host Fleet enrolled first until it updates.
+  Each device enrolls its fleetd once more after the agent update."
+
+### 7. Steps
+
+1. **Probes on the devstack and one VM (no code), recorded in the result document.**
+   - (a) On a VM with the current fleetd, `/opt/orbit/identifier` exists, is mode 0644 and matches the token format
+     although Fleet Desktop is disabled.
+   - (b) `GET /api/latest/fleet/device/<token>?exclude_software=true` on Fleet's internal address answers the VM's
+     host ID and hardware UUID; a random UUID answers 401.
+   - (c) With `FLEET_OSQUERY_HOST_IDENTIFIER=provided`, an existing host keeps working: `seen_time` advances and no
+     second host appears for 15 minutes.
+   - (d) After setting `ORBIT_HOST_IDENTIFIER=instance` and the reset of H2 by hand on the VM: exactly one new host
+     appears, its `uuid` is the VM's hardware UUID, the old host's `seen_time` stops, and the new token resolves to
+     the new host.
+   - (e) A `devicesim` re-enrollment under an existing identifier keeps the host ID and changes `last_enrolled_at`;
+     `last_enrolled_at` does not change while a host just answers for 3 minutes.
+   Check: the six observations are in the result document.
+2. **Migration, queries, ports, adapter** (`make gen`). Check: `go test ./server/internal/adapters/fleet/ -run
+   'TestResolveDeviceToken|TestListHostsSeen'`; `make gen` no diff; `make lint` (RLS lint) green.
+3. **`inventory` package** (`binding.go`, `claims.go`). Check: `go test ./server/internal/inventory/ -run
+   'TestHostTargets|TestDecideBinding|TestWatchClaims'`.
+4. **App, registry, finding, messages.** Check: `go test ./server/internal/app/ -run
+   'TestRecordFleetDeviceToken|TestBindInventoryHost|TestApplyClaimWatch|TestReportAgentNotRunning|TestReportAgentBinary|TestInventoryDevices'`.
+5. **Protocol, gateway, ingest, reports.** Check: `go test ./server/internal/transport/http/device/ -run
+   TestCheckinFleetDeviceToken` and `go test ./server/internal/worker/ -run TestReportsHeartbeatFleetDeviceToken`.
+6. **Worker round** (order, H5, H6, H7, H9, metrics, `WithBinder` wiring). Check: `go test ./server/internal/worker/
+   -run 'TestInventoryRound'`.
+7. **Agent** (H2, H3, `RemoveAll`). Check: `go test ./agent/internal/reconcile/ -run 'TestInventory'` and `go test
+   ./agent/internal/agent/ -run TestCheckinFleetDeviceToken`.
+8. **Compose and alert.** Check: `make lint-prometheus`; `docker compose config` of the dev stack shows
+   `FLEET_OSQUERY_HOST_IDENTIFIER: provided`.
+9. **devicesim and acceptance.** Check: `make acceptance` runs `TestInventoryHostBinding` and every existing
+   inventory gate green.
+10. **VM gate F8** (`make deb` first; serially to acceptance; `df` before). Check: `make system-test VM=all
+    SUITE=misc` green, including F1–F5.
+11. **Docs and changelog**; quality gate (`make typecheck`, the full `go test` with `nice -n 19`); `make
+    changelog-check`.
+
+### 8. Tests
+
+"Regression" tests MUST fail without the change (mutation recorded in the result document).
+
+- **Unit `TestHostTargets`**: no bindings → `First` per UUID is the lowest listed host; a binding to host 9 of UUID u
+  with hosts 7 and 9 listed → `Bound[9]`, `First[u] = 7` (7 is not bound); two devices bound to host 9 →
+  `Excluded[9]`, neither in `Bound`; a bound host whose reported UUID differs from the device's still maps by ID.
+- **Unit `TestDecideBinding`**: every row of H5's table, including the boundaries `TokenMaxAge - 1s` (resolve) and
+  `BindingStale - 1s` (current); a zero `seen_time` of the bound host → resolve.
+- **Unit `TestWatchClaims`**:
+  - second host: first round → `ClaimStart`; `since = now - 15m` → claim `second_host` with `Bound`, `Others`,
+    `Hosts`, `Binding`; `now - 14m59s` → none.
+  - live window: an other claimant with `R - seen = 10m` → not live; `9m59s` → live.
+  - previous host after a re-enrollment: other claimant last seen before `ClaimStart` → never due (regression of the
+    H7 window argument).
+  - re-enrolled: stored `EnrolledAt` differs, same `ExternalID` → `Reenrolled`, `ClaimStart`, claim at once with kind
+    `reenrolled`; different `ExternalID` → none; stored `EnrolledAt` NULL → none, `Enrolled` set.
+  - episode end at `ReenrolledAt = now - 61m`, kept at `now - 59m`.
+  - guard: 3 of 4 claimed → `Suppressed`, no `Claims`, `Due` counted; 2 of 3 → reported; 3 of 6 → reported.
+  - binding modes: `BoundHost` set → `Binding = device` and the bound host speaks even with a lower-ID claimant;
+    unset → `first`.
+- **Adapter `TestResolveDeviceToken`** (httptest): 200 → ref and UUID, request path
+  `/api/latest/fleet/device/<token>` with `exclude_software=true`; 401 and 404 → `problem.NotFound`; 500 →
+  `problem.UpstreamUnavailable` after exactly one request; malformed token → no request; a transport error → the
+  error text does not contain the token. **`TestListHostsSeen`**: `last_enrolled_at` and `seen_time` parsed; a host
+  without `seen_time` → zero `SeenAt`; unchanged hosts are in `Seen`; order follows the page.
+- **Gateway `TestCheckinFleetDeviceToken`**: a valid token reaches the heartbeat; an upper-case, 37-character or
+  path-character value → empty, check-in 200; absent → empty.
+- **Worker `TestReportsHeartbeatFleetDeviceToken`**: a coalesced heartbeat (claim refused) still records the token; an
+  unavailable organization acks.
+- **App** (Postgres):
+  - `TestRecordFleetDeviceToken`: insert; newer overwrites; older does not; a retired device → no row; another
+    organization's context sees no row (RLS negative) and cannot write one (positive and negative).
+  - `TestBindInventoryHost`: binds on a matching `token_reported_at`; a newer token reported meanwhile → 0 rows, the
+    token stays.
+  - `TestInventoryDevicesIgnoresBound` (regression of the duplicate-UUID case): two active devices with one UUID →
+    unmapped; after one is bound → the other maps.
+  - `TestApplyClaimWatch`: one event with the seven params (`other_hosts` capped at 10, ascending) and a tamper
+    finding; a second apply records nothing; transitions as written; another organization's device is untouched.
+  - `TestReportAgentNotRunningHeldAfterReenroll` (regression): failing device with `fleet_reenrolled_at = now - 10m` →
+    0 events; `now - 61m` → 1. The same for `ReportAgentBinaryUnknown`.
+- **Worker rounds** (fake source and binder, Postgres):
+  - `TestInventoryRoundBoundHost` (regression): hosts 7 (fails the binary policy, enrolled first) and 9 (passes) with
+    one UUID; the device's token resolves to 9 → after each round `external_id = 9`, the binary result passes, no
+    `device.tamper_agent_binary_changed`; after the confirmation one `device.tamper_fleet_host_claimed` (`second_host`,
+    `binding device`, `bound_host 9`, `other_hosts 7`).
+  - `TestInventoryRoundFirstEnrolledHost` (regression): unbound device; host 7 fails `paddock_agent_running`, host 9
+    passes and changes every round → the stored result stays failing, `external_id = 7`; claim `binding first`.
+  - `TestInventoryRoundBindsReportedToken`: `bound`, `rebound`, `uuid_mismatch`, `unknown_token`, `expired`,
+    `current` without a call, `unavailable` keeps the token and the round succeeds, and at most 200 calls per round;
+    the counter labels match.
+  - `TestInventoryRoundReenrolledHost` (regression): the speaking host keeps its ID, its `last_enrolled_at` changes,
+    and in the same round its binary policy fails after the gate → claim `reenrolled` and no binary event; 61 minutes
+    later, still failing → the binary event.
+  - `TestInventoryRoundFleetRestore`: 5 devices re-enroll in one round → no claim, gauge 5, agent reports held; after
+    61 minutes without re-enrollment → episodes end, gauge 0.
+  - `TestInventoryRoundDuplicateHardwareUUID` (regression): devices A (bound to host 9) and B (unbound) with one UUID;
+    hosts 7 and 9 → 9 stored for A, 7 stored for B.
+  - `TestInventoryRoundNotLeaderResetsClaimGauge`.
+- **Agent**:
+  - `reconcile` `TestInventoryOrbitEnvHostIdentifier`: the rendered `orbit.env` is exactly H2's text.
+  - `TestInventoryEnrollmentReset`: old `orbit.env` without the line and the package installed → `systemctl stop
+    orbit.service`, the three paths removed, files written, restart; a second Apply → no reset; no `orbit.env` → no
+    reset; package not installed → no reset; missing paths → no error.
+  - `agent` `TestCheckinFleetDeviceToken`: sent when valid and new; not sent again after HTTP 200; sent again after a
+    failed check-in and after a change; omitted when missing, malformed or with trailing garbage.
+- **devicesim** (`fleet_test.go` against an httptest Fleet): `EnrollFleetBound` sends orbit enroll, device token and
+  osquery enroll in that order with the same instance ID; `EnrollFleetAs` sends the given identifier; `EnrollAgain`
+  replaces the node key; `Device.Checkin` sends `fleet_device_token` only when set; `HardwareUUIDOverride` changes
+  `HardwareUUID()`.
+- **Rules**: `alerts_test.yml` for `PaddockInventoryClaimWatchSuppressed`.
+- **Acceptance `TestInventoryHostBinding`** (acme, alice; one failure bound of 20 minutes; conditions only):
+  1. `bound`: device D1. A host `EnrollFleetAs(identifier "acc-bind-early-"+suffix, uuid D1)` whose binary policy
+     fails is enrolled **first**. Then `EnrollFleetBound(uuid D1)` passes every policy. D1 checks in with the bound
+     host's token; both hosts answer in every iteration.
+     - Wait until `device_fleet_binding.host_id` and `device_inventory_ref.external_id` are the bound host's ID (owner
+       DB).
+     - After two further `synced_at` values: still that ID, `paddock_agent_binary_known` passing, and alice sees no
+       `device.tamper_agent_binary_changed` for D1.
+     - Seed `fleet_claim_since` 16 minutes back; alice sees exactly one `device.tamper_fleet_host_claimed` for D1 with
+       `kind second_host`, `binding device`, `bound_host` = the bound host's ID.
+  2. `reenrolled`: device D2 bound to its `EnrollFleetBound` host. A second `FleetHost` enrolls with D2's host's
+     instance identifier (`EnrollFleetAs`) and fails the binary policy; D2's original host gets `node_invalid` and
+     calls `EnrollAgain`. Alice sees one claim with `kind reenrolled`; after two further `synced_at` values, no
+     `device.tamper_agent_binary_changed` for D2.
+  3. `first`: device D3 without a token, host `EnrollFleet(uuid D3)` passing, then `EnrollFleetAs("acc-first-late-"+
+     suffix, uuid D3)` failing the binary policy → after two `synced_at` values `external_id` is the first host and
+     the binary result passes; after seeding, one claim with `binding first`.
+  4. `refused`: device D4 checks in with D1's bound host's token → after two rounds D4 has no `host_id`.
+  5. `same_uuid`: device D5 with `HardwareUUIDOverride` = D1's UUID becomes active → D1's `synced_at` advances in
+     the next two rounds.
+  6. carol (globex) sees none of these events; D1–D5 have no `device.tamper_agent_not_running`.
+  7. Cleanup: stop the extra hosts and delete them through Fleet's API (`fleet_api_token`).
+- **System gate F8 "inventory host binding"** in `TestInventoryGates`, after F1–F5, per VM in parallel:
+  1. `/etc/paddock/orbit.env` contains `ORBIT_HOST_IDENTIFIER=instance`; `stat -c '%a' /opt/orbit/identifier` is
+     `644`; the content matches the token format.
+  2. Within 10 minutes, `SELECT host_id FROM device_fleet_binding WHERE device_id = '<id>'` (`paddockSQL`) equals the
+     ID of the most recently seen Fleet host with the VM's hardware UUID, and so does `external_id`.
+  3. **Upgrade path.** The harness stops `paddock-supervisor`, writes `orbit.env` without the
+     `ORBIT_HOST_IDENTIFIER` line, and starts `paddock-supervisor`. Within 15 minutes:
+     - a new Fleet host with a higher ID and the VM's UUID is the binding;
+     - the previous host's `seen_time` stops;
+     - the device's `synced_at` advances after the rebinding;
+     - no `device.tamper_fleet_host_claimed` and no `tamper.protected_file_changed` for the VM.
+  4. **Second host.** The harness enrolls `EnrollFleetAs(identifier "pdk-f8-"+suffix, uuid = the VM's UUID)` with a
+     failing binary policy and answers every 30 s in a goroutine stopped by `t.Cleanup`.
+     - Within 30 minutes the org admin sees one `device.tamper_fleet_host_claimed` (`second_host`, `binding device`,
+       `bound_host` = step 3's host).
+     - Throughout, no `device.tamper_agent_binary_changed` for the VM.
+     - Cleanup deletes the extra host through Fleet's API.
+  - `fleetHostByUUID` returns the most recently seen host when several exist (earlier runs and step 3 leave stale
+    hosts).
+  - **Per-VM counts:** `device.tamper_fleet_host_claimed` 1 per VM; 0 for every other device of the run.
+
+### 9. Acceptance criteria
+
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC-H1 | Given a device that reported its device token, when another host with its hardware UUID was enrolled earlier and fails a policy, then the device's stored inventory and policy results stay those of its bound host, and after 15 min the org admin sees one `device.tamper_fleet_host_claimed` (`second_host`, `binding device`) and a tamper finding | ADR 0057, RR-22 | Org admin (audit log, findings, device inventory) |
+| AC-H2 | Given a re-enrollment of a device's speaking host, then the org admin sees one `device.tamper_fleet_host_claimed` (`reenrolled`) and no Fleet-derived agent tamper event for that device for 60 min | ADR 0057 F | Org admin |
+| AC-H3 | Given a device whose agent reports no token, then the host Fleet enrolled first is stored, and a later host is reported (`binding first`) | ADR 0057 D | Org admin |
+| AC-H4 | Given a token whose host has another hardware UUID, then the device is not bound | ADR 0057 A | Maintainer (acceptance), platform operator (`paddock_inventory_host_bindings_total{result="uuid_mismatch"}`) |
+| AC-H5 | Given a second device with a bound device's hardware UUID, then the bound device's inventory keeps syncing | ADR 0057 | Org admin (device inventory shows a recent sync) |
+| AC-H6 | Given an upgraded device, then its fleetd re-enrolls once, the new host is bound within 15 min, and no claim event is raised (VM gate F8) | H11 | Org admin; platform operator (Fleet host list) |
+| AC-H7 | Given a Fleet database restore that re-enrolls most hosts, then no claim event; the operator sees `reason=claim_majority`, the gauge, and the alert after 15 min | H9 | Platform operator |
+| AC-H8 | Given another organization, then its admin never sees these events | isolation | Org admin of globex |
+| AC-H9 | An alpha.10 agent against this server and this agent against an alpha.10 server both check in successfully | ADR 0047 | Maintainer (CI `upgrade`, gateway test) |
+
+### 10. Freedoms
+
+- Internal helper names; whether `HostTargets` and the claim watch share an index of `Seen`.
+- How `Seen` is collected across pages.
+- The order of the params in the event map.
+- Whether the per-organization transition statements share one statement.
+- Test helper names in `devicesim` and the acceptance package beyond the names this section fixes.
+- Where in the existing check-in code `fleetTokenSent` is set, as long as it is set only after HTTP 200.
+
+### 11. Stop conditions
+
+Stop and report to main, without deciding yourself, when:
+
+- **Probe 1(a) or 1(b) fails.** The fleetd in the package does not keep `/opt/orbit/identifier`, or Fleet does not
+  resolve it. The device-side design then needs another identity source.
+- **Probe 1(c) or 1(d) fails.** Duplicate hosts appear under `provided`, or the reset does not lead to exactly one new
+  host.
+- **Probe 1(e) fails.** `last_enrolled_at` does not change on a re-enrollment, or changes without one.
+- Fleet's host list is not ordered by ascending ID with `order_key=id`.
+- A device needs a change in `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, the supervisor, `pkg/bundle/` or
+  `api/openapi/admin.yaml`, or a new dependency.
+- An existing acceptance or system gate starts recording `device.tamper_fleet_host_claimed`, or loses inventory.
+- The VM gate shows `uuid_mismatch` for a real device.
+- The production size exceeds about 1050 hand-written lines (section 13, H13).
+- Probe (f) of H14 fails: the reset re-uses the previous host record.
+- `TestFleetDeviceTokenNeverLogged` cannot be made green without changing a shared logging or error path outside the
+  files of section 5.
+- The migration lint refuses `CREATE OR REPLACE` of `paddock_inventory_devices`.
+
+### 12. Risks and open points
+
+- **Agents not yet updated** stay in mode `first`. A further enrollment of their host is reported and held. The
+  changelog and the release notes ask operators to update agents. Default: accepted
+  (RR-22 text above).
+- **Stale previous hosts in Fleet** (one per updated device). Follow-up PDK-1123a removes the hosts that no device is
+  bound to and that have been silent for 24 hours, with an audit event. Default: alpha.12.
+- **Two unbound devices with one hardware UUID** still stop each other's inventory (`HAVING count(*) = 1`). Follow-up
+  PDK-1122i, reduced to this case and a report of it. Default: alpha.12.
+- **A rollout wave that re-enrolls many devices at once** can open short claim episodes. They never become due (H7);
+  only H9's count can briefly suppress other claims, which the 15-minute alert delay absorbs.
+- **Clock skew between Fleet and the worker** affects only the comparison of `R` with `seen_time` (both Fleet's
+  clock); the episode timers use the worker's clock.
+- **A lost osquery database** (fleetd purged by an administrator) creates a new host. The device's next token binds
+  it (`rebound`); no event. If Fleet re-uses the record instead, the result is one `reenrolled` claim.
+- **The device token passes through RabbitMQ and Postgres.** It lives for at most an hour, opens only Fleet's
+  unpublished device endpoints, and is cleared after the decision. Accepted.
+
+### 13. Size (estimate)
+
+| Part | Lines | Files |
+| --- | --- | --- |
+| Server, hand-written: migration ~70, queries ~45, ports ~25, Fleet adapter ~60, `binding.go` ~100, `claims.go` ~150, app ~170, worker ~140, gateway/ingest/reports ~35, protocol and OpenAPI ~15, registry/finding/messages ~25, alert ~12, compose 2 | about 850 | 16 |
+| Device side, hand-written: agent check-in ~35, reconciler H2 ~40, `RemoveAll` and fake ~15 | about 90 | 4 |
+| Generated (`pgstore`, audit doc, TS codes) | about 150 | 4 |
+| Tests: unit ~380, adapter ~80, app ~260, worker ~380, gateway/reports ~80, agent ~180, devicesim ~140, acceptance ~380, system ~200, rules ~15 | about 2100 | 14 |
+| Docs by the implementer | about 70 | 6 |
+
+**PDK-1123: about 940 hand-written production lines** (850 server, 90 device), within the ~1000 bound. H13 and H14
+add about 70 (server ~45: migration, queries, gateway, ingest, claim rule; device ~25: state, announcement) and about
+180 test lines: **about 1010 production lines**, below the stop at 1050. Not
+protocol-breaking: one optional request field. VM time: F8 adds about 35 minutes per VM, with the VMs in parallel.
+
+## Amendment 2026-11-17 e — review round 1 (architect, PDK-1123)
+
+Status: **accepted** (main, `decisions-alpha11.md` §163). It decides the findings of review round 1 on `06088289`
+(internal review and external code review). It changes H5, H6, H7, H9 and the migration of amendment e. Where this
+section and amendment e differ, this section wins. ADR 0057 records it in its amendment "2026-11-17, review round 1".
+
+### R-1 Terms (added)
+
+- **stored host** of a device: its `device_inventory_ref.external_id`.
+- **valid bound host**: the bound host is listed **and** its lower-case hardware UUID equals the binding's
+  `HardwareUUID`.
+- **suspended binding**: a binding whose bound host is not valid, either because it is not listed or because it is
+  listed with another hardware UUID.
+- **host in use** by a device: the device's bound host, or its stored host, for an active or quarantined device.
+
+### R-2 Decisions
+
+**F1 A bound host counts only with the device's hardware UUID.**
+
+- H5 rule 2 (`DecideCurrent` without a Fleet call) applies only to a **valid** bound host that is live. A suspended
+  binding resolves its pending token (rule 3 onwards).
+- H6 rule 1 stores a host for its bound device only if the host is the device's valid bound host. A bound host
+  listed with another hardware UUID is stored for no device. It is counted `ignored`, and
+  `Targets.Bound` does not contain it.
+- **The binding is kept, and suspended.**
+  - `device_fleet_binding` gains `suspended_at timestamptz`.
+  - Each round, after H5, the worker sets `suspended_at = now` for every binding that is suspended and has
+    `suspended_at` NULL. It sets `suspended_at = NULL` for every binding whose bound host is valid again, and on every
+    bind or rebind (`BindInventoryHost` clears it).
+  - While suspended, nothing is stored for the device, and the device's next token that resolves to a valid host
+    rebinds it (rule 9). orbit re-enrolls and rotates its token when Fleet no longer knows its keys, so a device whose
+    host vanished, or whose ID Fleet gave to another machine, names a new host within about one token rotation.
+  - A token that resolves to the same ID with another UUID is `uuid_mismatch` (rule 6). The binding stays suspended.
+- **Claims while suspended.**
+  - For up to `ClaimQuiet` (60 min) after `suspended_at`, live other claimants of the device do not count as
+    **second host**, as for H14's resetting device.
+  - After 60 minutes, the normal rule applies again, and the worker logs `Warn` `inventory binding suspended`
+    (`organization_id`, `device_id`, `since`) once per round and device.
+  - A `reenrolled` claim never depends on suspension.
+- New gauge `paddock_inventory_bindings_suspended`: the number of suspended bindings in the round. The round's process
+  sets it; a non-leader sets 0.
+
+**F2 The host that speaks for an unbound device is sticky.**
+
+- The speaking host of a device that is not bound (mode `first`) is chosen in this order:
+  1. its **stored host**, if that is listed with the device's lower-case hardware UUID and is not in use by another
+     device;
+  2. otherwise, the listed host with the lowest Fleet ID, among the hosts with the device's UUID that are neither
+     bound to any device nor in use by another device. This is the initial choice, and the choice after the stored
+     host disappeared, changed its UUID, or became another device's host.
+- Every other listed host with the device's UUID is a claimant (H7).
+- **A change of the speaking host counts as a re-enrollment.** When a device in mode `first` has a stored host and the
+  round's speaking host differs from it, H7's **re-enrolled** holds for the device in that round. That sets
+  `fleet_reenrolled_at` (the H8 hold applies) and reports the claim at once with kind `reenrolled`. A rebind of a bound
+  device stays a rebinding (not counted).
+- One pure function decides it, `inventory.FirstSpeaker(uuid string, stored ports.HostRef, hosts []ports.HostSeen, t
+  Targets) ports.HostRef` (hosts in list order). The store rule (H6 rule 3) and the claim watch (H7) both use it, so
+  they never disagree.
+- `Targets.First` is removed. `Targets` gains `InUse map[ports.HostRef]uuid.UUID`: the device for which a host is in
+  use (bound or stored).
+- **Data:** the worker loads `paddock_inventory_claim_devices` once per round, **before** H5. The function returns active
+  **and** quarantined devices with a stored host and gains the column `active boolean` (the claim watch watches only
+  active rows; `Watched` counts only active rows). The round uses the pre-store values for H7 in step 5. A
+  `reenrolled` comparison therefore sees the host that was stored before the round.
+
+**F3 `paddock_inventory_devices` keeps counting bound devices.** Migration 00163 drops its `CREATE OR REPLACE
+FUNCTION paddock_inventory_devices` (00163 is not merged or released, so it is changed in place). The function
+stays as migration 00024 defines it. A bound device is stored through its binding (H6 rule 1), never through
+`MapHosts`, so goal 4 holds. A device that shares a bound device's UUID and is not bound makes the UUID ambiguous, and
+no host is stored for it.
+
+**R1 New H5 rule 6b: a host in use by another device is never bound.** After rule 6 and before rule 7:
+
+| # | Condition | Action | `result` label |
+| --- | --- | --- | --- |
+| 6b | the resolved host is in use by another active or quarantined device (its bound host or its stored host) | clear the token; `Warn` `inventory host binding refused` (`organization_id`, `device_id`, `host`, `reason` `host_in_use`) | `host_in_use` |
+
+- No audit event: the requesting device's organization must not learn that another device uses the host, and the
+  other device's organization must not learn about the requesting device. The other device keeps its host. A
+  re-enrollment of that host is reported to its organization by H7.
+- The legitimate case is a machine enrolled again in Paddock while its previous device record is still active. Its
+  new device record is refused until the previous one is retired. fleet.md states this.
+
+**F4 The wave guard counts re-enrollment episodes only, per binding mode.** H9 changes:
+
+- `Claimed(mode)` = the active watched devices of that binding mode (`device` or `first`) whose open episode saw a
+  re-enrollment in the round's decision: `fleet_reenrolled_at >= fleet_claim_since`, or re-enrolled this round.
+- `Watched(mode)` = the active watched devices of that mode.
+- For each mode separately: if `Claimed(mode) >= 3` and `2 × Claimed(mode) > Watched(mode)`, no `reenrolled` claim of
+  that mode is reported this round.
+- `second_host` claims are **never** suppressed.
+- The log `inventory claim watch suppressed` gains the attribute `binding` (one `Warn` per suppressed mode). The gauge
+  `paddock_inventory_claim_watch_suppressed` gains the label `binding` (`device`, `first`). The alert keeps its
+  expression with `max(...)` over both labels.
+- Why: a Fleet restore shows as many re-enrollments of one binding mode at once. Claims of another host and the
+  re-enrollments of the other mode keep being reported.
+- **A real Fleet database restore, for bound devices:**
+  - A host enrolled before the dump and not enrolled again since keeps its ID, its identifier and its node key. Nothing
+    happens.
+  - A host enrolled again after the dump has a stale node key in the restored database. Its fleetd enrolls again under
+    its instance ID and finds the same record (same ID): `reenrolled`.
+    - If that is most bound devices (at least 3 and more than half), the guard suppresses these claims. The H8 hold
+      keeps agent reports waiting for 60 minutes. The episodes end without a report, and the operator sees
+      `PaddockInventoryClaimWatchSuppressed` with `binding="device"`.
+    - If it is a minority, each of them is reported once as `reenrolled`. Each such report is correct (the host was
+      enrolled again), and their number is bounded by the hosts enrolled again since the dump.
+  - A host created after the dump is missing from the restored database, or its ID is given to another machine that
+    enrolls after the restore. The binding is suspended (F1), nothing is stored, and there is no `second_host` for 60
+    minutes. fleetd enrolls anew, the next token rebinds the device, and the suspension ends.
+  - **Result:** no wave of false reports, and no lasting blind spot. Suspended bindings show in
+    `paddock_inventory_bindings_suspended`, and the suppression in the alert. After 60 minutes the normal rules apply
+    again.
+- **Devices in mode `first`** behave as before, guarded within their own mode. That repeated re-enrollments of an
+  unbound device keep its hold open is residual RR-22 (agent not updated).
+
+**L1 A host bound to two devices.** Rule 6b refuses a host in use by another device. A double binding can still arise
+for a while after a Fleet rebuild (corrected in review round 3, §L-15). A double binding left from before the fix stays in `Targets.Excluded`, is stored for nobody, and is logged once per
+round as `Warn` `inventory host bound to several devices` (`host`, `devices`). No audit event.
+
+**L2 Resolve throughput in large waves.** Decided:
+- H5 decides the bindings of devices that are resetting (H14) or suspended (F1) first, then the others by
+  `token_reported_at`.
+- Residual, documented in `docs/operations/upgrade.md` and `fleet.md`: more than about 1,500 agent updates per hour
+  in one installation can leave a device unresolved for longer than 60 minutes. That device then gets one false
+  `second_host` report. Keep rollout waves below that rate. `ResolvePerRound` stays 200.
+
+**L3 Unknown heartbeat fields.**
+- The worker's `Reports.heartbeat` decodes `ingest.Heartbeat` **without** `DisallowUnknownFields`, through a new
+  `decodeLenient`. Every other message type keeps `decode`.
+- Why: the gateway may add an optional heartbeat field in a release while an older worker still consumes, and a
+  heartbeat is a status report that the next check-in replaces.
+- An alpha.10 worker still dead-letters alpha.11 heartbeats while the roles of one installation are upgraded
+  non-atomically. `docs/operations/upgrade.md` (alpha.11 notes) states: "Upgrade all roles together (`./paddock up`
+  does). A `PaddockDLQ` alert during the upgrade window can come from heartbeats; they need no replay."
+
+### R-3 Texts (replace amendment e's versions; neutral)
+
+- **RR-22**, risk column, the part from "Each device's inventory host…" to the end of the cell: "A device whose agent
+  runs 0.1.0-alpha.11 or later names its inventory host over its signed device connection, and only that host's data
+  is stored for it. For a device whose agent has not done so yet, the host Paddock already stores for it keeps
+  speaking for it while Fleet lists it with the device's hardware UUID (residual until the agent is updated). Another
+  host that claims a device, a re-enrollment of the host that speaks for it, and a change of that host are reported as
+  `device.tamper_fleet_host_claimed` (ADR 0057)."
+- **RR-149**: the item stays "a device whose agent has not named its inventory host yet, while the host Paddock
+  already stores for it is used (RR-22);".
+- **Changelog** `changelog.d/pdk-1123.security.md`, replace "a device whose agent predates this release uses the host
+  Fleet enrolled first until it updates" with "until a device's agent is updated, the inventory host Paddock already
+  stores for it keeps speaking for it, and a change of that host is reported".
+- **`docs/operations/fleet.md`**:
+  - "Inventory sync and mutual watch", step 3: replace "uses the host Fleet enrolled first for its hardware UUID"
+    with "keeps the host Paddock already stores for it while Fleet lists it with the device's hardware UUID (the
+    lowest Fleet ID when none is stored yet)". Add: "A host that already speaks for another device is never bound to
+    a device (`result="host_in_use"`); retire a device's previous record before you enroll the machine again."
+  - Move the claim-watch paragraph ("It reports, once per episode, `device.tamper_fleet_host_claimed` …") out of the
+    binary-policy item into its own numbered step after it. Replace its last sentence with: "A Fleet database restore
+    re-enrolls many hosts at once; the worker then holds the re-enrollment reports of the affected binding mode
+    (`claim_majority`, label `binding`). A bound host that Fleet no longer lists with the device's hardware UUID
+    suspends the device's binding until the device names its new host (`paddock_inventory_bindings_suspended`)."
+  - The runbook "When the inventory claim watch is suppressed" counts re-enrollment episodes only and names the label
+    `binding`.
+- **Event description** `device.tamper_fleet_host_claimed`:
+  - replace "kind reenrolled: the host that speaks for the device was enrolled again, which also happens when fleetd's
+    local state on the device is lost." with "kind reenrolled: the host that speaks for the device was enrolled again,
+    which also happens when fleetd's local state on the device is lost, or, for a device that has not named its host,
+    another host took the place of the one stored for it.";
+  - replace "first when it has not named one yet and the host the inventory system enrolled first for its hardware UUID
+    speaks for it" with "first when it has not named one yet and the host already stored for it (else the one with the
+    lowest ID) speaks for it".
+  - `make gen` updates the audit document.
+- **ADR 0057 Decision rule** "A host that no device is bound to maps through the hardware UUID only to an unbound
+  device, and only if it is that device's first-enrolled host" reads, through the ADR amendment, "…only if it is the host
+  already stored for that device, or, when none is stored or it is gone, the one with the lowest ID".
+
+### R-4 Regression tests (each MUST fail on `06088289`; the mutation or the failing assertion goes into the result document)
+
+Model: the review's own probe tests (worker package, testcontainers DB, fake source and binder; kept out of the
+repository).
+
+| Test | Package | Covers | Fails on 06088289 because |
+| --- | --- | --- | --- |
+| `TestDecideBindingCurrentNeedsHardwareUUID` | inventory | F1 rule 2 | the shortcut returns `DecideCurrent` for a live bound host with another UUID |
+| `TestInventoryRoundBoundHostListedWithOtherUUID` | worker | F1: bound host 100 listed with W's UUID → nothing stored for V, V's pending token resolved (binder called), binding suspended, no claim, no agent tamper event; V's new token → rebind, suspension cleared, V stored again | V stores host 100, binder not called, one `device.tamper_agent_binary_changed` |
+| `TestInventoryRoundSuspendedBindingNoSecondHostFor60Min` | worker | F1 claims | without suspension, the new host raises `second_host` after 15 min |
+| `TestInventoryRoundOlderHostDoesNotReplaceStoredHost` | worker | F2: unbound V stores host 20; host 10 starts reporting V's UUID → V still stores 20; no agent tamper event from 10; `second_host` after 15 min | V stores 10 at once; agent tamper events from host 10; 0 claims |
+| `TestInventoryRoundFirstSpeakerReplacedIsReenrolled` | worker | F2: stored host 20 disappears → 10 speaks, claim `reenrolled` at once, agent reports held 60 min | 10 stored without claim or hold |
+| `TestInventoryRoundDuplicateOfBoundDeviceGetsNothing` | worker | F3: bound V (previous host 7 stale), unbound X with V's UUID → nothing stored for X; V keeps its bound host | X stores host 7 |
+| `TestInventoryDevicesCountsBoundDevices` | app | F3 (replaces `TestInventoryDevicesIgnoresBound`) | the bound device is not counted |
+| `TestInventoryRoundRefusesHostInUse` | worker | R1: X' token resolves to Y's stored host → `host_in_use`, no binding, nothing stored for X', Y unchanged | X' binds and stores Y's host |
+| `TestWatchClaimsGuardCountsReenrollmentsPerMode` | inventory | F4: 4 of 6 devices with live second hosts → all reported; 4 of 6 bound re-enrolled → `device` suppressed; 4 of 5 `first` re-enrolled and 1 of 4 bound re-enrolled → the bound one reported | the guard counts second hosts and both modes together |
+| `TestInventoryRoundFleetRestoreBoundDevices` | worker | F4 restore: 5 bound devices — 3 re-enrolled (same IDs), 2 hosts vanished and re-created → no claim event across 70 min, held reports, 2 suspended then rebound, gauges as stated | the 2 re-created hosts raise `second_host`, or the round stores foreign data |
+| `TestBindHostsResettingAndSuspendedFirst` | worker | L2 ordering with `ResolvePerRound` = 2 in the test | oldest token first |
+| `TestReportsHeartbeatToleratesUnknownFields` | worker | L3: an alpha.11 heartbeat JSON with an extra field `future_field` is recorded, not dead-lettered; an older-style struct without the fleet fields decodes an alpha.11 heartbeat | `decode` refuses unknown fields |
+| `TestHostTargetsDoubleBoundLogged` | inventory/worker | L1 warn | no log |
+
+Existing tests that change with the decisions: `TestHostTargets` (no `First`), `TestInventoryRoundFirstEnrolledHost`
+(the sticky host), `TestInventoryDevicesIgnoresBound` (replaced), acceptance `TestInventoryHostBinding` step 3 (the
+`first` host is the stored one) and step 5 (`same_uuid`: D1 keeps syncing; D5 stores nothing).
+
+**Review.** The external review re-runs the binding probes against the finished stack. The confidential list of
+probes is in the ticket.
+
+### R-5 Files
+
+As amendment e, plus:
+- `server/migrations/paddock/00163_inventory_host_binding.sql` (changed in place: `suspended_at`; no
+  `paddock_inventory_devices`; `paddock_inventory_claim_devices` with quarantined rows and `active`);
+- the queries `SuspendInventoryBindings`, `ResumeInventoryBindings` (organization pool, `device_id = ANY(...)`);
+- `server/internal/worker/worker.go` (`decodeLenient`);
+- `docs/operations/upgrade.md`.
+
+Nothing else is touched.
+
+### R-6 Stop conditions (added)
+
+- The fix needs a change outside amendment e's files and R-5.
+- Production growth beyond about 160 lines for this round (section R-7).
+- A test of R-4 does not fail on `06088289`, and no mutation makes it fail: report it, do not weaken it.
+
+### R-7 Size (estimate)
+
+| Part | Lines |
+| --- | --- |
+| Production, hand-written: `binding.go` (F1, R1, `FirstSpeaker`, `InUse`) ~60, `claims.go` (suspension, per-mode guard, replacement) ~45, worker (load order, suspend/resume, ordering, logs, gauges, `decodeLenient`) ~45, migration and queries ~15 (net, after the removed function), app ~10, description ~2 | about +175 / −20, **net about +155** |
+| Tests (R-4 and the changed tests) | about +650 |
+| Docs | about +40 |
+
+Main accepted 902 code lines for `06088289` (§162). After this round: **about 1060**. That is at the stop of about
+1050 and needs main's acknowledgement.
+
+## Amendment 2026-11-17 e — review round 2 (architect, PDK-1123): left inventory hosts
+
+Status: **accepted** (user, via main, 2026-11-17). This section builds on amendment e and its review round 1 and
+changes them as stated below. Where this section and the earlier ones differ, this section wins. ADR 0057 records the
+rule on hosts listed with another hardware UUID in its amendment "2026-11-17, review round 1".
+
+### L-1 Goal
+
+A Fleet host record that a device no longer speaks from still holds that device's inventory until Fleet forgets it.
+After this round, Paddock reserves every such host for the device that left it, so that no other device is bound to it
+or stores it, and removes it from Fleet. Organization administrators see each removal as an audit event of the device.
+Operators see the removals in a metric. Other organizations see nothing of it.
+
+### L-2 Terms (added to R-1)
+
+- **left host** of a device: a host the device does not speak from any more, while Fleet may still hold the device's
+  inventory in it. A host becomes a left host in exactly two ways:
+  - **replaced:** the device's stored host changes from host A to another host (`StoreHost`). A becomes a left host.
+  - **relisted:** the device's stored host is not its bound host, and Fleet lists it with another hardware UUID than
+    the device's. For a device that is not bound, this is any stored host listed with another UUID.
+- **reservation**: a row of `device_inventory_left_host` with `removed_at` NULL.
+- **reserved host**: the host of a reservation. A reserved host is in use by the reservation's device.
+
+### L-3 Binding decisions
+
+1. **The N1 rule stays for bound hosts only.** A device's **bound** host that Fleet lists with another hardware UUID
+   is not in use by that device (review round 1, unchanged, ca7377ab). This covers the device's stored host only when
+   the stored host is the bound host. Why: Fleet can give an ID to another machine after a rebuild or restore, and
+   that machine must be able to use it.
+2. **A relisted stored host stays in use and becomes a left host.** In `inventory.HostTargets`:
+   - a stored host listed with another hardware UUID, that is not the same device's bound host, stays in use by that
+     device;
+   - it is returned in `Targets.Left` with reason `relisted`.
+
+   The worker persists these reservations in the same round, before the store step.
+3. **A replaced stored host becomes a left host.** `StoreHost` records the previous stored host as a reservation with
+   reason `replaced` in its own transaction, before it upserts the new reference. When the device stores, or is bound
+   to, a host for which it has a reservation, `StoreHost` and `BindInventoryHost` delete that reservation in their
+   transactions. A device that speaks from the host again therefore keeps it.
+4. **Reserved hosts are in use.** `HostTargets` adds every reserved host to `InUse` for its device, unless a binding
+   or a stored host already sets it. Effects:
+   - H5 rule 6b refuses a token that resolves to a reserved host of another device (`host_in_use`).
+   - `FirstSpeaker` does not choose it for another device.
+   - The device that left the host may choose it again (decision 3).
+5. **Removal.** Every round, after the claim watch, the worker handles up to `LeftHostDeletesPerRound` (50)
+   reservations, oldest `left_at` first. It skips a reservation whose `attempted_at` is less than
+   `LeftHostRetryAfter` (1 hour) ago. For each reservation:
+   1. `PlatformPool.FleetHostInUse(ctx, device, host)` runs; the function is redefined (§L-6).
+   2. **`ref`** (another device of any organization and any state stores the host, is bound to it, or holds a
+      reservation for it): delete the reservation. No Fleet call, no audit event. Metric `result="in_use"`.
+   3. **`none` or `hardware`**: one action `device.inventory_host_removed` through `ActionRunner.RunExternal` in the
+      device's organization:
+      - `ports.InventoryAdmin.DeleteHost` runs with a 30-second timeout.
+      - Success, including Fleet no longer knowing the host: `removed_at = now()` in the finalizing transaction.
+        Metric `removed`.
+      - `problem.InvalidState`: `attempted_at = now()` in the finalizing transaction. Metric `failed`. The worker
+        continues with the next reservation.
+      - `problem.UpstreamUnavailable`: the reservation is unchanged. Metric `unavailable`. The removal step ends for
+        this round, and the round itself does not fail.
+      - Any other error fails the round, like every other database error of the round.
+   - Why `hardware` does not block: the left host is a record the device itself no longer speaks from. A device record
+     of the same machine without a reference gets a fresh host record from fleetd.
+   - Why no race: only the inventory round, which holds the worker's leader lock, writes bindings, stored hosts and
+     reservations. Retention and offboarding only delete. The check and the deletion therefore see the same state.
+6. **Rows stay after removal.** A row with `removed_at` set is no reservation. It stays so that the same device does
+   not record the same host again. It is deleted when the device stores or is bound to that host again (decision 3),
+   and by the organization deletion.
+7. **Restart safety.** Every reservation is persisted before the host can leave the device's use:
+   - `relisted` reservations are written in the round that sees them, before the store step;
+   - `replaced` reservations are written in the `StoreHost` transaction.
+
+   A crash between `DeleteHost` and the finalizing transaction leaves the reservation. The next round deletes again;
+   a 404 counts as deleted. The interrupted action is finalized as `unknown` by the existing reaper.
+8. **Organization deletion and retention.**
+   - `device_inventory_left_host` is registered in `offboarding_table` (order 166).
+   - The organization deletion's Fleet step also lists the organization's reserved hosts, so they are deleted from Fleet
+     like stored hosts. The existing check `FleetHostInUseOutside` applies, redefined in §L-6.
+   - A retired device's reservations are still removed by the round. Retention does not change. Through the redefined
+     `paddock_fleet_host_in_use`, it keeps a retired device's host that another device has reserved, is bound to or
+     stores.
+9. **Signals.**
+   - Audit event `device.inventory_host_removed`, one per attempt, in the device's own organization. Params:
+     `hostname`, `fleet_host` (the device's own former host ID), `reason` (`replaced` or `relisted`), `left_at`,
+     `fleet_host_deleted`. No other device's or organization's identifier, no token, no hardware UUID.
+   - Counter `paddock_inventory_previous_hosts_total{result}` with results `removed`, `in_use`, `failed` and
+     `unavailable`.
+   - The logs are below. Every one names only the reservation's own organization, device and host:
+     - `Info` `inventory left host removed` (`organization_id`, `device_id`, `host`, `reason`);
+     - `Info` `inventory left host released` (`organization_id`, `device_id`, `host`), for `in_use`;
+     - `Warn` `inventory left host not removed` (`organization_id`, `device_id`, `host`, `error`), for `failed`;
+     - `Warn` `removing left inventory hosts failed; retrying next round` (`error`), for `unavailable`.
+   - The `in_use` outcome records no event. The device's organization must not learn that another device uses the
+     host (as rule 6b).
+10. **Cost after a Fleet rebuild, accepted and documented.** After a Fleet rebuild or restore, a stored host ID can
+    name another machine's record. When that record is a left host of a device and no device stores it, is bound to
+    it or holds a reservation for it yet, it is removed. That machine's fleetd then enrolls again under a new ID, and
+    its device names it with its next token (bound) or speaks from it (not bound). Each such removal is recorded as
+    `device.inventory_host_removed`. Unbound devices whose stored IDs Fleet swapped among them recover this way
+    within a few rounds instead of waiting for each other.
+
+### L-4 Non-goals
+
+- No removal of hosts that never spoke for a device, such as hosts that map to no device or second hosts that claim a
+  device. Those stay as they are, reported by the claim watch.
+- No change to H5's rules other than the source of `InUse`, to H7 to H9, or to the agent.
+- No change to the retention round's code or to `device.inventory_purged`.
+- No change to the device API, the admin API or the portal beyond the two message keys.
+- PDK-1123a's 24-hour removal of silent unbound hosts is replaced by this round. Nothing else of it is built.
+
+### L-5 Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00163_inventory_host_binding.sql` | change in place (not released) | table, offboarding registration, two redefined functions, one new platform function |
+| `server/internal/adapters/postgres/queries/inventory.sql` | change | queries of §L-6 |
+| `server/internal/adapters/postgres/queries/offboarding.sql` | change | `ListOffboardingInventoryRefsPage` also lists reserved hosts |
+| `server/internal/adapters/postgres/pgstore/*` | regenerate (`make gen`) | |
+| `server/internal/inventory/binding.go` | change | `LeftHost`, constants, `HostTargets` (decisions 1, 2, 4) |
+| `server/internal/app/inventory.go` | change | `StoreHost`, `BindInventoryHost`, `InventoryLeftHosts`, `RecordLeftInventoryHosts`, `RemoveLeftInventoryHost` |
+| `server/internal/domain/audit/codes.go` | change | `CodeDeviceInventoryHostRemoved` and its registry entry |
+| `server/internal/worker/inventory.go` | change | `WithAdmin`, loading and persisting reservations, removal step, metric |
+| `server/cmd/paddock-server/worker.go` | change | `.WithAdmin(fleetClient)` |
+| `server/web/src/locales/en.json`, `de.json` | change | `audit.device.inventory_host_removed` |
+| generated `docs/compliance/audit-codes.md` and `server/web/src/lib/auditCodes.gen.ts` (`make gen`) | regenerate | |
+| `server/internal/siemcontent/wazuh_test.go` | change | the new code joins the base-level list (as `device.inventory_host_kept`) |
+| `docs/operations/fleet.md`, `docs/operations/monitoring.md`, `docs/compliance/residual-risks.md` | change | texts of §L-9 |
+| tests of §L-8 | new or change | |
+
+Do not touch: the Fleet adapter (`DeleteHost` is used as it is), `server/internal/app/retention.go`,
+`server/internal/app/offboarding_job.go` (only its query changes), the agent, `api/openapi/`, and
+`changelog.d/pdk-1123.security.md` except the sentence of §L-9.
+
+### L-6 Interfaces, data model and texts
+
+Migration 00163 (appended in place; it is not merged or released):
+
+```sql
+CREATE TABLE device_inventory_left_host (
+  device_id uuid NOT NULL REFERENCES device(id),
+  organization_id uuid NOT NULL,
+  host_id text NOT NULL CHECK (host_id ~ '^[0-9]{1,19}$'),
+  reason text NOT NULL CHECK (reason IN ('replaced','relisted')),
+  left_at timestamptz NOT NULL,
+  attempted_at timestamptz,
+  removed_at timestamptz,
+  PRIMARY KEY (device_id, host_id),
+  FOREIGN KEY (organization_id, device_id) REFERENCES device (organization_id, id)
+);
+CREATE INDEX device_inventory_left_host_host ON device_inventory_left_host (host_id) WHERE removed_at IS NULL;
+-- The organization deletion deletes by organization_id.
+CREATE INDEX device_inventory_left_host_org_idx ON device_inventory_left_host (organization_id);
+ALTER TABLE device_inventory_left_host ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_inventory_left_host FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON device_inventory_left_host TO paddock_worker
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON device_inventory_left_host TO paddock_worker;
+INSERT INTO offboarding_table (table_name, delete_order) VALUES ('device_inventory_left_host', 166);
+
+-- Reservations of active organizations, any device state, oldest first (platform pool).
+CREATE FUNCTION paddock_inventory_left_hosts()
+  RETURNS TABLE (device_id uuid, organization_id uuid, host_id text, reason text, left_at timestamptz,
+                 attempted_at timestamptz, hostname text)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT l.device_id, l.organization_id, l.host_id, l.reason, l.left_at, l.attempted_at, d.hostname
+     FROM public.device_inventory_left_host l JOIN public.device d ON d.id = l.device_id
+          JOIN public.organization o ON o.id = l.organization_id
+     WHERE l.removed_at IS NULL AND o.status = 'active'
+     ORDER BY l.left_at, l.device_id, l.host_id $$;
+REVOKE ALL ON FUNCTION paddock_inventory_left_hosts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_inventory_left_hosts() TO paddock_platform;
+```
+
+`paddock_fleet_host_in_use(retired_device uuid, host text)` and `paddock_fleet_host_in_use_outside(org uuid, host
+text)` are redefined in 00163 with `CREATE OR REPLACE FUNCTION`. The signature, return values, search path,
+`SECURITY DEFINER` and grants stay the same. Only the `'ref'` branch widens. It answers `'ref'` when any of these
+holds:
+- `device_inventory_ref.external_id = host`;
+- `device_fleet_binding.host_id = host`;
+- `device_inventory_left_host.host_id = host AND removed_at IS NULL`.
+
+Each condition applies to a device other than `retired_device` (resp. an organization other than `org`), and to a
+device in any state. The `'hardware'` branch is unchanged. Retention and the organization deletion keep their Go
+code, because they already handle `'ref'`.
+
+Queries (`inventory.sql`, organization pool unless stated):
+
+```sql
+-- name: RecordReplacedInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+SELECT r.device_id, r.organization_id, r.external_id, 'replaced', now() FROM device_inventory_ref r
+WHERE r.device_id = @device_id AND r.external_id <> '' AND r.external_id <> @external_id::text
+ON CONFLICT (device_id, host_id) DO NOTHING;
+
+-- name: RecordRelistedInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+VALUES (@device_id, @organization_id, @host_id, 'relisted', @left_at)
+ON CONFLICT (device_id, host_id) DO NOTHING;
+
+-- name: ForgetLeftInventoryHost :exec
+DELETE FROM device_inventory_left_host WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: LockLeftInventoryHost :one
+SELECT host_id FROM device_inventory_left_host
+WHERE device_id = @device_id AND host_id = @host_id AND removed_at IS NULL FOR UPDATE;
+
+-- name: MarkLeftInventoryHostRemoved :exec
+UPDATE device_inventory_left_host SET removed_at = now() WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: MarkLeftInventoryHostAttempted :exec
+UPDATE device_inventory_left_host SET attempted_at = now() WHERE device_id = @device_id AND host_id = @host_id;
+
+-- name: InventoryLeftHosts :many   (platform pool)
+SELECT l.device_id::uuid AS device_id, l.organization_id::uuid AS organization_id, l.host_id::text AS host_id,
+       l.reason::text AS reason, l.left_at::timestamptz AS left_at,
+       coalesce(l.attempted_at, 'epoch')::timestamptz AS attempted_at, l.hostname::text AS hostname
+FROM paddock_inventory_left_hosts() l;
+```
+
+`offboarding.sql`, `ListOffboardingInventoryRefsPage` (same name, parameters and result columns):
+
+```sql
+SELECT DISTINCT ON (external_id) external_id, device_id FROM (
+  SELECT external_id, device_id FROM device_inventory_ref WHERE external_id <> ''
+  UNION ALL
+  SELECT host_id, device_id FROM device_inventory_left_host WHERE removed_at IS NULL) h
+WHERE external_id > @after_external_id::text ORDER BY external_id, device_id LIMIT @max_hosts;
+```
+
+Go (`server/internal/inventory/binding.go`):
+
+```go
+// Reasons a host became a left host (plan M5a amendment e, review round 2).
+const (
+	LeftReplaced = "replaced"
+	LeftRelisted = "relisted"
+)
+
+const (
+	// LeftHostDeletesPerRound bounds the left hosts the worker removes from the inventory system per round.
+	LeftHostDeletesPerRound = 50
+	// LeftHostRetryAfter is how long a left host the inventory system refused to delete waits for the next attempt.
+	LeftHostRetryAfter = time.Hour
+)
+
+// LeftHost is a host a device no longer speaks from, reserved for it until the inventory system deleted it.
+type LeftHost struct {
+	DeviceID, OrganizationID uuid.UUID
+	Host                     ports.HostRef
+	Reason                   string
+	Hostname                 string
+	LeftAt                   time.Time
+	AttemptedAt              *time.Time
+}
+
+// Targets gains:
+//	// Left holds the stored hosts listed with another hardware UUID than their device's that are not that device's
+//	// bound host, in device order; the worker records them as left hosts (reason LeftRelisted).
+//	Left []LeftHost
+
+func HostTargets(seen []ports.HostSeen, bindings []Binding, devices []ClaimDevice, left []LeftHost) Targets
+```
+
+`HostTargets` rules, in this order:
+1. Bindings: as today. A bound host is in use by its device unless it is relisted.
+2. Stored hosts. For each device `d` with `d.ExternalID != ""` and no `InUse` entry yet for that host:
+   - if the host is relisted and equals `d`'s bound host (from `bindings`, `Host != ""`): not in use;
+   - if the host is relisted and does not equal it: `InUse[host] = d.DeviceID`, and append
+     `LeftHost{DeviceID, OrganizationID, Host, Reason: LeftRelisted}` to `Left`;
+   - otherwise: `InUse[host] = d.DeviceID`.
+3. Reservations. For each `left` entry without an `InUse` entry for its host: `InUse[host] = entry.DeviceID`.
+
+App (`server/internal/app/inventory.go`):
+
+```go
+// InventoryLeftHosts returns the reservations of active organizations, oldest first (platform pool).
+func (s *InventorySync) InventoryLeftHosts(ctx context.Context) ([]inventory.LeftHost, error)
+
+// RecordLeftInventoryHosts records relisted stored hosts of devices of the organization in ctx as left hosts.
+func (s *InventorySync) RecordLeftInventoryHosts(ctx context.Context, hosts []inventory.LeftHost, now time.Time) error
+
+// LeftHostOutcome is the result of RemoveLeftInventoryHost.
+type LeftHostOutcome int
+
+const (
+	LeftHostRemoved LeftHostOutcome = iota // deleted from the inventory system (or unknown to it)
+	LeftHostInUse                          // another device uses it; the reservation was deleted, nothing recorded
+)
+
+// RemoveLeftInventoryHost applies decision 5 to one reservation in the organization in ctx (system principal).
+// It returns problem.UpstreamUnavailable or problem.InvalidState from DeleteHost unchanged (wrapped).
+func (s *InventorySync) RemoveLeftInventoryHost(ctx context.Context, h inventory.LeftHost,
+	admin ports.InventoryAdmin) (LeftHostOutcome, error)
+
+// SpecDeviceInventoryHostRemoved records the removal of a left host; system principal only.
+var SpecDeviceInventoryHostRemoved = ActionSpec{Code: audit.CodeDeviceInventoryHostRemoved}
+```
+
+- `StoreHost` runs `RecordReplacedInventoryHost(device, ref)` before `UpsertInventoryRef` and
+  `ForgetLeftInventoryHost(device, ref)` after it, in the same transaction.
+- `BindInventoryHost` runs `ForgetLeftInventoryHost(device, host)` in its transaction when the compare-and-set
+  updated a row.
+- `RemoveLeftInventoryHost`:
+  - It calls `s.platform.FleetHostInUse`. On `db.FleetHostUsedByRef`, it runs `ForgetLeftInventoryHost` in the
+    organization and returns `LeftHostInUse`.
+  - Otherwise it calls `s.runner.RunExternal(ctx, ScopeOrg, spec, prepare, external, finalize)`, where:
+    - `spec` has the target `{Type: "device", ID, Display: hostname}`, the params `hostname`, `fleet_host`, `reason`,
+      `left_at` (RFC 3339) and `fleet_host_deleted` (false);
+    - `prepare` runs `LockLeftInventoryHost`; a missing row returns `problem.NotFound`;
+    - `external` runs `admin.DeleteHost` under a 30-second timeout;
+    - `finalize` runs `MarkLeftInventoryHostRemoved` and sets `fleet_host_deleted` true when there is no error. On
+      `problem.InvalidState` it runs `MarkLeftInventoryHostAttempted`. On any other error it changes nothing.
+
+Worker (`server/internal/worker/inventory.go`):
+
+```go
+// WithAdmin makes the sync round remove left inventory hosts through a (plan M5a amendment e, review round 2); nil
+// removes none.
+func (i *Inventory) WithAdmin(a ports.InventoryAdmin) *Inventory
+
+var metricPreviousHosts = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "paddock_inventory_previous_hosts_total",
+	Help: "Left inventory hosts the sync round handled, by result: removed from Fleet, released because another device uses them, failed or unavailable (ADR 0057).",
+}, []string{"result"})
+```
+
+Round order:
+1. The existing steps up to `InventoryClaimDevices`.
+2. **`InventoryLeftHosts`.**
+3. `bindHosts`, with the reservations passed into its `HostTargets` call.
+4. `HostTargets(seen, bindings, devices, left)`.
+5. **`RecordLeftInventoryHosts` per organization for `targets.Left`.**
+6. Store.
+7. Claim watch.
+8. **The removal step** (decision 5). It reloads `InventoryLeftHosts` so that it sees this round's `replaced`
+   reservations. It does nothing when `WithAdmin` was not called.
+9. The agent reports and the summary, as today.
+
+Audit registry (`server/internal/domain/audit/codes.go`):
+
+```go
+// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
+CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
+
+CodeDeviceInventoryHostRemoved: {
+	Code: CodeDeviceInventoryHostRemoved, Emitted: true,
+	Description: "The inventory round removed from Fleet a host that the device no longer speaks from (actor: system). reason replaced: the host Paddock stores for the device changed and fleet_host was the previous one; reason relisted: Fleet lists fleet_host, the host stored for the device, with another hardware UUID. Until it is removed, the host is reserved for the device: no other device is bound to it or stores it. left_at is when it was left. fleet_host_deleted is true when Fleet deleted the host or no longer knew it. A host that another device stores, is bound to or holds reserved is not removed and records no event. A failure keeps the reservation: upstream_unavailable when Fleet failed or could not be reached (retried next round), invalid_state when Fleet refused this host (retried after an hour). After a Fleet rebuild, the removed host can be another machine's record; that machine's fleetd enrolls again under a new ID.",
+	Params:      []string{"hostname", "fleet_host", "reason", "left_at", "fleet_host_deleted"},
+	Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0057.",
+},
+```
+
+Messages (`server/web/src/locales/*.json`, key `audit.device.inventory_host_removed`):
+- en: `"Fleet host {fleet_host}, which {hostname} no longer speaks from, was removed from Fleet"`
+- de: `"Der Fleet-Host {fleet_host}, über den {hostname} nicht mehr spricht, wurde aus Fleet entfernt"`
+
+### L-7 Steps
+
+1. **Migration and queries** (`make gen`). Check: `make gen` produces no further diff, `make lint` (RLS lint) is green,
+   and `go test ./server/internal/platform/db/ -run 'TestOffboarding|TestFleetHostInUse'` is green.
+2. **`inventory` package.** Check: `go test ./server/internal/inventory/ -run 'TestHostTargets|TestWatchClaims'`.
+3. **App and registry.** Check: `go test ./server/internal/app/ -run
+   'TestStoreHost|TestBindInventoryHost|TestRemoveLeftInventoryHost|TestFleetHostInUse'` and `go test
+   ./server/internal/domain/audit/`.
+4. **Worker and wiring.** Check: `go test ./server/internal/worker/ -run 'TestInventoryRound'`.
+5. **Messages and docs** (§L-9); quality gate (`make typecheck`, the full `go test` with `nice -n 19`).
+
+### L-8 Tests
+
+Each regression test MUST fail on ca7377ab. The mutation or the failing assertion goes into the result document.
+
+| Test | Package | Covers |
+| --- | --- | --- |
+| `TestHostTargetsLeftHosts` | inventory | an unbound device's stored host listed with another UUID: in use by it and in `Left`; a bound device's stored host equal to its relisted bound host: not in use, not in `Left`; a bound device's stored host that is not its bound host, relisted: in use and in `Left`; a reservation: in use by its device unless a binding or stored host sets it |
+| `TestInventoryRoundLeftHostNotBoundElsewhere` | worker | the review's probe across **3 rounds**. Setup: unbound V stores host 5 and also has host 6 with V's UUID. Host 5 is then listed with D's UUID, and D reports a token for 5 before each round. Assertions: D never binds or stores 5; V stores 6 with one `reenrolled` claim; `DeleteHost(5)` is called exactly once; one `device.inventory_host_removed` (success, reason `relisted`) in V's organization; none in D's |
+| `TestInventoryRoundPreviousHostRemovedAfterBind` | worker | V stores 5; V binds new host 9 by token and stores 9; host 5 is removed in that round's removal step (reason `replaced`); a new worker instance created between the store and the removal still removes it |
+| `TestInventoryRoundLeftHostUsedElsewhereNotDeleted` | worker | V's left host 5 is stored for (and in a second case bound to, and in a third case reserved for) device Y of another organization. No `DeleteHost`, V's reservation is deleted, metric `in_use` +1, no event in either organization; no log record or metric label contains Y's or Y's organization's ID |
+| `TestInventoryRoundLeftHostDeleteRetried` | worker | `DeleteHost` returns `UpstreamUnavailable`: reservation kept, removal step stops (the second reservation is not tried), round succeeds, one failure event; next round deletes. `InvalidState`: `attempted_at` set, not tried again within 1 hour, tried after it. A 404 counts as removed |
+| `TestInventoryRoundLeftHostReservedUntilRemoved` | worker | while V's left host 5 is reserved (`WithAdmin` not called), D's token for 5 is refused `host_in_use` across rounds; an unbound device whose UUID Fleet lists on 5 does not store it |
+| `TestInventoryRoundLeftHostCap` | worker | 60 reservations → 50 handled in the first round, 10 in the second |
+| `TestInventoryRoundUnboundHostIDsSwapped` | worker | unbound V stores 5 and unbound W stores 6; Fleet lists them swapped. Both hosts are removed; after the fake re-enrolls both machines under new IDs, V and W store their new hosts; no `second_host` claim during the rounds; no deadlock (each device stores a host within 3 rounds after its new host is listed) |
+| `TestInventoryRoundHostIDsSwapped` | worker | unchanged (bound devices): both rebind crosswise, `host_in_use` +0, no `DeleteHost` of a host that is now bound |
+| `TestStoreHostRecordsReplacedHost` | app (integration) | changing the stored host records one reservation; storing the same host again records none; returning to a reserved host deletes its row |
+| `TestRemoveLeftInventoryHost` | app (integration) | the outcomes of decision 5; exactly one action per attempt; params as §L-6; nothing recorded on `in_use` |
+| `TestFleetHostInUseCoversBindingsAndReservations` | platform/db (integration) | `ref` for another device's binding and for another device's reservation, in another organization and for a retired device; removed rows do not count; `_outside` likewise |
+| `TestOffboardingDeletesReservedHosts` | app (integration) | the organization deletion's Fleet step deletes a reserved host of the organization and keeps one that another organization stores |
+| `TestEveryRegisteredCodeIsClassified` (existing) | siemcontent | the new code is listed among the codes at the base level, like `device.inventory_host_kept` |
+
+Existing tests that change: `TestHostTargets` and the `claims_test.go` helpers gain the `left` argument (nil).
+
+### L-9 Texts (neutral)
+
+- **`docs/operations/fleet.md`**, "Inventory sync and mutual watch", step 3: append "A host a device no longer speaks
+  from (its previous stored host, or a stored host Fleet lists with another hardware UUID) stays reserved for that
+  device and is removed from Fleet in the same or the next round (`device.inventory_host_removed`,
+  `paddock_inventory_previous_hosts_total`). After a Fleet rebuild or restore, such a host ID can name another
+  machine's record; the record is removed and the machine's fleetd enrolls again under a new ID."
+- **`docs/operations/monitoring.md`**: a row for `paddock_inventory_previous_hosts_total{result}` with the four
+  results. A rising `failed` count means Fleet refuses deletions; check the Fleet API user's role.
+- **`docs/compliance/residual-risks.md`**, RR-22, mitigation column: append "A host a device no longer speaks from is
+  reserved for it and removed from Fleet; after a Fleet rebuild, this can remove a record that another machine took
+  over, which then enrolls again."
+- **Changelog** `changelog.d/pdk-1123.security.md`: append "A device's previous inventory host is removed from Fleet."
+- **§12 of amendment e**, item "Stale previous hosts in Fleet": replaced by this round.
+
+### L-10 Freedoms
+
+- Internal helpers, variable names, the order of the guard checks within decision 5, log message wording beyond the
+  stated messages and attributes.
+- Whether `RecordLeftInventoryHosts` runs one statement per host or one batch per organization.
+
+### L-11 Stop conditions
+
+- The fix needs a change outside §L-5.
+- `offboarding_table` order 166 is taken.
+- The RLS lint or the offboarding registry test demands something §L-6 does not state.
+- Production growth beyond about 300 lines for this round.
+- A test of §L-8 does not fail on ca7377ab and no mutation makes it fail: report it, do not weaken it.
+- The rebuild cost turns out larger than decision 10 states: a removal of a host that a device is bound to or stores.
+
+### L-12 Risks and open points
+
+- **Rebuild cost** (decision 10). Accepted and documented.
+- **Event volume after a rebuild:** at most one event per left host and attempt, and at most 50 per round. Accepted.
+- **Phase 2 live checks** (ticket). Fleet deletes a reserved host with the existing API user, and the removed
+  machine enrolls again under a new ID. Also check whether a record that was enrolled again still holds the earlier
+  software list.
+
+### L-13 Size (estimate)
+
+| Part | Lines |
+| --- | --- |
+| Production: migration ~60, queries ~30, `binding.go` ~30, app ~80, registry ~12, worker ~60, wiring ~2, messages 2 | about **+275** |
+| Tests | about +450 |
+| Docs | about +15 |
+
+Main's estimate for this round was about 220 production lines. Persisting the relisted reservations before the
+store step adds about 50. After this round, PDK-1123 has about 1340 code lines.
+
+## Amendment 2026-11-17 e — review round 3 (architect, PDK-1123): reservations in every organization, retired devices
+
+Status: **accepted** (main, 2026-11-17, within the user's decision on left hosts). This section changes review
+round 2 (§L-1 to §L-13). Where they differ, this section wins.
+
+### L-14 Reservations count in every organization status
+
+- `paddock_inventory_left_hosts()` (00163, changed in place):
+  - it no longer filters on the organization status;
+  - it returns every reservation (`removed_at` NULL) of every organization that still has rows;
+  - it gains the column `org_active boolean`, computed as `o.status = 'active'`, after `hostname`.
+- `InventoryLeftHosts` (query and app) passes the column through. `inventory.LeftHost` gains
+  `OrgActive bool // the organization is active; only then does the removal step handle the reservation`.
+- `HostTargets` uses every reservation, whatever `OrgActive` is. A reserved host of a suspended organization's device
+  therefore stays in use: rule 6b refuses it, and `FirstSpeaker` does not choose it for another device.
+- The removal step (§L-3 decision 5) skips reservations with `OrgActive` false. They count neither against
+  `LeftHostDeletesPerRound` nor in the metric. Once the organization is active again, the next round handles them.
+- An organization in deletion keeps its reservations in use until the organization deletion has deleted its reserved
+  hosts from Fleet and its rows (§L-3 decision 8).
+
+### L-15 Correction of L1
+
+L1's "It cannot arise any more" did not hold, and the text is corrected above. A double binding can arise in this case:
+- the trigger is a Fleet rebuild that swaps the IDs of bound devices;
+- their next tokens arrive in different rounds;
+- the first device rebinds to its new host, which is still the other device's suspended bound host. A bound host listed
+  with another hardware UUID is not in use (review round 1, N1).
+
+What happens then:
+- the host stays in `Targets.Excluded` and nothing is stored for it, as L1 states;
+- the first device's previous host becomes a `relisted` left host and is removed from Fleet, although the second
+  machine now uses it. That is the accepted rebuild cost of §L-3 decision 10;
+- the second machine's fleetd enrolls again under a new ID, and its next token rebinds it.
+
+### L-16 Retirement reserves the stored host
+
+- **Decision:** retiring a device reserves its stored host like a left host, with reason `retired`. The removal step
+  removes it from Fleet like any other left host, with the audit event in the retired device's own organization.
+  Until then, no other device is bound to it or stores it.
+- **Why:** claim devices are only active and quarantined devices, so a retired device's stored host was in use by
+  nobody until retention removed it.
+- **Where:**
+  - Every retirement passes through `app.TransitionDevice` (`server/internal/app/devices.go`), inside the action's
+    transaction. Its callers are `Devices.Retire` (admin API, role `paddock_api`) and
+    `DeviceReports.RetireUninstalled` (worker, role `paddock_worker`).
+  - `TransitionDevice` runs `q.RecordRetiredInventoryHost(ctx, id)` when `to == device.StateRetired`, right after
+    `RevokeDeviceIdentityKeys`. The reservation therefore commits or rolls back with the retirement.
+- **Only the stored host is reserved, not a differing bound host.** A bound host carries the device's instance
+  identifier. A host stored for the device is the one whose record holds its inventory.
+- **The removal step handles retired devices without change:**
+  - `paddock_inventory_left_hosts()` already ignores the device state;
+  - `paddock_fleet_host_in_use(device, host)` excludes the retired device itself;
+  - `ActionRunner` records the event in the organization scope, as retention already does for retired devices
+    (`device.inventory_purged`).
+- **Retention:**
+  - Its code does not change.
+  - When its purge reaches the device, the Fleet host is normally already gone. `DeleteHost` then sees a 404, which
+    counts as deleted (`fleet_host_deleted` true).
+  - A `hardware` or `seen_recently` answer can still keep the retired device's reference. The removal step deletes the
+    Fleet record all the same (a `hardware` answer does not block it, §L-3 decision 5). The machine's fleetd enrolls
+    again under a new ID, and a new device record of that machine speaks from it.
+  - ADR 0032 records the shorter time for the Fleet copy in an amendment. Paddock's own copy of the retired device's
+    inventory keeps `retired_inventory_days`.
+- **Existing retired devices:** migration 00163 reserves the stored host of every device that is already retired.
+  The migration runs as `paddock_owner`, which has `BYPASSRLS`.
+
+Migration 00163 changes (in place):
+
+```sql
+-- in CREATE TABLE device_inventory_left_host:
+  reason text NOT NULL CHECK (reason IN ('replaced','relisted','retired')),
+
+-- the policy also applies to the API role, which retires devices; the API role may only insert:
+CREATE POLICY tenant ON device_inventory_left_host TO paddock_api, paddock_worker
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT INSERT ON device_inventory_left_host TO paddock_api;
+-- ON CONFLICT needs SELECT on the conflict columns (review round 3, amended): the API role reads only the device and
+-- host IDs of its own organization's rows (forced RLS), which it already reads in device_inventory_ref.
+GRANT SELECT (device_id, host_id) ON device_inventory_left_host TO paddock_api;
+
+-- after the table: existing retired devices
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+SELECT r.device_id, r.organization_id, r.external_id, 'retired', now()
+FROM device_inventory_ref r JOIN device d ON d.id = r.device_id
+WHERE d.state = 'retired' AND r.external_id <> ''
+ON CONFLICT (device_id, host_id) DO NOTHING;
+```
+
+Query (`inventory.sql`, organization pool):
+
+```sql
+-- name: RecordRetiredInventoryHost :exec
+INSERT INTO device_inventory_left_host (device_id, organization_id, host_id, reason, left_at)
+SELECT r.device_id, r.organization_id, r.external_id, 'retired', now() FROM device_inventory_ref r
+WHERE r.device_id = @device_id AND r.external_id <> ''
+ON CONFLICT (device_id, host_id) DO NOTHING;
+```
+
+`ON CONFLICT DO NOTHING` needs `SELECT` on the conflict columns, hence the column grant above (amended).
+
+Go:
+- `server/internal/inventory/binding.go`: `LeftRetired = "retired"` next to `LeftReplaced` and `LeftRelisted`.
+- `server/internal/domain/audit/codes.go`, description of `device.inventory_host_removed`: replace "reason replaced:
+  … ; reason relisted: …" with the same text, followed by "; reason retired: the device was retired and fleet_host
+  is the host Paddock stored for it". Params, outcomes and messages stay the same.
+
+### L-17 Texts (neutral)
+
+- `docs/operations/fleet.md`, at the end of step 3's sentence on left hosts: "Retiring a device reserves its stored
+  host in the same way; the next inventory round removes it from Fleet. Paddock's copy of the retired device's
+  inventory follows the retention period."
+- ADR 0032, new section "Amendment 2026-11-17 (ADR 0057, PDK-1123)": "The host in Fleet of a retired device is
+  removed by the next inventory round (`device.inventory_host_removed`, reason `retired`), not at the end of
+  `retired_inventory_days`. Paddock's copy of the inventory keeps the retention period above. The inventory purge
+  then finds the host deleted." The architect adds this amendment with this plan.
+
+### L-18 Tests
+
+Each regression test MUST fail on 28312ead.
+
+| Test | Package | Covers |
+| --- | --- | --- |
+| `TestInventoryRoundSuspendedOrgReservationInUse` | worker | Setup: V's left host 5 (reason `relisted`) is refused once (`InvalidState`), then V's organization is suspended, and D reports a token for 5 before each of 3 rounds. Assertions: D never binds or stores 5; no `DeleteHost` while V's organization is suspended; after it is active again and `LeftHostRetryAfter` has passed, 5 is removed once, with the event in V's organization |
+| `TestInventoryRoundSuspendedOrgSkippedByRemoval` | worker | 2 reservations of a suspended organization and 1 of an active one, cap 1 → the active one is removed in the first round; the metric counts 1 |
+| `TestRetireReservesStoredHost` | app (integration) | `Devices.Retire` (admin API principal) and `DeviceReports.RetireUninstalled` each create one reservation with reason `retired` for the stored host; a device without a stored host gets none; a failed retirement (invalid transition) creates none |
+| `TestInventoryRoundRetiredHostNotBoundElsewhere` | worker | retired V with stored host 5, listed with D's UUID; D reports a token for 5 → `host_in_use` across 2 rounds; with admin, 5 is removed once, the event `device.inventory_host_removed` (reason `retired`) is in V's organization, none in D's |
+| `TestRetentionPurgeAfterRetiredHostRemoved` | app (integration) | after the removal, the inventory purge of the retired device records `fleet_host_deleted` true (Fleet answers 404) and deletes Paddock's rows as before |
+| `TestMigration00163ReservesRetiredHosts` | platform/db (integration) | a retired device with a stored host that exists before 00163 has a reservation with reason `retired` after it; an active device has none. If the test harness cannot migrate step by step, verify it once by hand and record the result in the result document |
+
+`TestHostTargetsLeftHosts` additionally covers a reservation with `OrgActive` false: it is in use.
+
+### L-19 Stop conditions (added)
+
+- `paddock_api` needs more than `INSERT` and the column grant `SELECT (device_id, host_id)` on
+  `device_inventory_left_host` (amended: `ON CONFLICT` needs `SELECT` on the conflict columns; a reservation made in
+  the worker round instead would leave the host free between the retirement and the next round).
+- A retirement path that does not pass through `TransitionDevice`.
+- Production growth beyond about 40 lines for this round.
+
+### L-20 Size (estimate)
+
+| Part | Lines |
+| --- | --- |
+| S1: function, query, `LeftHost`, removal-step filter | about +8 |
+| Retired devices: migration ~10 (check, policy roles, grant, backfill), query ~5, `TransitionDevice` ~3, constant 1, description ~1 | about +20 |
+| Tests | about +250 |
+| Docs | about +10 |
+
+### L-21 A retired device holds its hardware UUID until retention purges it (review round 4)
+
+Status: accepted (main, 2026-11-17).
+
+- Decision: a retired device counts in the hardware-UUID ambiguity check while its state is `retired`,
+  `uninstalled_at` is NULL, it still has a `device_inventory_ref` row and has no `retention_inventory_hold` row. A UUID
+  it shares with an active or quarantined device maps to no device; a UUID only it holds maps to none (unchanged).
+- It stops counting once retention's inventory purge ran for it (reference deleted, or hold row written for
+  `fleet_host_kept` `hardware`/`seen_recently`) or it was retired as uninstalled. No fixed period.
+- Why: a retired machine can keep running fleetd; after the round removes its host, fleetd enrolls again under a new ID
+  with the same UUID, which could otherwise map to another device reporting that UUID.
+- Only devices that are not bound are affected (a bound device stores only its bound host).
+- Migration 00163 changed in place (unreleased): `paddock_inventory_devices` with the retired-holder condition and
+  `HAVING count(*) = 1 AND bool_and(d.state IN ('active','quarantined'))`. Grants: none new. Go: no change.
+- Tests: worker `TestInventoryRoundRetiredDeviceHoldsItsUUID`; app `TestMapHostsRetiredHolder`; `TestMapHosts`
+  unchanged.
+- Residual: a retired device that never stored a host does not hold its UUID.
+
+## Amendment 2026-11-17 f (architect, PDK-1126c) — Paddock-written identity files in the integrity check
+
+Protected area 4 includes identity files that Paddock itself writes. Before this amendment, the login reconciler
+corrected a changed `himmelblau.conf`, `login-deny` or socket drop-in and reported only `device.login_applied`. The
+integrity check of ADR 0056 (part C) now judges these files too. A change raises
+`device.tamper_protected_file_changed` with the existing `file` param; there is no new code and no new `reason`. The
+correction stays as it was. Decisions §183, §185, §187 and §190.
+
+**Component choice.** The check observes these files in every pass, and the login reconciler wraps each of its own
+writes in the check. Two alternatives were rejected:
+- A separate baseline in the login reconciler. Report-only mode never reaches its apply, and the lock, once-per-change
+  and suspension rules of part C would be duplicated.
+- The integrity pass alone. It runs on its own ticker, so in enforce mode the login correction could hide a change
+  before the next pass sees it.
+
+**F1 Checked files.** `reconcile.LoginManagedFiles`: `/etc/himmelblau/himmelblau.conf`, `/etc/paddock/login-deny`
+and the three `90-paddock.conf` drop-ins of `himmelblaud.socket`, `himmelblaud-tasks.socket` and
+`himmelblaud-broker.socket`.
+- Their value is the SHA-256 of the content, and `""` when absent, as for the agent-written files (C7).
+- Mode and owner are not judged; the login reconciler still corrects them without an event.
+- They are checked in both enforcement modes.
+
+**F2 Baseline only from Paddock's own content.** The baseline entry of an F1 file is never taken from the disk; a pass
+with no entry for such a file skips it. An entry is written only at these points:
+- `Written(path, content)` after each successful write by the login reconciler: the SHA-256 of the content written.
+  The file's once-per-change mark is cleared. A record that cannot be saved (lock timeout) stays in memory and is
+  saved by the next successful `Expect`, `BeforeWrite`, `Written` or pass. The configuration written before a package
+  installation is recorded only once the installation succeeded or was killed at its timeout, which both keep it. The
+  restore or removal after a failed installation records nothing.
+- `Written(path, render)` for every F1 file that already holds Paddock's current render when the login reconciler
+  applies a login resource (`confirmManaged`). The value is the render, not the disk, so an entry left behind by a
+  crash, an unsaved record or an older agent follows the file as soon as Paddock's render is in place.
+- `ConfirmPrevious` at every agent start, after `SetPrevious` and before the first pass: the same confirmation for the
+  renders of the previously enforced spec. It covers a rollback to an agent without this check that wrote new
+  content, followed by an update again.
+- `Expect(path, render)` when the login reconciler applies a login resource after an agent start. It applies only when
+  the agent enforced a bundle before this start, which the agent passes on with `SetPrevious` after loading its cached
+  bundle. At every agent start, where no entry exists, the baseline records the render of that earlier bundle's login
+  spec for `himmelblau.conf` and `login-deny`. A cached report-only bundle counts as no bundle, because it wrote
+  nothing. The drop-ins get no `Expect`: agents before them never wrote them. `himmelblau.conf` gets neither `Expect`
+  nor the start confirmation while the previous spec's packages are not installed: a failed installation took that
+  configuration back. After a successful apply, its own spec becomes the previous one.
+- `Expect(login-deny, empty)` when the agent keeps the deny list of the PAM profile without a login resource and
+  finds it missing, again only after an enforced bundle. Agents before this change kept the list in place, so its
+  absence is a change: it unlocks every locked user. A device that never enforced a bundle records nothing here. An
+  existing list is never expected or written.
+
+As a result:
+- A fresh enrolment raises no event.
+- The first spec change after an update compares the disk with what Paddock wrote before, which matches, so it raises
+  no event. This holds also when the last installation before the update failed.
+- An edit or deletion made before the update, including one locked name removed from `login-deny`, raises one event
+  at the first correction.
+- After a rollback to an agent without this check and an update again, the first pass raises no event, and a later
+  change is reported.
+- `renderHimmelblauConf`, `renderDenyList` and `EnsureDenyList` are unchanged since v0.1.0-alpha.10.
+
+**F3 Check right before the correction.** `BeforeWrite(path)` hashes the file and compares it with its entry under
+`integrity.lock`.
+- No entry, or an equal value: nothing happens.
+- Otherwise: the part C once-per-change mark (C8), one `Warn` "a protected Paddock file changed outside Paddock" and
+  one event.
+- A hash or lock error is one `Warn` and no event.
+
+The login reconciler's helper `writeManaged` calls `BeforeWrite`, then the write, then `Written`; a failed write
+records nothing. Every write of an F1 file goes through it (the deny list and `himmelblau.conf` in apply, the drop-ins,
+and `EnsureDenyList`), except the configuration write before the installation, which calls `BeforeWrite` and records
+as F2 says, and the restore or removal after a failed installation, which calls no guard method. `Expect`,
+`BeforeWrite` and `Written` are safe from any goroutine and never touch the pass's hash cache or `Warn` throttle. A
+rebuilt baseline makes the next `Expect` record again.
+
+**F4 Wiring.** `reconcile.FileGuard` (`Expect`, `BeforeWrite`, `Written`) is implemented by `integrity.Checker`.
+`apply.Applier.WithFileGuard`, `SetPrevious` and `ConfirmPrevious` pass it on to the login reconciler. `agent.New`
+wires the guard and `SetPrevious`; the agent's run calls `ConfirmPrevious` before its first pass, because `agent.New`
+also serves `paddockd plan`, which changes nothing. The
+reconciler does not import the integrity package, and `baseline.go` is unchanged.
+
+**F5 Residuals (RR-148).**
+- Only content is judged.
+- A change made in the instant between the check and Paddock's own write is overwritten without an event.
+- A check that cannot hash the file or take `integrity.lock` logs a `Warn`; the correction then overwrites a change
+  without an event.
+- At every agent start without an entry, until Paddock's first write, `himmelblau.conf` and `login-deny` are judged
+  against what Paddock wrote for the bundle it enforced before. A local account created or removed since then can
+  raise one event.
+- A stop or an unsaved record between Paddock's write and its record can raise one event for that write; the next
+  apply of a login resource records it again.
+- With a report-only bundle cached at the agent start there is no previous render: an edit made before the start, or
+  a deleted `login-deny`, is corrected without an event when the device enforces again.
+- The drop-ins are judged only after Paddock's first write.
+- On a device that never enforced a bundle, an absent `login-deny` is not a change.
+- A Paddock-written file stays judged after the login resource leaves the bundle, until Paddock removes it.
+- After a rollback to an older agent that wrote a new lock, a change outside Paddock that sets the deny list back to
+  the content recorded before the rollback, made before the update again, is corrected without an event. This needs
+  root; no regular flow leads there.
+- A change that already equals the next content Paddock applies, for example a lock removed just before the
+  administrator unlocks that user, is recorded without an event. The window is at most one check interval.
+- A later release that changes a render and is installed directly over an agent without this check can raise one
+  event per changed file.
+- Report-only mode records nothing until the device enforces a bundle.
+
+**Tests.** Integrity unit tests:
+- no event when the disk matches the render;
+- an edit made before the update is reported;
+- no entry is recorded from the disk;
+- a change after a write is reported at the next check right before the correction, and a repeat is reported again;
+- a render change raises no event;
+- an edit after a write is reported by the next pass;
+- a deleted file is reported by the pass alone;
+- an empty file;
+- lock timeouts;
+- a rebuilt baseline makes `Expect` record again;
+- an unsaved record is saved by the next `Expect`;
+- concurrency under `-race`.
+
+Reconcile tests: the guard order, no `Expect` on a fresh device, the previous renders, the confirmation at start, a
+failed write, a failed installation that records nothing, a timeout that keeps the record, and `EnsureDenyList` with
+and without an enforced bundle.
+
+Agent tests with a real applier and checker:
+- a manipulation is reported and corrected;
+- the update followed by a new lock raises no event, and the missing drop-ins are written without an event;
+- an edit, a deletion and a removed locked name before the update are each reported once;
+- the deny list without a login resource;
+- a report-only bundle before the update;
+- a rollback to an agent without the check and an update again;
+- a stop between a write and its record;
+- a failed installation before the update;
+- a deleted drop-in on a report-only device.
+
+**Acceptance.**
+1. 1126c-1: in enforce mode, root edits `himmelblau.conf`. Within one drift interval there is one event for that file
+   and one `device.login_applied` (`config`), and the file is restored.
+2. 1126c-2: an update or spec change that changes a render raises `device.login_applied` and no tamper event.
+3. 1126c-3: the first start of the agent with this change raises no event.
+4. 1126c-4: an edit made before the update raises one event at the first correction, and the file is restored.
+5. 1126c-5: on a report-only device, a deleted drop-in with an entry raises one event, and the file stays deleted.
+
+## Amendment 2026-11-24 f (architect, PDK-1122d review 1) — holds, sparse check-ins and the majority guard of the fleetd silence watch
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round). It amends amendments
+2026-11-16 c and d for the fix round of PDK-1122d. Where they differ, this amendment wins. ADR 0056 records the decision
+in its amendment "2026-11-24 f". It builds on ADR 0057 (accepted) and on the implementation in commits `d4fcaa20` and
+`539584fe`. Migration `00164` is not merged anywhere, so this amendment changes it in place.
+
+### F-1. Goal
+
+1. A device whose inventory host is being re-bound under ADR 0057 (an announced enrollment reset, a suspended binding,
+   a re-enrollment) is not reported as a silent fleetd while the rebinding stays within the 60 minutes ADR 0057
+   allows. The org admin sees no `device.tamper_fleetd_silent` for an agent update in a staged rollout.
+2. A device that keeps checking in at intervals of up to an hour while its fleetd is silent is reported. A device
+   that suspends, boots or loses its network is still not reported.
+3. Devices whose silence is already reported, or that are in a hold, no longer count in the installation-wide
+   majority guard.
+4. Fleet's "never evaluated" placeholder for `policy_updated_at` counts as unknown.
+
+### F-2. Context
+
+- **Review 1, H1 (both reviewers).** `inventory.WatchFleet` judges a device by its speaking host (bound host, else
+  `FirstSpeaker`, else the stored values). It ignores `device_fleet_binding.reset_announced_at`, `bound_at`,
+  `suspended_at` and `device_inventory_ref.fleet_reenrolled_at`. The claim watch (`inventory.WatchClaims`,
+  `server/internal/inventory/claims.go`) holds such devices for `ClaimQuiet` (60 min). The silence watch reports
+  after 30 min. The worker resolves at most `ResolvePerRound` (200) device tokens per round, so a wave of more than
+  about 1,200 devices that reset together, or a device-token endpoint outage of about 20 min during a wave, leaves
+  devices unbound for more than 30 min. Their stored host is then stale, and each gets a false report.
+- **The announcement is device-supplied.** `reset_announced_at` comes from the device's check-in
+  (`fleet_enrollment_reset_at`), accepted between 24 h before and 5 min after the receive time, and a newer value
+  replaces an older one. A hold that skips or restarts the episode while the device announces a reset would therefore
+  never end. The hold in F-3 is bounded by the episode instead.
+- **Review 1, M1/M-b.** E2's row "stale, not live → `fleet_silent_since = NULL`" runs every round. A device counts
+  as live for 15 min after a check-in. A device that checks in every 20 min or less often is therefore never live for
+  a whole confirmation and is never reported.
+- **Why E2 reset on "not live".** It is the protection of AC-D3: after suspend, boot or network loss, the agent can
+  check in shortly before orbit reconnects, and an old `fleet_silent_since` would then make the device due at once.
+  The genuine agent checks in every 300 s (`compiler.CheckinIntervalS`, the same for every bundle). orbit talks to
+  Fleet every few seconds while it runs.
+- **Review 1, M2 (external).** `Live` and `Fresh` (E3) include devices whose silence is already reported and that stay
+  stale, for example a site that blocks only `fleet.<domain>`. Enough such devices in one organization keep the guard
+  down for every organization.
+- **Review 1, L1/L-d.** Fleet stores `hosts.policy_updated_at` as `NOT NULL DEFAULT '2000-01-01 00:00:00'`. The
+  adapter maps only the zero time to nil, so a host that never stored policy results is policy-stale (F5).
+- **Review 1, L2.** One listed host whose `seen_time` lies ahead of Fleet's clock (after a clock correction of the
+  Fleet host, while that host is offline) pins `R`. All live devices then look stale, the guard holds every report
+  (`no_fresh_peer`), and `PaddockFleetSilenceWatchSuppressed` fires. No false report results.
+- **Implementer's deviation 6.** Amendment c's RR-149 text named how osquery could be imitated toward Fleet. Public
+  texts describe what the system does and does not detect, never how.
+
+### F-3. Binding decisions
+
+**F-H1 Hold, bounded by the episode (replaces the reviewers' "no Start, reset `since`").**
+
+- New terms, evaluated per device per round:
+  - **hold start** — each of these values that is set and not later than the **episode start** (the device's
+    `fleet_silent_since`, or the round time `now` when it is NULL):
+    1. `reset_announced_at`, but only if `bound_at` is NULL or earlier than `reset_announced_at` (the device has not
+       been bound since the announcement; the same condition as `resetting` in `claims.go`);
+    2. `suspended_at`;
+    3. `fleet_reenrolled_at`.
+  - **hold end** = the latest hold start + `ClaimQuiet` (60 min); none when there is no hold start.
+  - **held** = a hold end exists and `now < hold end`.
+  - **effective start** `E` = the later of `fleet_silent_since` and the hold end (only defined while
+    `fleet_silent_since` is set).
+- A held device still starts its episode (`fleet_silent_since = now`). This fixes the episode start, so a later
+  announcement, suspension or re-enrollment (a hold start after the episode start) never extends the hold. A hold
+  therefore delays a report by at most 60 minutes and never prevents it.
+- The confirmation (F-M1) counts only from `E`. Within a hold, nothing becomes due.
+- A held device counts in neither `Live` nor `Fresh` (E3).
+- `claims.go` and the claim watch are unchanged.
+- Option not chosen: the reviewers' rule "held → no Start, reset `fleet_silent_since`". With a device-supplied
+  announcement, that hold would be renewed for as long as the device keeps announcing. It would also need no data
+  that bounds it.
+- Option not chosen: "held → skip the device". It has the same problem as the previous option.
+
+**F-M1 Episode, evidence and due rule (replaces amendment c's E2 table).**
+
+- New column `device_inventory_ref.fleet_silent_checkin_at timestamptz`: the device's `last_contact_at` taken in the
+  first round that found a check-in later than `E`. It is the first check-in after the silence was found, outside
+  any hold.
+- New constant `FleetSilenceGap = 60 * time.Minute`: an open episode is dropped when the device has not checked in for
+  that long.
+- **gone(d)**: `last_contact_at` is NULL or earlier than `now - FleetSilenceGap`.
+- Transitions per device and round. The first matching row applies:
+
+| # | Condition | Transition |
+| --- | --- | --- |
+| 1 | not stale | if `fleet_silent_since`, `fleet_silent_checkin_at` or `fleet_silent_reported_at` is set: **Clear** (all three = NULL) |
+| 2 | stale, gone | if `fleet_silent_since` is set: **Reset** (`fleet_silent_since` and `fleet_silent_checkin_at` = NULL; `fleet_silent_reported_at` stays) |
+| 3 | stale, `fleet_silent_since` NULL | if live: **Start** (`fleet_silent_since = now`) |
+| 4 | stale, `fleet_silent_checkin_at` NULL, `last_contact_at > E` | **Note** (`fleet_silent_checkin_at` = the device's `last_contact_at`) |
+| 5 | stale, `fleet_silent_checkin_at` set, `fleet_silent_reported_at` NULL, `last_contact_at > fleet_silent_checkin_at`, `now >= E + FleetSilenceConfirm` | **due** |
+| 6 | otherwise | nothing |
+
+- In words: a device is due when its fleetd stays silent, it checked in twice after the silence was found (outside a
+  hold), and 15 minutes have passed since the later of the episode start and the hold end. Gaps in check-ins of up
+  to 60 minutes do not end the episode.
+- **Why AC-D3 holds.** After suspend, boot or network loss, the first check-in can come before orbit reconnects
+  (row 4, Note). The report needs a second check-in with fleetd still silent (row 5). The genuine agent's next
+  check-in comes 5 minutes later. By then orbit has reconnected, the next round finds the device fresh, and row 1
+  clears the episode. An episode that started before a suspend (a round in the seconds between orbit's last contact
+  and the agent's last check-in) only shortens orbit's tolerance after the resume from 15 to about 5 minutes. Within
+  `FleetSilenceGap`, `fleet_silent_since` stays set.
+- Option not chosen: "due when `last_contact_at > fleet_silent_since`" without row 4. One check-in during orbit's
+  reconnect after a resume would then be enough for a false report whenever an older episode is still open.
+- Option not chosen: reset only after a long gap, but keep "live at the due round" as the only evidence. It has the
+  same weakness.
+- Option not chosen: no gap reset at all. That would let unrelated brief wake-ups days apart add up to one episode.
+
+**F-M2 Majority guard counts (amends E3).** A device counts in `Live` and `Fresh` only if it is not held (F-H1) and
+not "stale with `fleet_silent_reported_at` set". Everything else in E3 is unchanged: `Fresh >= 1`,
+`2 × Fresh >= Live`, a complete list, and the log line and gauge. A device whose silence ends (row 1) counts again in
+the same round.
+
+- Option not chosen: accept the gap and add a runbook remedy. The operator has no remedy inside Paddock for another
+  organization's network. Excluding already reported devices loses nothing, because they were reported.
+
+**F-L1 Fleet's placeholder.** Confirmed. The Fleet adapter maps a `policy_updated_at` earlier than
+`2001-01-01T00:00:00Z` to nil, in both places (`ListHostsChangedSince` → `HostSeen.PolicyUpdatedAt`, and
+`HostInventory` → `HostInventory.PolicyUpdatedAt`), through one helper. `changedAt` is unchanged.
+
+**F-L2 A future `seen_time`.** Accepted, not clamped.
+- Clamping `R` to the round time would compare Fleet's clock with the server's. E1 avoids that on purpose.
+- The same `NewestSeen` also drives the claim watch and the binding decisions (ADR 0057), and they would then
+  disagree.
+- The failure is fail-safe and loud: the guard holds the reports, the critical alert fires, and the episodes clear
+  when the time has passed.
+- An RR-149 line and a runbook step record it (F-6).
+
+**F-D6 RR-149 wording.** Confirmed: the dropped clause stays out. The item "a replaced osquery" becomes "a replaced
+or simulated osquery". ADR 0056 amendment c already uses those words. The wording of this item in amendment c,
+sections 6 and 12, is superseded by it.
+
+**F-R Review fixes without a new decision.** These are part of the same fix round, as the reviews describe them:
+- M-a: a `TestWatchFleet` row in which only fully fresh devices count as `Fresh`;
+- L-a: a worker test for the F6 gate while it is closed;
+- L-b: move and reword the F6 sentence in `docs/operations/fleet.md`;
+- L-c: `t.Fatalf` in the seen_time probe of `gateF7`.
+
+**F-C Contract.**
+- Device API, admin API, agent, supervisor and bundle: unchanged.
+- Audit: the description of the unreleased code `device.tamper_fleetd_silent` changes (F-6). Params, messages and
+  finding are unchanged.
+- Database: `00164` gains one column and returns five more columns from its platform function. It is still one
+  unmerged migration.
+
+### F-4. Non-goals
+
+- No change to `server/internal/inventory/claims.go`, `binding.go`, the claim watch, the binding decisions,
+  `ResolvePerRound`, `ClaimQuiet` or `NewestSeen`.
+- No change to `agent/` (in particular `agent/internal/revoke/`), `pkg/`, `api/openapi/*.yaml`, or the gateway's
+  handling of `fleet_enrollment_reset_at`.
+- No per-organization quorum, and no clamping of `R`.
+- PDK-1122k (one host's data fails the whole round) stays a separate ticket.
+
+### F-5. Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00164_fleet_silence_watch.sql` | change (unmerged) | column, function columns (F-6) |
+| `server/internal/adapters/postgres/queries/inventory.sql` + generated `pgstore` | change | F-6 queries |
+| `server/internal/inventory/fleetwatch.go`, `fleetwatch_test.go` | change | F-H1, F-M1, F-M2, tests |
+| `server/internal/app/inventory.go`, `inventory_fleetwatch_integration_test.go` | change | new fields, Note |
+| `server/internal/adapters/fleet/hosts.go`, `hosts_test.go` (or `binding_test.go`, where `TestListHostsSeen` lives) | change | F-L1 |
+| `server/internal/worker/inventory_fleetwatch_test.go`, `inventory_binding_test.go` | change | section F-8 |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | description (F-6) |
+| `test/acceptance/inventory_test.go` | change | seed `fleet_silent_checkin_at` |
+| `test/system/inventory_test.go` | change | L-c |
+| `docs/compliance/residual-risks.md`, `docs/operations/fleet.md`, `docs/architecture.md` §11.5 | change | F-6 texts, L-b |
+
+Do not touch: `server/internal/inventory/claims.go`, `binding.go`, `server/internal/worker/inventory.go` (the round
+order and `watchFleet` stay unchanged; the worker needs no change), `agent/`, `pkg/`, `api/openapi/`, and every
+migration other than `00164`.
+
+### F-6. Interfaces, data model and texts
+
+```sql
+-- 00164_fleet_silence_watch.sql (complete Up part; header comment gains fleet_silent_checkin_at)
+ALTER TABLE device_inventory_ref ADD COLUMN fleet_silent_since timestamptz,
+                                 ADD COLUMN fleet_silent_checkin_at timestamptz,
+                                 ADD COLUMN fleet_silent_reported_at timestamptz;
+
+CREATE FUNCTION paddock_fleet_watch_devices()
+  RETURNS TABLE (device_id uuid, organization_id uuid, hardware_uuid text, external_id text, bound_host text,
+                 last_contact_at timestamptz, last_seen_at timestamptz, policy_updated_at timestamptz,
+                 fleet_silent_since timestamptz, fleet_silent_checkin_at timestamptz,
+                 fleet_silent_reported_at timestamptz, reset_announced_at timestamptz, bound_at timestamptz,
+                 suspended_at timestamptz, fleet_reenrolled_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT d.id, d.organization_id, lower(d.hardware_uuid), i.external_id, b.host_id, s.last_contact_at,
+            i.last_seen_at, i.policy_updated_at, i.fleet_silent_since, i.fleet_silent_checkin_at,
+            i.fleet_silent_reported_at, b.reset_announced_at, b.bound_at, b.suspended_at, i.fleet_reenrolled_at
+     FROM public.device d JOIN public.device_inventory_ref i ON i.device_id = d.id
+          LEFT JOIN public.device_status s ON s.device_id = d.id
+          LEFT JOIN public.device_fleet_binding b ON b.device_id = d.id
+     WHERE d.state = 'active' $$;
+-- REVOKE/GRANT and the empty Down unchanged.
+```
+
+```sql
+-- name: FleetWatchDevices :many — additionally selects the five new columns in the function's order, with the
+-- same coalesce(…, 'epoch') pattern as the existing timestamps.
+
+-- name: NoteFleetSilenceCheckin :exec   (organization pool)
+UPDATE device_inventory_ref i SET fleet_silent_checkin_at = s.last_contact_at
+FROM device_status s
+WHERE s.device_id = i.device_id AND i.device_id = ANY(@device_ids::uuid[])
+  AND i.fleet_silent_since IS NOT NULL AND i.fleet_silent_checkin_at IS NULL AND s.last_contact_at IS NOT NULL;
+
+-- name: ResetFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: ClearFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_checkin_at = NULL,
+                                fleet_silent_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+-- StartFleetSilence and MarkFleetSilentReported unchanged.
+```
+
+```go
+// server/internal/inventory/fleetwatch.go
+const (
+	// FleetSilenceGap is how long a device may go without check-in before its open silence episode is dropped
+	// (plan M5a amendment 2026-11-24 f, F-M1).
+	FleetSilenceGap = 60 * time.Minute
+)
+
+// WatchedDevice additionally carries (all nil when NULL):
+//   CheckinAt                                   — fleet_silent_checkin_at
+//   ResetAnnouncedAt, BoundAt, SuspendedAt      — device_fleet_binding
+//   ReenrolledAt                                — device_inventory_ref.fleet_reenrolled_at
+
+// FleetWatch additionally carries
+//   Note []uuid.UUID // devices whose first check-in after E is recorded (row 4)
+// ForOrganization filters Note like Start, Reset and Clear.
+
+// WatchFleet keeps its signature:
+func WatchFleet(devices []WatchedDevice, seen []ports.HostSeen, t Targets, now time.Time, live time.Duration) FleetWatch
+```
+
+- `SilentDevice` and the report params are unchanged. `silent_since` stays `fleet_silent_since`, the first round
+  that found the silence. A hold never moves it.
+- `ApplyFleetWatch` applies Start, Note, Reset and Clear in its existing single `InOrg` transaction. The order is
+  Clear, Reset, Start, Note. The sets are disjoint.
+- `WatchFleet` stays pure and is the only place that implements F-H1, F-M1 and F-M2.
+
+**Texts (neutral; replace the versions on the branch).**
+
+- **Registry description** of `device.tamper_fleetd_silent`: replace "for at least 15 minutes while the device kept
+  checking in with Paddock, confirmed for 15 more minutes while most other devices reached the inventory system
+  (actor: system)." with "for at least 15 minutes while the device kept checking in with Paddock, confirmed when the
+  device checked in twice more and 15 more minutes passed (counted from 60 minutes after an announced enrollment
+  reset of fleetd, a suspended host binding or a re-enrollment of its host), while most other devices reached the
+  inventory system (actor: system)." The rest is unchanged. Run `make gen`.
+- **RR-149**:
+  - Replace the item that begins "a foreign program that checks in while fleetd is stopped" and ends "plan M5a
+    amendment 2026-11-16 c);" with: "a foreign program that checks in while fleetd is stopped, as long as fewer than
+    half of the live devices reach the inventory system (devices already reported and devices in a hold do not
+    count), on an installation with a single live device, while the inventory system lists a host whose last contact
+    lies ahead of its clock, or if it checks in less often than once an hour (the server reports a silent fleetd as
+    `device.tamper_fleetd_silent` only with a fresh majority, and a lasting suppression raises the alert
+    `PaddockFleetSilenceWatchSuppressed`; plan M5a amendments 2026-11-16 c and 2026-11-24 f); after an announced
+    enrollment reset of fleetd, a suspended host binding or a re-enrollment, the report comes up to 60 minutes later;".
+  - Replace "a replaced osquery." with "a replaced or simulated osquery.".
+- **`docs/operations/fleet.md` step 5**:
+  - Replace "while the device kept checking in, confirmed over 15 more minutes." with "while the device kept checking
+    in (at most 60 minutes between check-ins), confirmed when the device has checked in twice more and 15 more
+    minutes have passed. After an announced enrollment reset of fleetd, a suspended host binding or a re-enrollment
+    of the device's host, the confirmation counts only from 60 minutes after that event."
+  - L-b: move the sentence "A `paddock_agent_running` that such a host lists without an answer counts as failing."
+    directly after the sentence that ends "…logged as a warning.", and reword it to "For `paddock_agent_running`,
+    that missing answer is stored as a failing evaluation."
+- **`docs/operations/fleet.md` step 6**: the rate stays at 1,500 per hour. Replace "which then raises one false
+  `second_host` report, so keep rollout waves below that rate." with "which then raises one false `second_host`
+  report and one false `device.tamper_fleetd_silent`, so keep rollout waves below that rate. A device whose binding
+  stays suspended for longer than 60 minutes while its fleetd is silent is reported as
+  `device.tamper_fleetd_silent` too."
+- **`docs/operations/fleet.md`, "When the fleetd silence watch is suppressed"**: after step 1, add a step (renumber
+  the following ones): "A host in Fleet's host list whose last contact lies ahead of the Fleet host's clock, for
+  example after a clock correction, makes every other host look silent until that time has passed. Check the newest
+  last contact in the host list against the current time; the alert clears on its own when that time has passed."
+- **`docs/architecture.md` §11.5**, the row of amendment c, third column: "`device.tamper_fleetd_silent` after 15 min
+  of silence (no contact, or no stored policy results for 30 min), confirmed by two more check-ins and 15 more min
+  (60 min later during an ADR 0057 hold)".
+- **Changelog** `changelog.d/pdk-1122d.added.md`: unchanged.
+
+### F-7. Steps
+
+1. **Migration, queries, generated code.** Change `00164`, the queries, `make gen`. Check: `make gen` leaves no diff
+   afterwards; `make lint-migrations-frozen` green.
+2. **`WatchFleet`.** F-H1, F-M1, F-M2 and the new unit tests. Check: `go test ./server/internal/inventory/ -run
+   'TestWatchFleet'`.
+3. **App.** New fields, Note. Check: `go test ./server/internal/app/ -run 'TestApplyFleetWatch|TestFleetWatchDevices'`.
+4. **Adapter (F-L1).** Check: `go test ./server/internal/adapters/fleet/`.
+5. **Worker tests.** Check: `go test ./server/internal/worker/ -run 'Fleet|AnnouncedReset|AgentRunning'`.
+6. **Registry text, docs, gates.** Run `make gen`, then the acceptance seed and the system L-c fix. Check:
+   `go vet ./test/...`; `make acceptance` with `-run TestInventoryFleetdSilent`, serially to any system test.
+7. **Quality gate.** `make typecheck`; `nice -n 19 make test`; `make lint-prometheus` (unchanged rules still green).
+
+### F-8. Tests
+
+"Regression" tests MUST fail on `539584fe`. The result document records the failing assertion.
+
+- **Unit `TestWatchFleet`, rows changed:**
+  - every row that expects a report gains `fleet_silent_checkin_at` before the last check-in;
+  - the row "not live: suspend or network loss" becomes "gone: no check-in for 61 min → Reset, mark kept";
+  - a new row: "no check-in for 59 min, open episode → nothing".
+- **Unit `TestWatchFleet`, new rows:**
+  1. **Note**: stale, `since` set, `checkin` NULL, `last_contact_at > since` → `Note`; `last_contact_at = since` →
+     nothing.
+  2. **Second check-in boundary**: `last_contact_at = checkin` → not due; one second later → due.
+  3. **Announced reset (regression H1-a)**:
+     - an unbound device, speaking host 25 min stale, `reset_announced_at = now − 35m`, `since = now − 20m`,
+       `checkin = now − 10m`, live → no report, no `Note`, not counted in `Live`;
+     - the same with `bound_at` later than the announcement, bound to that stale host → reported.
+  4. **Hold end boundary**: `reset_announced_at = now − 74m`, `since = now − 55m`, `checkin = now − 13m`, last
+     check-in `now − 1m` → not due (`E + 15m = now + 1m`). With `reset_announced_at = now − 75m` → due.
+  5. **An announcement after the episode start does not hold**: `since = now − 20m`, `reset_announced_at = now − 2m`,
+     `checkin` set, a second check-in → reported (regression for the bound).
+  6. **Suspended binding (regression H1-b)**: bound host not listed, stored `last_seen_at` 30 min old,
+     `suspended_at = now − 25m`, `since = now − 15m`, `checkin` set → no report. With `suspended_at` later than
+     `since` → reported.
+  7. **Re-enrollment**: `fleet_reenrolled_at = now − 20m ≤ since` → no report.
+  8. **Guard without held devices**: 1 due, 1 fresh peer, 3 held and stale live devices → reported (on `539584fe`:
+     `fresh_minority`).
+  9. **Guard without reported devices (M2)**: 1 due, 2 fresh peers, 4 stale live devices with a report mark →
+     reported (on `539584fe`: `fresh_minority`).
+  10. **M-a**: 1 due, 2 live devices that are contact-fresh but policy-stale, 1 fully fresh peer →
+      `Suppressed = "fresh_minority"`, no report.
+- **Unit `TestWatchFleetTimeline`** (new, pure). A helper applies a round's transitions to in-memory state, with
+  rounds every 5 min over 4 h, 3 fresh peers, fleetd of the device frozen at t = 0, and check-ins offset 2 min from
+  the rounds:
+  - check-ins every 5, 10, 16, 20, 25, 30 and 55 min → exactly one report each (regression M1: 20, 25, 30 and 55 give
+    0 on `539584fe`);
+  - every 65 min → no report;
+  - suspend: the device's check-ins and fleetd stop at the same time for 40 min, then the agent checks in and orbit
+    reconnects 2 min later → no report;
+  - the same with an episode opened in the round before the suspend and a 25-min suspend → no report;
+  - boot after 3 h off, orbit reconnects 3 min after the first check-in → no report;
+  - announced reset at t = 0, the new host fresh from t = 1 min, bound in the round at t = 40 → no report
+    (regression H1-a); bound only at t = 80 → exactly one report, in the round at t = 75.
+- **App `TestApplyFleetWatch`**:
+  - `Note` sets `fleet_silent_checkin_at` to the device's `last_contact_at`, and does not overwrite a set value;
+  - `Reset` clears `since` and `checkin` and keeps the mark;
+  - `Clear` clears all three;
+  - a device of another organization is untouched (RLS).
+- **App `TestFleetWatchDevices`**: returns the five new columns. A device without a binding row has nil binding
+  times.
+- **Adapter**: the list and the host detail with `"policy_updated_at": "2000-01-01T00:00:00Z"` → nil; with
+  `2026-11-24T10:00:00Z` → that time.
+- **Worker `TestInventoryRoundAnnouncedResetRaisesNoFleetSilence`** (`inventory_binding_test.go`, regression H1-a,
+  end to end):
+  - an unbound device whose stored host stops at the announcement, and a new host that is listed and fresh;
+  - the device checks in every round, and one peer device with a fresh host does too;
+  - the token cannot be resolved for 45 min (`unavailable`), then it resolves;
+  - result: no `device.tamper_fleetd_silent`, no claim, and the device ends bound to the new host.
+- **Worker** `TestInventoryRoundFleetWorkerRestart` and every seeded episode: seed `fleet_silent_checkin_at` as well.
+  `TestInventoryRoundFleetSilence` keeps its expectation: exactly one event, in the round 15 min after the start.
+- **Worker (L-a)**: with the definition just applied and the gate closed, a host that lists `paddock_agent_running`
+  unanswered gets no failing `inventory_policy_result` row.
+- **Acceptance `TestInventoryFleetdSilent`**: the `silent` seed adds `fleet_silent_checkin_at = now() - interval
+  '10 minutes'`. The device checks in every iteration, so it is due. The `quiet` expectations are unchanged.
+- **System F7**: unchanged expectations (a stopped orbit with an agent stand-in that checks in every interval is
+  reported); L-c only.
+
+### F-9. Acceptance criteria
+
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC-f1 | Given an agent update with an announced enrollment reset whose new host is bound within 60 minutes, then the org admin sees no `device.tamper_fleetd_silent` and no tamper finding for the device (unit timeline, worker regression) | H1 | Org admin (audit log, findings) |
+| AC-f2 | Given a device with a suspended binding or a re-enrolled host whose fleetd talks to Fleet again within 60 minutes, then no event (unit rows 6, 7) | H1 | Org admin |
+| AC-f3 | Given a device that checks in every 20, 25, 30 or 55 minutes while its fleetd is silent and most devices reach Fleet, then the org admin sees exactly one `device.tamper_fleetd_silent` (unit timeline) | M1 | Org admin |
+| AC-f4 | Given suspend, boot or network loss, then still no event (unit timeline; AC-D3 unchanged) | AC-D3 | Org admin |
+| AC-f5 | Given devices of another organization that are already reported and stay silent, then a due device is still reported (unit row 9) | M2 | Org admin of the other organization |
+| AC-f6 | Given a host that has never stored policy results, then it is not policy-stale (adapter test) | L1 | Org admin |
+| AC-f7 | Device API, admin API and agent unchanged | ADR 0047 | Maintainer (diff, CI `upgrade`) |
+
+### F-10. Freedoms
+
+- Internal helper names, and whether hold start, hold end and `E` are computed in one helper.
+- The name of the adapter helper of F-L1.
+- How the timeline test models its rounds, if the cases and expectations of F-8 hold.
+- Whether `ApplyFleetWatch` merges the three NULL updates into fewer statements.
+
+### F-11. Stop conditions
+
+- The production size of the whole ticket exceeds about 470 hand-written lines.
+- `paddock_worker` cannot read `device_status` inside `InOrg` for `NoteFleetSilenceCheckin`. Do not widen a grant;
+  report.
+- An existing claim or binding test changes its result.
+- An existing acceptance or system gate starts recording `device.tamper_fleetd_silent`.
+- The change would need an agent, supervisor, `pkg/`, device API or admin API change, or a new dependency.
+- The worker round order or `watchFleet` would have to change beyond reading the new fields.
+
+### F-12. Risks and open points
+
+- **Detection latency** for a device that checks in every 5 minutes is unchanged (about 35 minutes after fleetd
+  stops). With a check-in interval `I`, it is about 15 minutes plus up to 3 × `I`. During a hold, it is up to
+  60 minutes more.
+- **An episode opened in the seconds before a suspend** tolerates only about 5 minutes of orbit reconnect after the
+  resume instead of 15. This needs a round to fall into that window of seconds, and orbit to stay offline for a full
+  check-in interval after the resume. Accepted.
+- **More than about 1,500 agent updates per hour**, or a suspended binding that is not resolved within 60 minutes,
+  raise a false report. This is the same bound as ADR 0057's claim watch. It is documented in `fleet.md`, step 6.
+- **A device that checks in less often than once an hour** is not reported. The portal shows it as not in contact for
+  most of the time. RR-149.
+- **A future `seen_time`** blinds the watch until that time passes. The alert fires. RR-149 and the runbook.
+- **Resolved:** main accepted this amendment and ADR 0056 amendment f with the fix round.
+
+### F-13. Size (estimate)
+
+Branch state: 381 production lines.
+
+| Part | Lines |
+| --- | --- |
+| Production, hand-written: migration +6, queries +10, `fleetwatch.go` +40, app +15, adapter +6, registry ±0 | about +77, total about 458 |
+| Generated (`pgstore`, `audit-codes.md`) | about +45 |
+| Tests: unit rows ~110, timeline ~120, app ~40, adapter ~20, worker ~90, acceptance/system ~10 | about +390 |
+| Docs | about 25 |
+
+### F-14. Walk-through
+
+Rounds every 5 minutes at t = 0, 5, 10, … (minutes). `R` follows the peers, so `R ≈ t`. A host is contact-stale when
+its `seen_time < R − 15`, so a host last seen at 0 is stale from t = 20.
+
+**(a) An unbound alpha.10 device updates to alpha.11 during a 1,500-device wave.** The agent announces the reset with
+its check-in at t = 0 (`reset_announced_at = 0`), stops orbit and resets it. The stored host H1 was last seen at 0.
+The new host H2 is listed and fresh from t = 1. The genuine agent checks in at 1, 6, 11, and so on. All 1,500
+tokens are urgent. At 200 per round, this device's token is resolved in the round at t = 40. The speaking host is H1
+(`FirstSpeaker` = the stored host) until the binding.
+
+| t | Old rule (`539584fe`) | This amendment |
+| --- | --- | --- |
+| 5–15 | H1 fresh, nothing | H1 fresh, nothing; held (hold end 60), not counted in the guard |
+| 20 | stale, live → Start (`since` 20) | stale, live → Start (`since` 20); 0 ≤ 20, hold end 60, `E` = 60 |
+| 25–30 | wait | `last_contact` 26 or 31, not > `E` → nothing |
+| 35 | due → **false report** (`since` + 15) | nothing |
+| 40 | (reported) | bound to H2 (`bound_at` 40 > 0); speaking host H2 fresh → Clear. **No event.** |
+
+The same device with an additional 40-minute device-token endpoint outage, bound only at t = 80: Note at t = 65
+(`last_contact` 61 > 60). At t = 70: 66 > 61, but 70 < 75. At t = 75: 71 > 61 and 75 ≥ 75 → due, one false report.
+The claim watch raises its false `second_host` in the same round: its hold ends at 60, and it confirms at 75. Both
+watches share the documented limit of "unresolved for longer than 60 minutes", so the `fleet.md` rate stays at 1,500
+per hour.
+
+**(b) A stand-in that checks in every 25 minutes while orbit is stopped.** fleetd stops at t = 0, so H1 is last seen
+at 0. Check-ins come at 2, 27, 52, 77, and so on. There is no hold.
+
+| t | Old rule | This amendment |
+| --- | --- | --- |
+| 20, 25 | stale, not live (last 2) → nothing | stale, not live, not gone → nothing |
+| 30 | live (27) → Start (`since` 30) | live → Start (`since` 30, `E` 30) |
+| 35, 40 | live → wait | 27 ≤ 30 → nothing |
+| 45 | not live (27 < 30) → **Reset** | not gone (18 min) → nothing |
+| 55 | live (52) → Start again | 52 > 30 → **Note** (`checkin` 52) |
+| 60–75 | not live at 70 → Reset; repeats forever, **never reported** | last 52, not > 52 → nothing |
+| 80 | — | 77 > 52, 80 ≥ 45 → **due, reported** (guards hold) |
+
+### F-15. One reset hold per device per 24 hours (addendum after review 2, L-1)
+
+Status: **accepted** (architect, 2026-11-24; accepted by main with the PDK-1122d fix round 2). It implements main's
+choice of option (b) for review 2's finding L-1. It amends F-H1, and it amends rule 2 of plan amendment e, H5 (binding
+decisions), for resetting devices only.
+
+**Problem (L-1).** Row 2 (F-M1) ends an episode after 60 minutes without a check-in, so every period of check-ins
+opens a new episode. A reset announcement dated to the start of that period satisfies F-H1 again each time. The
+result: check-ins for up to about 55 minutes, then 65 minutes or more without, with an announcement per period, are
+never reported.
+
+**F-15.1 Rule.** One reset announcement per device per 24 hours can hold the silence watch.
+
+- New column `device_inventory_ref.fleet_reset_hold_at timestamptz` in `00164`, changed in place: the
+  `reset_announced_at` value whose hold the watch granted last. Clear and Reset (F-M1, rows 1 and 2) never change it.
+- F-H1's hold start 1 (`reset_announced_at`) additionally requires one of:
+  - `fleet_reset_hold_at` is NULL;
+  - `fleet_reset_hold_at` equals `reset_announced_at` (the granted hold continues in later rounds);
+  - `reset_announced_at >= fleet_reset_hold_at + 24h`.
+- **Grant.** The episode start fixes every hold start (F-H1), so a grant can only happen in the round that starts the
+  episode (F-M1, row 3). A Start whose hold start 1 qualifies under F-15.1 and lies within `ClaimQuiet` before `now`,
+  while `fleet_reset_hold_at` differs from `reset_announced_at`, is a **held Start**. It also sets
+  `fleet_reset_hold_at = reset_announced_at`.
+- Hold starts 2 (`suspended_at`) and 3 (`fleet_reenrolled_at`) are unchanged. The server derives them from Fleet's
+  host list, not from a device's announcement.
+
+**F-15.2 Prompt rebinding of a resetting bound device (amends amendment e, H5 rule 2).**
+- Rule 2 decides `DecideCurrent` without asking Fleet while the bound host is valid and fresh. It now applies only if
+  the device is not resetting, that is, not (`reset_announced_at` within `ClaimQuiet` and `bound_at` NULL or earlier
+  than it). This is the condition `Binding.Urgent` already uses for its first part.
+- Why: without this, a bound device that resets again reports its new token while the old bound host is still fresh.
+  Rule 2 then clears the token, and the new host is bound only after orbit's next hourly token rotation. The old host
+  becomes stale after 20 minutes, and with no second hold within 24 h the device would be due at about 35 minutes.
+- With F-15.2, the new host is bound in the first round after the token arrives, before the old host is stale.
+- Rules 3 to 9, the compare-and-set, `ResolvePerRound`, the urgent ordering and the claim watch are unchanged. Fleet
+  is asked only for the token the device's own check-in reported, once.
+
+**F-15.3 Interfaces.**
+
+```sql
+-- 00164 (in place): ALTER TABLE gains `ADD COLUMN fleet_reset_hold_at timestamptz` after fleet_silent_reported_at;
+-- paddock_fleet_watch_devices returns `fleet_reset_hold_at timestamptz` as its last column (i.fleet_reset_hold_at).
+
+-- name: StartFleetSilence :exec   (replaces the existing query)
+UPDATE device_inventory_ref i SET fleet_silent_since = @at::timestamptz,
+       fleet_reset_hold_at = CASE WHEN i.device_id = ANY(@held_ids::uuid[])
+         THEN (SELECT b.reset_announced_at FROM device_fleet_binding b WHERE b.device_id = i.device_id)
+         ELSE i.fleet_reset_hold_at END
+WHERE i.device_id = ANY(@device_ids::uuid[]) AND i.fleet_silent_since IS NULL;
+```
+
+```go
+// inventory.WatchedDevice gains ResetHoldAt *time.Time (fleet_reset_hold_at).
+// inventory.FleetWatch gains HeldStart []uuid.UUID: the subset of Start that are held Starts (F-15.1). ForOrganization
+// filters it like Start. ApplyFleetWatch passes it as held_ids; the worker counts it like Start.
+// inventory.Binding gains `func (b Binding) Resetting(now time.Time) bool`. Urgent uses it, and DecideBinding's rule
+// 2 adds `&& !b.Resetting(now)`.
+```
+
+- The SQL takes `reset_announced_at` again in the same statement. A newer announcement that arrives between the
+  round's read and this write is recorded instead. That only moves the 24-hour window a few minutes. Accepted.
+
+**F-15.4 Walk-through: the pattern of L-1.** Rounds every 5 minutes. fleetd has been silent for a long time, and the
+device has been bound since before t = 0. Check-ins come at 1, 6, …, 51 (period 1) and at 121, …, 171 (period 2).
+Announcements: A1 = 0 and A2 = 120. `fleet_reset_hold_at` starts NULL.
+
+| t | Decision |
+| --- | --- |
+| 5 | stale, live, no episode → **held Start**: `since` 5; A1 = 0 ≤ 5, `fleet_reset_hold_at` NULL → granted, `fleet_reset_hold_at` 0; hold end 60, `E` 60 |
+| 10–55 | A1 equals `fleet_reset_hold_at` → hold continues; `last_contact` ≤ 51, not > `E` → nothing |
+| 60–110 | no new check-in, not gone → nothing |
+| 115 | 51 < 115 − 60 → gone → Reset (`fleet_reset_hold_at` stays 0) |
+| 125 | stale, live → Start (`since` 125); A2 = 120 ≤ 125, but 120 ≠ 0 and 120 < 0 + 24h → **no hold**, `E` 125 |
+| 130 | 126 > 125 → Note |
+| 135 | 131 > 126, 135 < 140 → nothing |
+| 140 | 136 > 126, 140 ≥ 140 → **due, reported** (guards hold) |
+
+The pattern is reported 20 minutes into the second period. From then on, it gets at most one held period per
+24 hours.
+
+**F-15.5 Walk-through: a legitimate second reset within 24 hours.** The agent updated at A1, was bound to host H2 at
+A1 + 40, and the hold was granted (`fleet_reset_hold_at` = A1). Six hours later, the supervisor rolls the agent back
+and the same agent update is installed again. The rollback rewrites `orbit.env` without the instance line, so the
+update resets fleetd once more. Times are relative to that second announcement, A2 = 0 (A1 = −6 h). orbit
+re-enrolls as H3, which is fresh from t = 1. The check-in at t = 1 carries the announcement and H3's token. H2 was
+last seen at 0.
+
+| t | Binding (F-15.2) | Silence watch |
+| --- | --- | --- |
+| 5 | token pending; resetting (A2 = 0 > `bound_at`), so rule 2 does not apply → urgent resolve → H3, UUID matches, not in use → **rebind**, `bound_at` 5 | runs after the binding: speaking host H3 fresh → nothing |
+| 10 onward | the token was cleared by the rebind | H3 fresh → nothing. H2 is no longer the speaking host, so its staleness from t = 20 counts for nothing. **No event.** |
+
+- **Without F-15.2**: rule 2 clears the token at t = 5 (H2 still fresh). With no hold (within 24 h), the watch starts
+  at t = 20, notes at t = 25, and is due at t = 35, which is a false report before the rebind at the next token
+  rotation, about t = 60.
+- **With a device-token endpoint outage**: the token stays pending (`unavailable`). Without a hold, the device is due
+  at t = 35 unless the rebind succeeds by the round at t = 35. A second reset within 24 hours therefore tolerates
+  about 30 minutes of endpoint outage, not 60. This residual is documented: RR-149, in the clause about holds, gains
+  "; a second announced enrollment reset within 24 hours is not held".
+- A first reset of a device that is already bound, with no grant in the last 24 hours, is held as in F-H1. With
+  F-15.2, it is rebound in the first round as well.
+
+**F-15.6 Tests** ("regression" MUST fail on `002db741`):
+- `TestWatchFleet` rows:
+  - a second announcement 23 h after the granted one, at a Start → plain Start, not a held Start; with `since` set,
+    `checkin` set and a second check-in, reported (regression L-1);
+  - 24 h after it → a held Start; in a later round, an announcement equal to `fleet_reset_hold_at` → still held;
+  - `fleet_reset_hold_at` NULL → a held Start.
+- `TestWatchFleetTimeline`: the L-1 pattern of F-15.4 → exactly one report, in the round at t = 140 (regression).
+- `TestDecideBinding`: a bound, valid, fresh host with a pending token:
+  - resetting → `DecideResolve` (regression);
+  - not resetting → `DecideCurrent` (unchanged);
+  - bound after the announcement → `DecideCurrent`.
+- Worker `TestInventoryRoundSecondResetRebindsAtOnce` (`inventory_binding_test.go`): F-15.5 end to end → rebound to H3
+  in the first round after the token arrives, no `device.tamper_fleetd_silent`, and no claim.
+- App `TestApplyFleetWatch`: a held Start writes `fleet_reset_hold_at` from the binding row; a plain Start, Clear and
+  Reset leave it unchanged.
+
+**F-15.7 Texts.**
+- RR-149: the addition of F-15.5.
+- `docs/operations/fleet.md` step 5: after "…the confirmation counts only from 60 minutes after that event.", add "An
+  announced enrollment reset holds the watch at most once per device in 24 hours."
+
+**F-15.8 Stop conditions (added).**
+- Any existing binding or claim test changes its result through F-15.2.
+- F-15.2 would need more than the rule-2 condition and the `Resetting` method.
+
+**F-15.9 Size (estimate).**
+- Production about +22 lines: migration +3, queries +4, `fleetwatch.go` +8, app +3, `binding.go` +4. The total
+  becomes about **480**. That is about 10 above the cap of F-11, so main needs to raise the cap to about 485 for this
+  addendum.
+- Tests about +110 lines.

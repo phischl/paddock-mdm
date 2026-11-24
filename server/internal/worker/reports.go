@@ -73,7 +73,7 @@ func (r *Reports) HandleEvents(ctx context.Context, _ *amqp.Channel, deliveries 
 // device_status at most once per device and devicecache.HeartbeatInterval.
 func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) outcome {
 	var hb ingest.Heartbeat
-	if err := decode(body, &hb); err != nil {
+	if err := decodeLenient(body, &hb); err != nil {
 		return poison
 	}
 	ctx = systemContext(ctx, hb.OrganizationID, messageID)
@@ -92,6 +92,13 @@ func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) 
 		return ack
 	} else if err != nil {
 		slog.WarnContext(ctx, "recording command delivery failed; retrying", "device_id", hb.DeviceID, "error", err)
+		return retry
+	}
+	// Before the coalescing: a coalesced heartbeat must not lose the device's report of its inventory host (ADR 0057).
+	if err := r.reports.RecordFleetReport(ctx, hb); unavailable(ctx, err) {
+		return ack
+	} else if err != nil {
+		slog.WarnContext(ctx, "recording the inventory host report failed; retrying", "device_id", hb.DeviceID, "error", err)
 		return retry
 	}
 	fresh, err := r.cache.ClaimHeartbeat(ctx, hb.DeviceID)
