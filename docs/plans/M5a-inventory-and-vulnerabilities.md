@@ -5431,3 +5431,135 @@ at 0. Check-ins come at 2, 27, 52, 77, and so on. There is no hold.
 | 55 | live (52) → Start again | 52 > 30 → **Note** (`checkin` 52) |
 | 60–75 | not live at 70 → Reset; repeats forever, **never reported** | last 52, not > 52 → nothing |
 | 80 | — | 77 > 52, 80 ≥ 45 → **due, reported** (guards hold) |
+
+### F-15. One reset hold per device per 24 hours (addendum after review 2, L-1)
+
+Status: **proposed** (architect, 2026-11-24). It implements main's choice of option (b) for review 2's finding L-1.
+It amends F-H1, and it amends rule 2 of plan amendment e, H5 (binding decisions), for resetting devices only.
+
+**Problem (L-1).** Row 2 (F-M1) ends an episode after 60 minutes without a check-in, so every period of check-ins
+opens a new episode. A reset announcement dated to the start of that period satisfies F-H1 again each time. The
+result: check-ins for up to about 55 minutes, then 65 minutes or more without, with an announcement per period, are
+never reported.
+
+**F-15.1 Rule.** One reset announcement per device per 24 hours can hold the silence watch.
+
+- New column `device_inventory_ref.fleet_reset_hold_at timestamptz` in `00164`, changed in place: the
+  `reset_announced_at` value whose hold the watch granted last. Clear and Reset (F-M1, rows 1 and 2) never change it.
+- F-H1's hold start 1 (`reset_announced_at`) additionally requires one of:
+  - `fleet_reset_hold_at` is NULL;
+  - `fleet_reset_hold_at` equals `reset_announced_at` (the granted hold continues in later rounds);
+  - `reset_announced_at >= fleet_reset_hold_at + 24h`.
+- **Grant.** The episode start fixes every hold start (F-H1), so a grant can only happen in the round that starts the
+  episode (F-M1, row 3). A Start whose hold start 1 qualifies under F-15.1 and lies within `ClaimQuiet` before `now`,
+  while `fleet_reset_hold_at` differs from `reset_announced_at`, is a **held Start**. It also sets
+  `fleet_reset_hold_at = reset_announced_at`.
+- Hold starts 2 (`suspended_at`) and 3 (`fleet_reenrolled_at`) are unchanged. The server derives them from Fleet's
+  host list, not from a device's announcement.
+
+**F-15.2 Prompt rebinding of a resetting bound device (amends amendment e, H5 rule 2).**
+- Rule 2 decides `DecideCurrent` without asking Fleet while the bound host is valid and fresh. It now applies only if
+  the device is not resetting, that is, not (`reset_announced_at` within `ClaimQuiet` and `bound_at` NULL or earlier
+  than it). This is the condition `Binding.Urgent` already uses for its first part.
+- Why: without this, a bound device that resets again reports its new token while the old bound host is still fresh.
+  Rule 2 then clears the token, and the new host is bound only after orbit's next hourly token rotation. The old host
+  becomes stale after 20 minutes, and with no second hold within 24 h the device would be due at about 35 minutes.
+- With F-15.2, the new host is bound in the first round after the token arrives, before the old host is stale.
+- Rules 3 to 9, the compare-and-set, `ResolvePerRound`, the urgent ordering and the claim watch are unchanged. Fleet
+  is asked only for the token the device's own check-in reported, once.
+
+**F-15.3 Interfaces.**
+
+```sql
+-- 00164 (in place): ALTER TABLE gains `ADD COLUMN fleet_reset_hold_at timestamptz` after fleet_silent_reported_at;
+-- paddock_fleet_watch_devices returns `fleet_reset_hold_at timestamptz` as its last column (i.fleet_reset_hold_at).
+
+-- name: StartFleetSilence :exec   (replaces the existing query)
+UPDATE device_inventory_ref i SET fleet_silent_since = @at::timestamptz,
+       fleet_reset_hold_at = CASE WHEN i.device_id = ANY(@held_ids::uuid[])
+         THEN (SELECT b.reset_announced_at FROM device_fleet_binding b WHERE b.device_id = i.device_id)
+         ELSE i.fleet_reset_hold_at END
+WHERE i.device_id = ANY(@device_ids::uuid[]) AND i.fleet_silent_since IS NULL;
+```
+
+```go
+// inventory.WatchedDevice gains ResetHoldAt *time.Time (fleet_reset_hold_at).
+// inventory.FleetWatch gains HeldStart []uuid.UUID: the subset of Start that are held Starts (F-15.1). ForOrganization
+// filters it like Start. ApplyFleetWatch passes it as held_ids; the worker counts it like Start.
+// inventory.Binding gains `func (b Binding) Resetting(now time.Time) bool`. Urgent uses it, and DecideBinding's rule
+// 2 adds `&& !b.Resetting(now)`.
+```
+
+- The SQL takes `reset_announced_at` again in the same statement. A newer announcement that arrives between the
+  round's read and this write is recorded instead. That only moves the 24-hour window a few minutes. Accepted.
+
+**F-15.4 Walk-through: the pattern of L-1.** Rounds every 5 minutes. fleetd has been silent for a long time, and the
+device has been bound since before t = 0. Check-ins come at 1, 6, …, 51 (period 1) and at 121, …, 171 (period 2).
+Announcements: A1 = 0 and A2 = 120. `fleet_reset_hold_at` starts NULL.
+
+| t | Decision |
+| --- | --- |
+| 5 | stale, live, no episode → **held Start**: `since` 5; A1 = 0 ≤ 5, `fleet_reset_hold_at` NULL → granted, `fleet_reset_hold_at` 0; hold end 60, `E` 60 |
+| 10–55 | A1 equals `fleet_reset_hold_at` → hold continues; `last_contact` ≤ 51, not > `E` → nothing |
+| 60–110 | no new check-in, not gone → nothing |
+| 115 | 51 < 115 − 60 → gone → Reset (`fleet_reset_hold_at` stays 0) |
+| 125 | stale, live → Start (`since` 125); A2 = 120 ≤ 125, but 120 ≠ 0 and 120 < 0 + 24h → **no hold**, `E` 125 |
+| 130 | 126 > 125 → Note |
+| 135 | 131 > 126, 135 < 140 → nothing |
+| 140 | 136 > 126, 140 ≥ 140 → **due, reported** (guards hold) |
+
+The pattern is reported 20 minutes into the second period. From then on, it gets at most one held period per
+24 hours.
+
+**F-15.5 Walk-through: a legitimate second reset within 24 hours.** The agent updated at A1, was bound to host H2 at
+A1 + 40, and the hold was granted (`fleet_reset_hold_at` = A1). Six hours later, the supervisor rolls the agent back
+and the same agent update is installed again. The rollback rewrites `orbit.env` without the instance line, so the
+update resets fleetd once more. Times are relative to that second announcement, A2 = 0 (A1 = −6 h). orbit
+re-enrolls as H3, which is fresh from t = 1. The check-in at t = 1 carries the announcement and H3's token. H2 was
+last seen at 0.
+
+| t | Binding (F-15.2) | Silence watch |
+| --- | --- | --- |
+| 5 | token pending; resetting (A2 = 0 > `bound_at`), so rule 2 does not apply → urgent resolve → H3, UUID matches, not in use → **rebind**, `bound_at` 5 | runs after the binding: speaking host H3 fresh → nothing |
+| 10 onward | the token was cleared by the rebind | H3 fresh → nothing. H2 is no longer the speaking host, so its staleness from t = 20 counts for nothing. **No event.** |
+
+- **Without F-15.2**: rule 2 clears the token at t = 5 (H2 still fresh). With no hold (within 24 h), the watch starts
+  at t = 20, notes at t = 25, and is due at t = 35, which is a false report before the rebind at the next token
+  rotation, about t = 60.
+- **With a device-token endpoint outage**: the token stays pending (`unavailable`). Without a hold, the device is due
+  at t = 35 unless the rebind succeeds by the round at t = 35. A second reset within 24 hours therefore tolerates
+  about 30 minutes of endpoint outage, not 60. This residual is documented: RR-149, in the clause about holds, gains
+  "; a second announced enrollment reset within 24 hours is not held".
+- A first reset of a device that is already bound, with no grant in the last 24 hours, is held as in F-H1. With
+  F-15.2, it is rebound in the first round as well.
+
+**F-15.6 Tests** ("regression" MUST fail on `002db741`):
+- `TestWatchFleet` rows:
+  - a second announcement 23 h after the granted one, at a Start → plain Start, not a held Start; with `since` set,
+    `checkin` set and a second check-in, reported (regression L-1);
+  - 24 h after it → a held Start; in a later round, an announcement equal to `fleet_reset_hold_at` → still held;
+  - `fleet_reset_hold_at` NULL → a held Start.
+- `TestWatchFleetTimeline`: the L-1 pattern of F-15.4 → exactly one report, in the round at t = 140 (regression).
+- `TestDecideBinding`: a bound, valid, fresh host with a pending token:
+  - resetting → `DecideResolve` (regression);
+  - not resetting → `DecideCurrent` (unchanged);
+  - bound after the announcement → `DecideCurrent`.
+- Worker `TestInventoryRoundSecondResetRebindsAtOnce` (`inventory_binding_test.go`): F-15.5 end to end → rebound to H3
+  in the first round after the token arrives, no `device.tamper_fleetd_silent`, and no claim.
+- App `TestApplyFleetWatch`: a held Start writes `fleet_reset_hold_at` from the binding row; a plain Start, Clear and
+  Reset leave it unchanged.
+
+**F-15.7 Texts.**
+- RR-149: the addition of F-15.5.
+- `docs/operations/fleet.md` step 5: after "…the confirmation counts only from 60 minutes after that event.", add "An
+  announced enrollment reset holds the watch at most once per device in 24 hours."
+
+**F-15.8 Stop conditions (added).**
+- Any existing binding or claim test changes its result through F-15.2.
+- F-15.2 would need more than the rule-2 condition and the `Resetting` method.
+
+**F-15.9 Size (estimate).**
+- Production about +22 lines: migration +3, queries +4, `fleetwatch.go` +8, app +3, `binding.go` +4. The total
+  becomes about **480**. That is about 10 above the cap of F-11, so main needs to raise the cap to about 485 for this
+  addendum.
+- Tests about +110 lines.

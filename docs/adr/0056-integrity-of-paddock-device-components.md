@@ -377,4 +377,8 @@ plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-24 f 
 - Negative: up to 60 minutes more latency during a hold; a device that checks in less often than once an hour is not
   reported (RR-149); beyond about 1,500 agent updates per hour, a device left unbound for more than 60 minutes gets a
   false silence report, alongside ADR 0057's false claim report.
+- Addendum (review 2): an announced enrollment reset holds the watch at most once per device in 24 hours. A bound
+  device that resets is rebound in the first round after it reports its new token, rather than at the next token
+  rotation, so a second reset within 24 hours raises no report while the token can be resolved (plan amendment f,
+  F-15).
 - Follow-up: none beyond the PDK-1122d fix round.
