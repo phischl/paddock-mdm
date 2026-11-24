@@ -78,7 +78,7 @@ aws() {
       n="$(grep -o '"Key"' <<<"$body" | wc -l)"
       echo "delete $n" >>"$calls"
       if [[ -n "${FAKE_AWS_DIES_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_AWS_DIES_AT" ]]; then return 255; fi
-      [[ -z "${FAKE_SLEEP_AT:-}" || "$(grep -c '^delete' "$calls")" != "$FAKE_SLEEP_AT" ]] || sleep 2
+      [[ -z "${FAKE_SLEEP_AT:-}" || "$(grep -c '^delete' "$calls")" != "$FAKE_SLEEP_AT" ]] || read -r <"$gate" || true
       # --query 'length(Errors)' --output text: the number of keys that failed.
       if [[ -n "${FAKE_ERRORS_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_ERRORS_AT" ]]; then
         echo "${FAKE_ERRORS_N:-$n}"
@@ -108,7 +108,17 @@ run() {
   set -e
 }
 
-# The signal arrives while the fake aws sleeps in the batch named by FAKE_SLEEP_AT; main finishes that batch.
+# The fake aws blocks on a fifo in the batch named by FAKE_SLEEP_AT until the test has sent its signal and opens the
+# gate: a wall-clock sleep let the batch end before the signal under load (PDK-1128).
+gate="$work/gate"
+mkfifo "$gate"
+# dump_run <name>: out, err and the admin log of the last run, printed when a check of that run failed.
+dump_run() {
+  echo "---- $1: rc=$rc out/err/adminlog follow"
+  cat "$work/out" "$work/err" "$adminlog"
+  echo "----"
+}
+# The signal arrives while the fake aws blocks in the batch named by FAKE_SLEEP_AT; main finishes that batch.
 run_signal() {
   local w pid
   w="$(mktemp -d -p "$work")"
@@ -120,6 +130,7 @@ run_signal() {
   pid=$!
   until [[ "$(grep -c '^delete' "$calls")" == "${FAKE_SLEEP_AT:?}" ]]; do sleep 0.1; done
   kill "-$1" "$pid"
+  : >"$gate"
   set +e
   wait "$pid"
   rc=$?
@@ -195,6 +206,7 @@ expect "two failed keys: one record with deleted 1998 and failed 2" 1 \
   "$(grep -c -- '--selected 2501 --deleted 1998 --failed 2' "$adminlog")"
 
 reset
+fails_before=$failures
 FAKE_SLEEP_AT=2 run_signal TERM
 expect "TERM during batch 2: exit 1" 1 "$rc"
 expect "TERM during batch 2: no third batch" "delete 1000 delete 1000 " "$(tr '\n' ' ' <"$calls")"
@@ -202,10 +214,14 @@ expect "TERM during batch 2: one record, the rest not deleted" 1 \
   "$(grep -c -- '--selected 2501 --deleted 2000 --failed 501' "$adminlog")"
 expect "TERM during batch 2: exactly one record" 1 "$(grep -c -- '--failed' "$adminlog")"
 expect "TERM during batch 2: stderr" "interrupted: deleted 2000 of 2505 bundle objects of 2 devices; 501 keys not deleted" "$(cat "$work/err")"
+((failures == fails_before)) || dump_run TERM
 
+fails_before=$failures
 reset
 FAKE_SLEEP_AT=2 run_signal HUP
-expect "HUP during batch 2: one record" 1 "$(grep -c -- '--failed 501' "$adminlog")"
+expect "HUP during batch 2: one record" 1 "$(grep -c -- '--selected 2501 --deleted 2000 --failed 501' "$adminlog")"
+expect "HUP during batch 2: exactly one record" 1 "$(grep -c -- '--failed' "$adminlog")"
+((failures == fails_before)) || dump_run HUP
 
 # The signal goes to the whole process group (as a terminal Ctrl-C does), so the running fake aws dies with main.
 run_group_signal() {
