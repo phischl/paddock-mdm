@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -88,12 +89,18 @@ type fakeSource struct {
 	// seenAt and enrolledAt are the listed hosts' last contact and latest enrollment (zero and nil when absent).
 	seenAt     map[ports.HostRef]time.Time
 	enrolledAt map[ports.HostRef]*time.Time
+	// hostErr fails the host detail of the hosts it lists; listErr fails the host list.
+	hostErr map[ports.HostRef]error
+	listErr error
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
 
 func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, cursor string) (ports.HostPage, error) {
 	s.since = append(s.since, since)
+	if s.listErr != nil {
+		return ports.HostPage{}, s.listErr
+	}
 	if cursor == "" { // two pages, the first of one host
 		return ports.HostPage{Hosts: s.hosts[:1], Seen: s.seen(s.hosts[:1]), Next: "1"}, nil
 	}
@@ -115,8 +122,11 @@ func (s *fakeSource) seen(hosts []ports.InventoryHost) []ports.HostSeen {
 
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
+	if err := s.hostErr[ref]; err != nil {
+		return ports.HostInventory{}, err
+	}
 	if h, ok := s.perHost[ref]; ok {
-		return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Policies: h.Policies, UnansweredPolicies: h.UnansweredPolicies,
+		return ports.HostInventory{OSVersion: cmp.Or(h.OSVersion, "Ubuntu 26.04.1 LTS"), Policies: h.Policies, UnansweredPolicies: h.UnansweredPolicies,
 			PolicyUpdatedAt: h.PolicyUpdatedAt}, nil
 	}
 	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}},
