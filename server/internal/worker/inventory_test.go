@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -88,9 +89,12 @@ type fakeSource struct {
 	// seenAt and enrolledAt are the listed hosts' last contact and latest enrollment (zero and nil when absent).
 	seenAt     map[ports.HostRef]time.Time
 	enrolledAt map[ports.HostRef]*time.Time
-	// policyAt is the listed hosts' last stored policy results (nil when absent); listErr fails every listing.
+	// policyAt is the listed hosts' last stored policy results (nil when absent); hostErr fails the host detail of the
+	// hosts it lists; listErr fails the host list; onRead runs before a host detail is answered.
 	policyAt map[ports.HostRef]*time.Time
+	hostErr  map[ports.HostRef]error
 	listErr  error
+	onRead   func(ports.HostRef)
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -122,8 +126,14 @@ func (s *fakeSource) seen(hosts []ports.InventoryHost) []ports.HostSeen {
 
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
+	if s.onRead != nil {
+		s.onRead(ref)
+	}
+	if err := s.hostErr[ref]; err != nil {
+		return ports.HostInventory{}, err
+	}
 	if h, ok := s.perHost[ref]; ok {
-		return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Policies: h.Policies, UnansweredPolicies: h.UnansweredPolicies,
+		return ports.HostInventory{OSVersion: cmp.Or(h.OSVersion, "Ubuntu 26.04.1 LTS"), Software: h.Software, Policies: h.Policies, UnansweredPolicies: h.UnansweredPolicies,
 			PolicyUpdatedAt: h.PolicyUpdatedAt}, nil
 	}
 	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}},

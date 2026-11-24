@@ -46,6 +46,7 @@ var tamperFindingCodes = map[audit.Code]string{
 	audit.CodeDeviceTamperAgentBinaryChanged:   "",
 	audit.CodeDeviceTamperFleetHostClaimed:     "",
 	audit.CodeDeviceTamperFleetdSilent:         "",
+	audit.CodeDeviceTamperInventoryRejected:    "",
 }
 
 // UpsertTamperFinding opens the tamper finding of a device, code and subject for the audit event eventID at at, or

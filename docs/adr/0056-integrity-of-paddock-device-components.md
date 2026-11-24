@@ -382,3 +382,9 @@ plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-24 f 
   rotation, so a second reset within 24 hours raises no report while the token can be resolved (plan amendment f,
   F-15).
 - Follow-up: none beyond the PDK-1122d fix round.
+
+## Amendment 2026-11-24 g (architect, PDK-1122k) — the inventory round reports a refused host
+The inventory round skips a device's host when Fleet refuses it or Postgres refuses its data after sanitising. Paddock
+records `device.tamper_inventory_rejected` once per episode, with the params `reason` (`fetch_refused` or
+`store_refused`) and `fleet_host`, the device's own Fleet host, and no error text. A successful store ends the episode.
+The code opens or counts a tamper finding in the device's own organisation.

@@ -83,6 +83,11 @@ var metricPolicyUnanswered = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Help: "Mapped hosts of the last full sync round that evaluated a Paddock policy's current definition without an answer: the query failed there.",
 }, []string{"policy"})
 
+var metricHostsSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "paddock_inventory_hosts_skipped_total",
+	Help: "Hosts the inventory sync round skipped without failing, by reason: Fleet no longer knows or refuses the host (fetch_refused), or the database refuses its data (store_refused).",
+}, []string{"reason"})
+
 // InventorySettings keeps the data minimization settings of the inventory system (fleet.Client).
 type InventorySettings interface {
 	// EnsureSettings resets drift and returns what it corrected.
@@ -292,7 +297,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	unmapped, ignored, unanswered := 0, 0, map[string]int{}
+	unmapped, ignored, skipped, unanswered := 0, 0, 0, map[string]int{}
 	for _, h := range hosts {
 		dev, outcome := speaksFor(h, targets, mapped, isBound, stored)
 		switch outcome {
@@ -303,15 +308,32 @@ func (i *Inventory) Round(ctx context.Context) error {
 			ignored++
 			continue
 		}
+		// Only a failure that concerns this one host skips it (PDK-1122k); Fleet or the database failing as a whole
+		// still fails the round, so that it does not advance past hosts it could not read.
 		inv, err := i.source.HostInventory(ctx, h.Ref)
-		if err != nil {
-			return err
+		reason, perHost := "fetch_refused", errors.Is(err, problem.NotFound) || errors.Is(err, problem.InvalidState)
+		if err == nil {
+			stored := inventory.UnansweredAgentRunningAsFailing(inv, i.evaluatedCurrent(inv, inventory.PolicyAgentRunning))
+			err = i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, stored)
+			reason, perHost = "store_refused", db.IsDataError(err)
 		}
-		stored := inventory.UnansweredAgentRunningAsFailing(inv, i.evaluatedCurrent(inv, inventory.PolicyAgentRunning))
-		if err := i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, stored); err != nil {
-			return fmt.Errorf("store the inventory of device %s: %w", dev.DeviceID, err)
+		switch {
+		case err == nil:
+			i.countUnanswered(inv, unanswered)
+		case perHost && ctx.Err() == nil:
+			skipped++
+			metricHostsSkipped.WithLabelValues(reason).Inc()
+			slog.WarnContext(ctx, "inventory host skipped", "organization_id", dev.OrganizationID, "device_id", dev.DeviceID,
+				"host", h.Ref, "reason", reason, "error", err)
+			// dev and h.Ref are the device and the host that speaks for it as speaksFor resolved them, so the report
+			// stays in that device's organization and never names another device's host.
+			if _, err := i.sync.ReportInventoryRejected(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID,
+				h.Ref, reason); err != nil {
+				return fmt.Errorf("report the skipped inventory of device %s: %w", dev.DeviceID, err)
+			}
+		default:
+			return fmt.Errorf("the inventory of device %s: %w", dev.DeviceID, err)
 		}
-		i.countUnanswered(inv, unanswered)
 	}
 	if since.IsZero() {
 		metricUnmappedHosts.Set(float64(unmapped))
@@ -337,7 +359,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 		return err
 	}
 	i.since, i.vulnState, i.rounds = start.Add(-time.Minute), vulnState, i.rounds+1 // a margin for clocks and in-flight updates
-	slog.InfoContext(ctx, "inventory synced", "hosts", len(hosts), "unmapped", unmapped, "ignored", ignored,
+	slog.InfoContext(ctx, "inventory synced", "hosts", len(hosts), "unmapped", unmapped, "ignored", ignored, "skipped", skipped,
 		"bound", bound, "claims", claims, "full", since.IsZero())
 	return nil
 }
