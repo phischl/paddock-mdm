@@ -321,7 +321,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 			// dev and h.Ref are the device and the host that speaks for it as speaksFor resolved them, so the report
 			// stays in that device's organization and never names another device's host.
 			if _, err := i.sync.ReportInventoryRejected(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID,
-				h.Ref, reason, start); err != nil {
+				h.Ref, reason); err != nil {
 				return fmt.Errorf("report the skipped inventory of device %s: %w", dev.DeviceID, err)
 			}
 		default:

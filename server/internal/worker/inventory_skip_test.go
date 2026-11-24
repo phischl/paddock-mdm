@@ -281,3 +281,24 @@ func TestInventoryRoundReportsRejectionOncePerEpisode(t *testing.T) {
 		t.Fatalf("%d findings in the other organization", n)
 	}
 }
+
+// TestInventoryRoundRejectionEpisodeSkewedClock (PDK-1122k, review 2 L-b): a worker clock behind the database's
+// still reports one event per episode: the episode compares times of the database's clock only.
+func TestInventoryRoundRejectionEpisodeSkewedClock(t *testing.T) {
+	r := newSkipRig(t)
+	r.inv.now = func() time.Time { return time.Now().Add(-2 * time.Minute) }
+	for k := range 4 {
+		if k > 0 {
+			r.src.perHost[r.hosts[0]] = ports.HostInventory{OSVersion: "Ubuntu\x00 26.04"}
+		}
+		if err := r.inv.Round(r.sys); err != nil {
+			t.Fatalf("round %d: %v", k+1, err)
+		}
+	}
+	if !r.stored(t, r.devs[0]) {
+		t.Fatal("the first round did not store the device")
+	}
+	if ev, fi := r.rejections(t, r.devs[0]); ev != 1 || fi != 1 {
+		t.Fatalf("%d events, %d findings after three skipped rounds, want 1, 1", ev, fi)
+	}
+}

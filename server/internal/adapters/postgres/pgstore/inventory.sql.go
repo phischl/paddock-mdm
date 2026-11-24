@@ -715,7 +715,7 @@ SELECT NOT EXISTS (
   SELECT 1 FROM finding f
   WHERE f.device_id = d.id AND f.kind = 'tamper' AND f.code = $1
     AND f.last_seen_at >= COALESCE((SELECT r.synced_at FROM device_inventory_ref r WHERE r.device_id = d.id), '-infinity')
-)::boolean AS due
+)::boolean AS due, now()::timestamptz AS seen_at
 FROM device d WHERE d.id = $2
 `
 
@@ -724,14 +724,19 @@ type InventoryRejectionDueParams struct {
 	DeviceID uuid.UUID
 }
 
-// updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
+type InventoryRejectionDueRow struct {
+	Due    *bool
+	SeenAt time.Time
+}
+
 // Whether a skipped inventory store of the device starts a new episode: no tamper finding of the code was seen since
-// the device's inventory was last stored (PDK-1122k). No row for a device outside the organization.
-func (q *Queries) InventoryRejectionDue(ctx context.Context, arg InventoryRejectionDueParams) (*bool, error) {
+// the device's inventory was last stored (PDK-1122k). No row for a device outside the organization. seen_at is the
+// database's time for the finding: last_seen_at and synced_at must come from the same clock.
+func (q *Queries) InventoryRejectionDue(ctx context.Context, arg InventoryRejectionDueParams) (InventoryRejectionDueRow, error) {
 	row := q.db.QueryRow(ctx, inventoryRejectionDue, arg.Code, arg.DeviceID)
-	var due *bool
-	err := row.Scan(&due)
-	return due, err
+	var i InventoryRejectionDueRow
+	err := row.Scan(&i.Due, &i.SeenAt)
+	return i, err
 }
 
 const listAgentBinaryUnknown = `-- name: ListAgentBinaryUnknown :many
@@ -1531,6 +1536,7 @@ type UpsertPolicyResultParams struct {
 	EvaluatedAt    *time.Time
 }
 
+// updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
 func (q *Queries) UpsertPolicyResult(ctx context.Context, arg UpsertPolicyResultParams) error {
 	_, err := q.db.Exec(ctx, upsertPolicyResult,
 		arg.DeviceID,

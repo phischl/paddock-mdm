@@ -56,17 +56,18 @@ WHERE f.device_id = @device_id
   AND (f.cve, f.software_name, f.software_version) NOT IN (
     SELECT unnest(@cves::text[]), unnest(@names::text[]), unnest(@versions::text[]));
 
--- updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
 -- name: InventoryRejectionDue :one
 -- Whether a skipped inventory store of the device starts a new episode: no tamper finding of the code was seen since
--- the device's inventory was last stored (PDK-1122k). No row for a device outside the organization.
+-- the device's inventory was last stored (PDK-1122k). No row for a device outside the organization. seen_at is the
+-- database's time for the finding: last_seen_at and synced_at must come from the same clock.
 SELECT NOT EXISTS (
   SELECT 1 FROM finding f
   WHERE f.device_id = d.id AND f.kind = 'tamper' AND f.code = @code
     AND f.last_seen_at >= COALESCE((SELECT r.synced_at FROM device_inventory_ref r WHERE r.device_id = d.id), '-infinity')
-)::boolean AS due
+)::boolean AS due, now()::timestamptz AS seen_at
 FROM device d WHERE d.id = @device_id;
 
+-- updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
 -- name: UpsertPolicyResult :exec
 INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at, failing_since)
 VALUES (@device_id, @organization_id, @policy_key, @passing, now(),
