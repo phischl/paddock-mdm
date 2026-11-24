@@ -361,7 +361,7 @@ func (h *Helper) nsswitch(ctx context.Context) error {
 		slog.WarnContext(ctx, "the NSS configuration is not a regular file; left as it is", "file", nsswitchFile)
 		return nil
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(h.path(nsswitchFile))
 	if err != nil {
 		return err
 	}
